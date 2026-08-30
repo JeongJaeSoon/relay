@@ -140,7 +140,7 @@ export function installAdapter() {
       if (drawn.has(id)) { const old = badgeRows.get(id); if (old && m.role === "user") { const fresh = badgeRow(m); old.replaceWith(fresh); badgeRows.set(id, fresh); } continue; }
       drawn.add(id); const task = demoOf(m.task_uuid);
       if (m.role === "user") { D.chatUser(m.text); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
-      else if (m.role === "question" && task?.question) D.chatQuestion(task);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
+      else if (m.role === "question" && task) D.chatQuestion(task);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
       else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(task ?? null, m.text); }
       else D.chatMsg(task ?? null, m.text);                                    // worker_summary | error | dispatcher_answer
     }
