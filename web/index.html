@@ -572,16 +572,16 @@ input[type="checkbox"]{accent-color:var(--accent)}
 <div id="app">
   <header>
     <div class="brand"><span class="mark"></span>relay</div>
-    <span class="conn" id="conn"><i></i><span id="connTxt">연결됨</span></span>
+    <span class="conn" id="conn"><i></i><span id="connTxt">Connected</span></span>
     <div class="hdr-actions">
-      <button id="palBtn" class="icon-btn" aria-label="명령 팔레트" title="명령 팔레트 (⌘⇧P)">
+      <button id="palBtn" class="icon-btn" aria-label="Command palette" title="Command palette (⌘⇧P)">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
       </button>
-      <button id="notifBtn" class="icon-btn" aria-label="알림 센터" title="알림 센터">
+      <button id="notifBtn" class="icon-btn" aria-label="Notifications" title="Notifications">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
         <span class="nb">0</span>
       </button>
-      <button id="gearBtn" class="icon-btn" aria-label="설정" title="설정">
+      <button id="gearBtn" class="icon-btn" aria-label="Settings" title="Settings">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
     </div>
@@ -590,59 +590,59 @@ input[type="checkbox"]{accent-color:var(--accent)}
 
   <div class="rz rz-sb" aria-hidden="true"></div>
   <div class="rz rz-dt" aria-hidden="true"></div>
-  <aside class="sidebar" id="sidebar" aria-label="태스크 목록"></aside>
+  <aside class="sidebar" id="sidebar" aria-label="Task list"></aside>
 
-    <section class="canvas" id="canvas" aria-label="태스크 그래프">
+    <section class="canvas" id="canvas" aria-label="Task graph">
       <div id="world">
         <svg id="edges" width="2400" height="1600" viewBox="0 0 2400 1600" aria-hidden="true"></svg>
         <div class="gw" id="gw">
-          <div class="gw-t">게이트웨이</div>
-          <div class="gw-s mono">:8790 · 상시 수신</div>
+          <div class="gw-t">Gateway</div>
+          <div class="gw-s mono">:8790 · always listening</div>
         </div>
-        <div class="lane-label" id="laneLabel">대기열</div>
+        <div class="lane-label" id="laneLabel">Queue</div>
         <div id="emptyHint">
-          <div class="big">← 여기에 태스크가 쌓입니다</div>
-          <div>아래 채팅으로 시작 · ⌘⇧P 명령 팔레트</div>
-          <div>동시 상한(기본 10) 초과분은 게이트웨이 아래 대기열로</div>
+          <div class="big">← Tasks stack up here</div>
+          <div>Start from the chat below · ⌘⇧P command palette</div>
+          <div>Anything over the concurrency limit (10) queues under the gateway</div>
         </div>
         <div id="nodes"></div>
       </div>
       <div class="legend" aria-hidden="true">
-        <span class="st-run"><i class="dot"></i>실행 중</span>
-        <span class="st-wait"><i class="dot"></i>응답 대기</span>
-        <span class="st-queue"><i class="dot"></i>대기열</span>
-        <span class="st-done"><i class="dot"></i>완료</span>
-        <span class="st-cancelled"><i class="dot"></i>중단</span>
-        <span class="st-err"><i class="dot"></i>오류</span>
+        <span class="st-run"><i class="dot"></i>Running</span>
+        <span class="st-wait"><i class="dot"></i>Needs input</span>
+        <span class="st-queue"><i class="dot"></i>Queued</span>
+        <span class="st-done"><i class="dot"></i>Done</span>
+        <span class="st-cancelled"><i class="dot"></i>Cancelled</span>
+        <span class="st-err"><i class="dot"></i>Error</span>
       </div>
       <div class="canvas-tools">
-        <button class="ct-btn" id="zin" aria-label="확대">+</button>
-        <button class="ct-btn" id="zout" aria-label="축소">−</button>
-        <button class="ct-btn" id="zfit" aria-label="전체 보기" title="전체 보기 · 자동 맞춤 재개">⤢</button>
+        <button class="ct-btn" id="zin" aria-label="Zoom in">+</button>
+        <button class="ct-btn" id="zout" aria-label="Zoom out">−</button>
+        <button class="ct-btn" id="zfit" aria-label="Fit to view" title="Fit to view · resume auto-fit">⤢</button>
       </div>
       <div id="minimap" aria-hidden="true"></div>
     </section>
 
-    <aside class="detail" id="detail" aria-label="태스크 상세">
-      <div class="d-head">태스크 상세
-        <button class="x" id="dClose" aria-label="상세 닫기">✕</button>
+    <aside class="detail" id="detail" aria-label="Task detail">
+      <div class="d-head">Task detail
+        <button class="x" id="dClose" aria-label="Close detail">✕</button>
       </div>
       <div class="d-body" id="dBody"></div>
     </aside>
 
   <footer class="chat">
     <div class="rz rz-ch" aria-hidden="true"></div>
-    <div class="chat-h">메시지 <span class="sub">— 워커 응답은 요약만 승격됩니다</span></div>
+    <div class="chat-h">Messages <span class="sub">— only worker summaries are promoted here</span></div>
     <div class="chat-body">
       <div class="chat-main">
         <div id="msgs" aria-live="polite"></div>
         <form class="chat-in" id="chatForm">
-          <input id="input" autocomplete="off" aria-label="메시지 입력" placeholder="메시지를 입력하세요 — 예: auth 모듈 리팩토링 해줘">
-          <button id="sendBtn" type="submit">전송</button>
+          <input id="input" autocomplete="off" aria-label="Message" placeholder="Type a message — e.g. refactor the auth module">
+          <button id="sendBtn" type="submit">Send</button>
         </form>
       </div>
-      <aside id="dlog" aria-label="디스패치 로그">
-        <div class="dl-h">디스패치 로그</div>
+      <aside id="dlog" aria-label="Dispatch log">
+        <div class="dl-h">Dispatch log</div>
         <div class="dl-list" id="dlList"></div>
       </aside>
     </div>
@@ -650,68 +650,68 @@ input[type="checkbox"]{accent-color:var(--accent)}
 </div>
 
 <div id="toasts" aria-live="polite"></div>
-<div id="notifCenter" role="dialog" aria-label="알림 센터">
-  <div class="nc-h">알림 센터</div>
+<div id="notifCenter" role="dialog" aria-label="Notifications">
+  <div class="nc-h">Notifications</div>
   <div class="nc-body"></div>
   <div class="nc-f">
-    <button class="act" id="ncClear">모두 지우기</button>
-    <label><input type="checkbox" id="ncDnd"> 방해 금지</label>
+    <button class="act" id="ncClear">Clear all</button>
+    <label><input type="checkbox" id="ncDnd"> Do not disturb</label>
   </div>
 </div>
-<div id="settings" role="dialog" aria-label="설정">
-  <div class="nc-h">설정</div>
+<div id="settings" role="dialog" aria-label="Settings">
+  <div class="nc-h">Settings</div>
   <div class="set-body">
-    <div class="set-row"><span>테마</span>
+    <div class="set-row"><span>Theme</span>
       <div class="seg" id="segTheme">
-        <button data-m="system">자동</button><button data-m="light">라이트</button><button data-m="dark">다크</button>
+        <button data-m="system">Auto</button><button data-m="light">Light</button><button data-m="dark">Dark</button>
       </div>
     </div>
-    <div class="set-row"><span>그래프 레이아웃</span>
+    <div class="set-row"><span>Graph layout</span>
       <div class="seg" id="segLayout">
-        <button data-l="tree">계단</button><button data-l="radial">방사</button>
+        <button data-l="tree">Steps</button><button data-l="radial">Radial</button>
       </div>
     </div>
-    <div class="set-row"><span>패널 정렬</span>
+    <div class="set-row"><span>Alignment</span>
       <div class="seg" id="segAlign">
-        <button data-a="justify">전체</button><button data-a="center">중앙</button><button data-a="left">왼쪽</button><button data-a="right">오른쪽</button>
+        <button data-a="justify">Justify</button><button data-a="center">Center</button><button data-a="left">Left</button><button data-a="right">Right</button>
       </div>
     </div>
-    <div class="set-row"><span>동시 실행 상한<em id="maxwHint" class="set-warn"></em></span>
+    <div class="set-row"><span>Max concurrent agents<em id="maxwHint" class="set-warn"></em></span>
       <div class="step">
-        <button id="maxwDec" aria-label="상한 감소">−</button><b id="maxwVal" class="mono">3</b><button id="maxwInc" aria-label="상한 증가">+</button>
+        <button id="maxwDec" aria-label="Lower the limit">−</button><b id="maxwVal" class="mono">3</b><button id="maxwInc" aria-label="Raise the limit">+</button>
       </div>
     </div>
-    <div class="set-row"><span>새 태스크 자동 맞춤</span><input type="checkbox" id="setAutofit" checked></div>
-    <div class="set-row"><span>방해 금지 (토스트 억제)</span><input type="checkbox" id="setDnd"></div>
-    <div class="set-row"><span>애니메이션 감소</span><input type="checkbox" id="setReduce"></div>
-    <div class="set-row"><span>단축키</span><button class="act" id="keysBtn">JSON 편집…</button></div>
-    <div class="set-row"><span>프로젝트</span></div>
+    <div class="set-row"><span>Auto-fit on new tasks</span><input type="checkbox" id="setAutofit" checked></div>
+    <div class="set-row"><span>Do not disturb (suppress toasts)</span><input type="checkbox" id="setDnd"></div>
+    <div class="set-row"><span>Reduce motion</span><input type="checkbox" id="setReduce"></div>
+    <div class="set-row"><span>Shortcuts</span><button class="act" id="keysBtn">Edit JSON…</button></div>
+    <div class="set-row"><span>Projects</span></div>
   </div>
   <div class="set-projs" id="projList"></div>
   <div class="set-projf">
-    <input id="projName" placeholder="이름" aria-label="프로젝트 이름">
-    <input id="projPath" placeholder="경로" aria-label="프로젝트 경로">
-    <input id="projDesc" placeholder="설명" aria-label="프로젝트 설명">
-    <input id="projKw" placeholder="키워드 (쉼표)" aria-label="프로젝트 키워드">
-    <button class="act" id="projAdd">등록</button>
+    <input id="projName" placeholder="Name" aria-label="Project name">
+    <input id="projPath" placeholder="Path" aria-label="Project path">
+    <input id="projDesc" placeholder="Description" aria-label="Project description">
+    <input id="projKw" placeholder="Keywords (comma)" aria-label="Project keywords">
+    <button class="act" id="projAdd">Register</button>
   </div>
-  <div class="set-info mono" id="setInfo">게이트웨이 127.0.0.1:8790</div>
+  <div class="set-info mono" id="setInfo">Gateway 127.0.0.1:8790</div>
 </div>
-<div id="palette" role="dialog" aria-modal="true" aria-label="명령 팔레트">
+<div id="palette" role="dialog" aria-modal="true" aria-label="Command palette">
   <div class="pal-box">
-    <input id="palInput" aria-label="명령 검색" role="combobox" aria-expanded="true" aria-controls="palList" aria-autocomplete="list" placeholder="명령 검색… (↑↓ 이동 · Enter 실행 · Esc 닫기)" autocomplete="off">
+    <input id="palInput" aria-label="Search commands" role="combobox" aria-expanded="true" aria-controls="palList" aria-autocomplete="list" placeholder="Search commands… (↑↓ move · Enter run · Esc close)" autocomplete="off">
     <div class="pal-list" id="palList" role="listbox"></div>
   </div>
 </div>
-<div id="keysEd" role="dialog" aria-modal="true" aria-label="단축키 JSON 편집">
+<div id="keysEd" role="dialog" aria-modal="true" aria-label="Edit shortcuts JSON">
   <div class="ked-box">
-    <div class="nc-h">단축키 (JSON)</div>
-    <textarea id="kedText" rows="9" spellcheck="false" aria-label="단축키 JSON"></textarea>
+    <div class="nc-h">Shortcuts (JSON)</div>
+    <textarea id="kedText" rows="9" spellcheck="false" aria-label="Shortcuts JSON"></textarea>
     <div class="ked-err" id="kedErr"></div>
     <div class="ked-f">
-      <button class="act" id="kedSave">저장</button>
-      <button class="act" id="kedReset">기본값</button>
-      <button class="act" id="kedClose">닫기</button>
+      <button class="act" id="kedSave">Save</button>
+      <button class="act" id="kedReset">Defaults</button>
+      <button class="act" id="kedClose">Close</button>
     </div>
   </div>
 </div>

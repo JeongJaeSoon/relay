@@ -11,37 +11,37 @@ export type DemoTask = DemoTaskCore & { events: DemoEvent[]; timers: unknown[]; 
 const TERMINAL = new Set(["done", "needs_review", "error", "cancelled"]);
 type Ctx = { projects: Project[]; tasks: Record<string, Task> };
 const D: any = globalThis;                                                     // app.js globals (classic script): S, N, DLOG, gwEl, msgs, el, ttagBtn, chat*, notify, withdrawNotif, relayout, refresh, renderBanner, renderSettings, renderDlog, select, centerOn
-const PROC: Record<string, string> = { none: "미시작", starting: "시작 중", alive: "실행 중", stopped: "정지", crashed: "크래시" };
+const PROC: Record<string, string> = { none: "not started", starting: "starting", alive: "running", stopped: "stopped", crashed: "crashed" };
 // ---- pure ------------------------------------------------------------------------------------------
 export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
   const parent = t.parent_uuid ? ctx.tasks[t.parent_uuid] : null;
   return { id: t.display_id, uuid: t.uuid, num: t.num, title: t.title, project: ctx.projects.find((p) => p.id === t.project_id)?.name ?? t.project_id, size: t.size, status: stKey(t.status), statusLabel: stLabel(t.status),
     step: TERMINAL.has(t.status) && t.last_summary ? t.last_summary : t.last_step ?? (t.question ? `❓ ${t.question.text}` : t.last_summary ?? ""), startedAt: t.started_at ? new Date(t.started_at) : null, endedAt: t.ended_at ? new Date(t.ended_at) : null,
-    question: t.status === "waiting_input" && t.question ? { q: t.question.text, chips: t.question.options.length ? t.question.options : ["확인"] } : null,
+    question: t.status === "waiting_input" && t.question ? { q: t.question.text, chips: t.question.options.length ? t.question.options : ["OK"] } : null,
     sub: !!t.parent_uuid, parent: parent?.display_id ?? null, children: Object.values(ctx.tasks).filter((c) => c.parent_uuid === t.uuid && c.status !== "closed").sort((a, b) => a.num - b.num).map((c) => c.display_id),
-    sid: t.short_id ?? "—", proc: t.process_state === "alive" ? (t.turn_state === "busy" ? "실행 중" : "유휴") : PROC[t.process_state] ?? t.process_state, gen: t.process_generation, attached: t.attach_state !== "none" ? t.attached_by : null,
+    sid: t.short_id ?? "—", proc: t.process_state === "alive" ? (t.turn_state === "busy" ? "running" : "idle") : PROC[t.process_state] ?? t.process_state, gen: t.process_generation, attached: t.attach_state !== "none" ? t.attached_by : null,
     worktree: t.worktree_path, branch: t.branch ?? `relay-${t.uuid.replace(/-/g, "").slice(0, 8)}`, queuedAt: t.queued_at ?? 0, qhead: t.qhead, paused: t.paused, model: t.model.replace("claude-", ""), effort: t.effort, agentType: t.agent_type, bornAt: t.created_at, tags: [], pending: null, msgUntil: 0 };
 }
 const demoOf = (uuid: string | null | undefined): DemoTask | undefined => { if (!uuid) return undefined; const t = store.state.tasks[uuid]; return t ? D.S?.tasks?.get(t.display_id) ?? undefined : undefined; };
 export function badgeParts(m: Message, ctx: Ctx): { kind: string; parts: string[]; task?: DemoTask; retry?: boolean; judging: boolean } {
   const st = m.task_uuid ? ctx.tasks[m.task_uuid] : null; const task: DemoTask | undefined = st ? ((D.S?.tasks?.get(st.display_id) as DemoTask | undefined) ?? { ...toDemoTask(st, ctx), events: [], timers: [], x: 0, y: 0 }) : undefined; const d = m.dispatch_json;
   switch (m.dispatch_state) {
-    case "pending": return { kind: "gateway", parts: ["⏳ 접수"], judging: false };
-    case "deciding": return { kind: "dispatcher", parts: ["● 판단 중 (fable)"], judging: true };
+    case "pending": return { kind: "gateway", parts: ["⏳ Accepted"], judging: false };
+    case "deciding": return { kind: "dispatcher", parts: ["● Deciding (fable)"], judging: true };
     case "fastpath": return { kind: "gateway", parts: ["fast-path"], judging: false };
-    case "needs_confirm": return { kind: "dispatcher", parts: ["확인 필요"], judging: false };
+    case "needs_confirm": return { kind: "dispatcher", parts: ["Needs confirm"], judging: false };
     case "failed": return { kind: "dispatcher", parts: [`failed · ${m.dispatch_error ?? ""}`], retry: true, judging: false };
-    case "direct": return { kind: "↪ 답장", parts: [], task, judging: false };
+    case "direct": return { kind: "↪ Reply", parts: [], task, judging: false };
     default: return { kind: "dispatcher", parts: d ? [d.action, ...(d.size ? [d.size] : []), ...(d.project ? [d.project] : [])] : [], task, judging: false };
   }
 }
 export function dlogEntry(m: Message, ctx: Ctx) {
   const st = m.task_uuid ? ctx.tasks[m.task_uuid] : null; const d = m.dispatch_json; const judging = m.dispatch_state === "pending" || m.dispatch_state === "deciding";
-  const result = judging ? null : m.dispatch_state === "failed" ? { action: "failed", note: m.dispatch_error ?? "실패" } : m.dispatch_state === "fastpath" ? { action: "fast-path", note: "즉답 (LLM 0회)" } : m.dispatch_state === "needs_confirm" ? { action: d?.action ?? "needs_confirm", note: "확인 필요" } : { action: d?.action ?? (m.dispatch_state === "direct" ? "reply" : "—"), ids: st ? [st.display_id] : [] };
+  const result = judging ? null : m.dispatch_state === "failed" ? { action: "failed", note: m.dispatch_error ?? "failed" } : m.dispatch_state === "fastpath" ? { action: "fast-path", note: "instant answer (0 LLM calls)" } : m.dispatch_state === "needs_confirm" ? { action: d?.action ?? "needs_confirm", note: "needs confirm" } : { action: d?.action ?? (m.dispatch_state === "direct" ? "reply" : "—"), ids: st ? [st.display_id] : [] };
   return { id: m.id, messageId: m.id, text: m.text, status: judging ? "judging" as const : "done" as const, result };
 }
 export function eventLine(e: EventEnvelope): DemoEvent {
-  const p: any = e.payload ?? {}; const txt = e.type.startsWith("hook.") ? `${e.type.slice(5)}${p.tool_name ? " · " + p.tool_name : ""}${p.notification_type ? " · " + p.notification_type : ""}` : e.type === "send.outcome" ? `전달 ${p.outcome} (${p.via})` : e.type === "message.sent" ? `${p.direction === "in" ? "← " : "→ "}${p.to ?? p.from ?? ""}` : e.type;
+  const p: any = e.payload ?? {}; const txt = e.type.startsWith("hook.") ? `${e.type.slice(5)}${p.tool_name ? " · " + p.tool_name : ""}${p.notification_type ? " · " + p.notification_type : ""}` : e.type === "send.outcome" ? `delivery ${p.outcome} (${p.via})` : e.type === "message.sent" ? `${p.direction === "in" ? "← " : "→ "}${p.to ?? p.from ?? ""}` : e.type;
   return { id: e.seq, at: new Date(e.occurred_at), txt, payload: e.payload && typeof e.payload === "object" ? JSON.stringify(e.payload, null, 1).slice(0, 4000) : null };
 }
 export interface NotifOp { op: "add" | "withdraw"; taskUuid: string; kind?: NotifKind; title?: string; body?: string }
@@ -72,22 +72,22 @@ export const isDispatcherBadgeRow = (m: Message) => m.role === "system" && m.tex
  *  projection writes per task, plus command/permit/process rows whose effect the node and detail already show.
  *  Both sources go through this filter so loading the history does not change what the timeline means. */
 export const isTimelineEvent = (type: string) => type.startsWith("hook.") || type === "send.outcome" || type === "message.sent";
-export const closeConfirmUuid = (text: string) => text.match(/\[종료 확인: POST \/api\/tasks\/([^/\]]+)\/close\]/)?.[1] ?? null;
+export const closeConfirmUuid = (text: string) => text.match(/\[close confirm: POST \/api\/tasks\/([^/\]]+)\/close\]/)?.[1] ?? null;
 // ---- browser ----------------------------------------------------------------------------------------
 const note = (s: string) => D.chatNote?.(s);
-const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label} 실패: ${String((e as Error).message ?? e)}`));
+const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label} failed: ${String((e as Error).message ?? e)}`));
 export function installAdapter() {
   const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0; let loadedDetail: string | null = null;
   const ctx = (): Ctx => ({ projects: store.state.projects, tasks: store.state.tasks });
   const relay = {
-    send: (text: string) => run("전송", api.sendMessage(text)),
-    answer: (t: DemoTask, choice: string) => run("답변", api.answer(t.uuid, choice)),
-    stop: (t: DemoTask) => run("중단", api.interrupt(t.uuid)), restart: (t: DemoTask) => run("재시작", api.retry(t.uuid)), archive: (t: DemoTask) => run("보관", api.close(t.uuid)),
-    attach: async (t: DemoTask) => { try { const { command } = await api.attachLease(t.uuid); await navigator.clipboard?.writeText(command).catch(() => {}); note(`클립보드에 복사: ${command} (터미널에서 실행 — 끝나면 relay attach가 lease를 해제)`); } catch (e) { note(`attach 실패: ${(e as Error).message}`); } },
+    send: (text: string) => run("send", api.sendMessage(text)),
+    answer: (t: DemoTask, choice: string) => run("answer", api.answer(t.uuid, choice)),
+    stop: (t: DemoTask) => run("stop", api.interrupt(t.uuid)), restart: (t: DemoTask) => run("restart", api.retry(t.uuid)), archive: (t: DemoTask) => run("archive", api.close(t.uuid)),
+    attach: async (t: DemoTask) => { try { const { command } = await api.attachLease(t.uuid); await navigator.clipboard?.writeText(command).catch(() => {}); note(`Copied to clipboard: ${command} (run it in a terminal — relay attach releases the lease when it ends)`); } catch (e) { note(`attach failed: ${(e as Error).message}`); } },
     pause: () => run("kill switch", S.paused ? api.resumeAll() : api.pause()),
-    setMax: (n: number) => run("상한 변경", api.patchSettings({ max_concurrent_agents: Math.max(1, n) })),
-    registerProject: (p: { name: string; path: string; description: string; keywords: string[] }) => run("프로젝트 등록", api.registerProject(p)), removeProject: (id: string) => run("프로젝트 삭제", api.removeProject(id)),
-    redispatch: (messageId: string) => run("재시도", api.redispatch(messageId)),
+    setMax: (n: number) => run("limit change", api.patchSettings({ max_concurrent_agents: Math.max(1, n) })),
+    registerProject: (p: { name: string; path: string; description: string; keywords: string[] }) => run("project registration", api.registerProject(p)), removeProject: (id: string) => run("project removal", api.removeProject(id)),
+    redispatch: (messageId: string) => run("retry", api.redispatch(messageId)),
     loadDetail: (t: DemoTask) => { if (loadedDetail === t.uuid) return; loadedDetail = t.uuid; api.taskDetail(t.uuid).then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).filter((e) => isTimelineEvent(e.type)).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
   };
   D.relay = relay;
@@ -105,11 +105,11 @@ export function installAdapter() {
     S.projects = store.state.projects;
     S.conn = store.state.conn === "resync" ? "replaying" : store.state.conn; S.lastSeq = store.state.seq;
     D.renderBanner(); D.renderSettings();
-    D.gwEl.classList.toggle("judging", store.state.messages.some((m) => m.dispatch_state === "deciding")); D.gwEl.querySelector(".gw-s").textContent = D.gwEl.classList.contains("judging") ? "dispatcher 판단 중 (fable)" : `:${location.port || 80} · 상시 수신`;
+    D.gwEl.classList.toggle("judging", store.state.messages.some((m) => m.dispatch_state === "deciding")); D.gwEl.querySelector(".gw-s").textContent = D.gwEl.classList.contains("judging") ? "dispatcher deciding (fable)" : `:${location.port || 80} · always listening`;
   };
   const badgeRow = (m: Message) => {
     const b = badgeParts(m, ctx()); const row = D.el("div", "m-badges"); row.append(D.el("span", "badge k" + (b.judging ? " judging" : ""), b.kind)); b.parts.forEach((p) => row.append(D.el("span", "badge", p)));
-    if (b.task) row.append(D.ttagBtn(b.task)); if (b.retry) { const r = D.el("button", "nc-btn", "재시도"); r.addEventListener("click", () => relay.redispatch(m.id)); row.append(r); }
+    if (b.task) row.append(D.ttagBtn(b.task)); if (b.retry) { const r = D.el("button", "nc-btn", "Retry"); r.addEventListener("click", () => relay.redispatch(m.id)); row.append(r); }
     return row;
   };
   const syncMessages = (ids: Iterable<string>) => {
@@ -121,7 +121,7 @@ export function installAdapter() {
       drawn.add(id); const task = demoOf(m.task_uuid);
       if (m.role === "user") { D.chatUser(m.text); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
       else if (m.role === "question" && task) D.chatQuestion(task);
-      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [종료 확인")[0])); const b = D.el("button", "act danger", "종료"); b.addEventListener("click", () => run("종료", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(task ?? null, m.text); }
+      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(task ?? null, m.text); }
       else D.chatMsg(task ?? null, m.text);                                    // worker_summary | error | dispatcher_answer
     }
     D.scrollChat?.();
