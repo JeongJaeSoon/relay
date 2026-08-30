@@ -1,0 +1,216 @@
+{
+  "cli_version": "2.1.251 (Claude Code)",
+  "flags": {
+    "--bg": true,
+    "-n, --name": true,
+    "-w, --worktree": true,
+    "--settings": true,
+    "--agent <agent>": true,
+    "--permission-mode": true,
+    "--effort": true,
+    "--json-schema": true,
+    "--tools": true,
+    "--no-session-persistence": true,
+    "--append-system-prompt": true,
+    "--output-format": true,
+    "-r, --resume": true,
+    "--model": true
+  },
+  "advisorFlag": false,
+  "restrictedFlag": true,
+  "updated_at": "2026-08-30T14:07:35.147Z",
+  "worktreeCreateHook": {
+    "role": "provider",
+    "observed": "session killed before init when the hook returns no path",
+    "error": "Error creating worktree: WorktreeCreate hook failed: hook succeeded but returned no worktree path (command: echo the path to stdout; http/callback: return hookSpecificOutput.worktreePath)"
+  },
+  "agentsJsonSample": {
+    "id": "e3803ff1",
+    "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+    "kind": "background",
+    "startedAt": 1788098753814,
+    "sessionId": "e3803ff1-2eee-4ed2-aa49-184efc68167f",
+    "name": "relay-spike:gate",
+    "state": "working"
+  },
+  "agentsJsonKeys": [
+    "id",
+    "cwd",
+    "kind",
+    "startedAt",
+    "sessionId",
+    "name",
+    "state"
+  ],
+  "agentFlagPrecedence": "cli-wins",
+  "settingsHooksMerge": "merged",
+  "sessionStartHttp": false,
+  "stopManifest": {
+    "present": true,
+    "pid": null,
+    "state": "done",
+    "status": null
+  },
+  "bgResumeSessionStartSource": "fork",
+  "bgResumeNewShortId": "10aeb3b2",
+  "bgResume": "context-kept",
+  "bgResumeStdout": "backgrounded · 10aeb3b2 · relay-spike:gate\n  claude agents             list sessions\n  claude attach 10aeb3b2    open in this terminal\n  claude logs 10aeb3b2      show recent output\n  claude stop 10aeb3b2      stop this session",
+  "bgResumeStderr": "",
+  "jsonSchema": true,
+  "dispatcherSample": {
+    "wall_ms": 10506,
+    "duration_ms": 6972,
+    "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 103958,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 107,
+      "output_tokens_details": {
+        "thinking_tokens": 30
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 103958,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 107,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 103958,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 103958
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "cost": 2.08453,
+    "structured_output": {
+      "action": "new_task",
+      "confidence": "high"
+    },
+    "keys": [
+      "duration_api_ms",
+      "stop_reason",
+      "session_id",
+      "total_cost_usd",
+      "usage",
+      "modelUsage",
+      "permission_denials",
+      "terminal_reason",
+      "fast_mode_state",
+      "fast_mode_disabled_reason",
+      "subagent_stats",
+      "is_error",
+      "num_turns",
+      "subtype",
+      "api_error_status",
+      "result",
+      "structured_output",
+      "ttft_ms",
+      "type",
+      "duration_ms",
+      "uuid",
+      "ttft_stream_ms",
+      "time_to_request_ms",
+      "queued_turn_count"
+    ]
+  },
+  "toolsEmpty": true,
+  "noSessionPersistence": true,
+  "hookEventsCaptured": [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUseFailure",
+    "Stop",
+    "SessionEnd"
+  ],
+  "agentsJsonVocab": {
+    "state": [
+      "blocked",
+      "done",
+      "working"
+    ],
+    "status": [
+      "busy",
+      "idle"
+    ],
+    "kind": [
+      "background",
+      "interactive"
+    ],
+    "waitingFor": [],
+    "keysByKind": {
+      "background": [
+        "id",
+        "cwd",
+        "kind",
+        "startedAt",
+        "sessionId",
+        "name",
+        "state",
+        "pid",
+        "status"
+      ],
+      "interactive": [
+        "pid",
+        "cwd",
+        "kind",
+        "startedAt",
+        "sessionId",
+        "name",
+        "status"
+      ]
+    }
+  },
+  "agentsJsonPidPresent": false,
+  "worktreeCwd": {
+    "agentsJson": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+    "hookPayload": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-w1",
+    "isWorktree": true
+  },
+  "jobStateKeys": [
+    "state",
+    "detail",
+    "tempo",
+    "inFlight",
+    "tokens",
+    "output",
+    "children",
+    "linkScanOffset",
+    "linkScanPath",
+    "template",
+    "respawnFlags",
+    "intent",
+    "name",
+    "nameSource",
+    "sessionId",
+    "resumeSessionId",
+    "daemonShort",
+    "cliVersion",
+    "cwd",
+    "worktreePath",
+    "worktreeBranch",
+    "bridgeSessionId",
+    "bridgeOutboundOnly",
+    "bridgeOwnerAccountUuid",
+    "bridgeOwnerOrganizationUuid",
+    "providerEnv",
+    "backend",
+    "createdAt",
+    "updatedAt",
+    "firstTerminalAt"
+  ],
+  "jobStateHasRespawnFlags": true,
+  "launchdAuth": "BLOCKED: not measured — `launchctl bootstrap` was refused by the permission system in this agent session. Run: sh spikes/scripts/01-launchd-auth.sh"
+}
