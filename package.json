@@ -1,0 +1,12 @@
+{
+  "name": "relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "spike": "bun run"
+  },
+  "devDependencies": { "@types/bun": "latest" },
+  "dependencies": {}
+}

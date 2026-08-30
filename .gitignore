@@ -1,0 +1,9 @@
+node_modules/
+spikes/results/*.jsonl
+spikes/results/*.txt
+spikes/sandbox/
+spikes/scripts/10-bun-mcp/bun-app/dist/
+web/dist/
+*.db
+*.db-wal
+*.db-shm
