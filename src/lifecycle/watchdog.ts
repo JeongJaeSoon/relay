@@ -6,11 +6,12 @@ import { chatFor } from "../core/promote.ts";
 import type { PermitPool } from "../core/permits.ts";
 import type { TaskService } from "../core/tasks.ts";
 import type { AgentRow, AgentRunner } from "../runner/runner.ts";
+import type { ForeignSessions } from "./foreign.ts";
 import { log as slog } from "../log.ts";
 const GRACE_MS = 60_000;
 export class Watchdog {
   private missingSince = new Map<string, number>();
-  constructor(private db: Database, private log: EventLog, private runner: AgentRunner, private tasks: TaskService, private permits: PermitPool) {}
+  constructor(private db: Database, private log: EventLog, private runner: AgentRunner, private tasks: TaskService, private permits: PermitPool, private foreign?: ForeignSessions) {}
   async tick() {
     let rows: AgentRow[]; try { rows = await this.runner.list(true); } catch (e) { slog.warn("watchdog: agents --json failed — skipping tick", { e: String(e) }); return; }   // never treat an unknown roster as "everything died"
     const t = now();
@@ -39,5 +40,8 @@ export class Watchdog {
       const gone = pid > 0 && !(() => { try { process.kill(pid, 0); return true; } catch { return false; } })();   // `relay attach` died (kill -9) without releasing
       if (gone || (task.attach_state === "leased" && t - task.updated_at > 5 * 60_000)) this.tasks.releaseAttach(task.uuid);
     }
+    // Last, so ownership is read after this tick's fork-chain adoptions: everything left on the roster that relay does
+    // not own is a session someone else started. Observation only — this writes no event and touches no task.
+    try { this.foreign?.refresh(rows, t); } catch (e) { slog.warn("watchdog: foreign session refresh failed", { e: String(e) }); }
   }
 }

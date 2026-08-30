@@ -75,6 +75,14 @@ export interface Command {
   state: CommandState; attempts: number; created_at: number; applied_at: number | null; error: string | null;
 }
 
+/** A Claude session running on this machine that relay did not start. Poll-derived and read-only: relay watches it,
+ *  never dispatches to it, never gives it a permit and never reaps it. `busy` is null when the roster says nothing. */
+export interface ForeignSession {
+  session_id: string; short_id: string | null; name: string | null; cwd: string | null; busy: boolean | null;
+  pid: number | null; started_at: number | null; kind: string | null;   // from the session registry (~/.claude/sessions), the only place these exist for a foreign session
+  first_seen: number; last_seen: number;                                // when relay's poll first/last saw it — not when the session began
+}
+
 export interface SystemState {
   paused: boolean; recovering: boolean; max_concurrent_agents: number;
   running: number; queued: number; leases: number;
@@ -91,6 +99,8 @@ export type WsFrame =
   | { seq: number; idx: number; type: "task.updated"; task: Task }
   | { seq: number; idx: number; type: "task.event"; task_uuid: string; event: EventEnvelope }
   | { seq: number; idx: number; type: "system.state"; state: SystemState }
-  | { seq: number; idx: number; type: "projects.updated"; projects: Project[] };
+  | { seq: number; idx: number; type: "projects.updated"; projects: Project[] }
+  // Poll-derived, so it belongs to no event and carries no usable cursor: the client applies it without touching (seq, idx).
+  | { seq: number; idx: number; type: "foreign.sessions"; sessions: ForeignSession[] };
 
-export interface TasksSnapshot { as_of_seq: number; tasks: Task[]; projects: Project[]; state: SystemState; messages: Message[] }
+export interface TasksSnapshot { as_of_seq: number; tasks: Task[]; projects: Project[]; state: SystemState; messages: Message[]; foreign: ForeignSession[] }
