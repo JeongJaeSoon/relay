@@ -1,5 +1,5 @@
 // web/src/adapter.ts — the only place that knows both worlds: server Task/Message/SystemState (store) and the demo engine's S/N/DLOG/chat globals (app.js).
-import type { EventEnvelope, Message, Project, Task } from "@shared/types.ts";
+import type { EventEnvelope, ForeignSession, Message, Project, Task } from "@shared/types.ts";
 import * as api from "./api.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
 import { diffNotifs, type NotifKind } from "./notify.ts";
@@ -21,6 +21,16 @@ export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
     sub: !!t.parent_uuid, parent: parent?.display_id ?? null, children: Object.values(ctx.tasks).filter((c) => c.parent_uuid === t.uuid && c.status !== "closed").sort((a, b) => a.num - b.num).map((c) => c.display_id),
     sid: t.short_id ?? "—", proc: t.process_state === "alive" ? (t.turn_state === "busy" ? "running" : "idle") : PROC[t.process_state] ?? t.process_state, gen: t.process_generation, attached: t.attach_state !== "none" ? t.attached_by : null,
     worktree: t.worktree_path, branch: t.branch ?? `relay-${t.uuid.replace(/-/g, "").slice(0, 8)}`, queuedAt: t.queued_at ?? 0, qhead: t.qhead, paused: t.paused, model: t.model.replace("claude-", ""), effort: t.effort, agentType: t.agent_type, bornAt: t.created_at, tags: [], pending: null, msgUntil: 0 };
+}
+/** A session relay only watches. Deliberately NOT a DemoTask: it has no id, project, size, permit, branch or verdict,
+ *  and the graph must never let one be mistaken for a task relay is running. */
+export interface DemoForeign { key: string; title: string; sid: string; short: string; cwd: string; state: "running" | "idle" | "unknown"; stateLabel: string; kind: string; pid: number | null; startedAt: Date | null; firstSeen: Date; lastSeen: Date }
+export function toDemoForeign(f: ForeignSession): DemoForeign {
+  const dir = (f.cwd ?? "").replace(/\/+$/, "");
+  const state = f.busy == null ? "unknown" : f.busy ? "running" : "idle";     // `agents --json` says nothing about a session it reports no status for
+  return { key: f.session_id, title: f.name?.trim() || dir.split("/").pop() || `session ${f.session_id.slice(0, 8)}`,
+    sid: f.session_id, short: f.short_id ?? "—", cwd: dir || "—", state, stateLabel: { running: "Running", idle: "Idle", unknown: "Unknown" }[state],
+    kind: f.kind === "bg" ? "background" : f.kind ?? "", pid: f.pid, startedAt: f.started_at ? new Date(f.started_at) : null, firstSeen: new Date(f.first_seen), lastSeen: new Date(f.last_seen) };
 }
 const demoOf = (uuid: string | null | undefined): DemoTask | undefined => { if (!uuid) return undefined; const t = store.state.tasks[uuid]; return t ? D.S?.tasks?.get(t.display_id) ?? undefined : undefined; };
 export function badgeParts(m: Message, ctx: Ctx): { kind: string; parts: string[]; task?: DemoTask; retry?: boolean; judging: boolean } {
@@ -88,6 +98,7 @@ export function installAdapter() {
     setMax: (n: number) => run("limit change", api.patchSettings({ max_concurrent_agents: Math.max(1, n) })),
     registerProject: (p: { name: string; path: string; description: string; keywords: string[] }) => run("project registration", api.registerProject(p)), removeProject: (id: string) => run("project removal", api.removeProject(id)),
     redispatch: (messageId: string) => run("retry", api.redispatch(messageId)),
+    stopForeign: (key: string) => run("stop", api.stopForeign(key)),           // the one write the dashboard can aim at a session relay does not own
     loadDetail: (t: DemoTask) => { if (loadedDetail === t.uuid) return; loadedDetail = t.uuid; api.taskDetail(t.uuid).then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).filter((e) => isTimelineEvent(e.type)).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
   };
   D.relay = relay;
@@ -99,6 +110,15 @@ export function installAdapter() {
       changed = true;
     }
     return changed;
+  };
+  /** Keeps S.foreign in step with the store, preserving each node's layout position the way syncTasks does. */
+  const syncForeign = () => {
+    const seen = new Set<string>();
+    for (const f of store.state.foreign) {
+      const next = toDemoForeign(f); seen.add(next.key);
+      const cur = S.foreign.get(next.key); if (cur) Object.assign(cur, next); else S.foreign.set(next.key, { ...next, x: 0, y: 0 });
+    }
+    for (const k of [...S.foreign.keys()]) if (!seen.has(k)) { S.foreign.delete(k); if (S.fsel === k) S.fsel = null; }
   };
   const syncSystem = () => {
     const sys = store.state.sys; if (sys) { S.maxw = sys.max_concurrent_agents; S.paused = sys.paused; S.usage = sys.today_tokens; S.running = sys.running; S.recovering = sys.recovering; S.version = sys.version; S.delivery = sys.delivery_method; S.dailyCeiling = sys.daily_ceiling; }
@@ -140,7 +160,8 @@ export function installAdapter() {
     if (all || d.sys || d.projects) syncSystem();
     if (all || d.messages.size) syncMessages(all ? store.state.messages.map((m) => m.id) : d.messages);
     if (d.events.size) syncEvents(d.events);
-    if (tasksChanged || all) D.relayout();                                     // one layout+render per animation frame, whatever arrived
+    const foreignChanged = all || d.foreign; if (foreignChanged) syncForeign();
+    if (tasksChanged || foreignChanged || all) D.relayout();                   // one layout+render per animation frame, whatever arrived
   };
   store.subscribe((f) => {
     if (f) { if (f.type === "task.created" || f.type === "task.updated") notifs.observe(f.task); }

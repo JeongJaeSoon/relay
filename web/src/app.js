@@ -25,10 +25,12 @@ Theme.init();
 
 /* ================= state ================= */
 const ROW_H=128, SUB_ROW=102, COL_TASK=312, COL_SUB=596, ROW_Y0=40;
-const S={tasks:new Map(),sel:null,maxw:10, /* 기본 10, 상한 없음(초과 시 소프트 경고) */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
+const COL_FOREIGN=900, FOREIGN_ROW=104; /* column for sessions relay did not start: never joined to the gateway by an edge */
+const S={tasks:new Map(),foreign:new Map(),sel:null,fsel:null,maxw:10, /* 기본 10, 상한 없음(초과 시 소프트 경고) */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
 const STATUS_LABEL={run:"Running",wait:"Needs input",queue:"Queued",done:"Done",err:"Error",cancelled:"Cancelled",closed:"Archived"};
 
 const tasksArr=()=>[...S.tasks.values()];
+const foreignArr=()=>[...S.foreign.values()];
 
 /* ================= chat ================= */
 const msgs=$("#msgs");
@@ -150,6 +152,12 @@ function layout(){
   const ll=document.getElementById("laneLabel");
   ll.style.display=queued.length?"block":"none";
   ll.style.left=(laneX+34)+"px";ll.style.top=(laneY0-19)+"px";
+  /* sessions outside relay: stacked in their own column, with no edge to anything */
+  const fs=foreignArr();
+  fs.forEach((f,i)=>{f.x=COL_FOREIGN;f.y=ROW_Y0+i*FOREIGN_ROW});
+  const fl=document.getElementById("foreignLabel");
+  fl.style.display=fs.length?"block":"none";
+  fl.style.left=COL_FOREIGN+"px";fl.style.top=(ROW_Y0-19)+"px";
 }
 function nodeEl(t){
   let n=document.getElementById("node-"+t.id);
@@ -202,7 +210,41 @@ function renderNodes(){
     n.querySelector(".br").textContent=t.sub?"":t.branch||"";
     n.setAttribute("aria-label",t.title+" — "+(t.statusLabel||STATUS_LABEL[t.status]));
   });
+  renderForeignNodes();
   $("#emptyHint").style.display=tasksArr().some(t=>t.status!=="closed")?"none":"flex";
+}
+/* ---- sessions outside relay: observation-only nodes (dashed, no status colour, no gateway edge) ---- */
+function foreignElapsed(f){
+  const from=f.startedAt||f.firstSeen;
+  return (f.startedAt?"":"≥")+dur(Date.now()-from); /* with no start time all relay can say is "at least this long", counted from when it first saw the session */
+}
+function foreignEl(f){
+  let n=document.getElementById("fnode-"+f.key);
+  if(!n){
+    n=el("div","node foreign st-foreign");n.id="fnode-"+f.key;n.dataset.key=f.key;n.setAttribute("role","button");n.tabIndex=0;
+    const top=el("div","n-top");top.append(el("span","n-title"),el("span","pill"));
+    n.append(top,el("div","n-meta mono"),el("div","n-step mono"));
+    const foot=el("div","n-foot");foot.append(el("span","n-elapsed mono"),el("span","br","watching only"));
+    n.append(foot);
+    n.addEventListener("click",e=>{e.stopPropagation();selectForeign(f.key)});
+    n.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();selectForeign(f.key)}});
+    nodesBox.append(n);
+  }
+  return n;
+}
+function renderForeignNodes(){
+  foreignArr().forEach(f=>{
+    const n=foreignEl(f);
+    n.className="node foreign st-foreign"+(S.fsel===f.key?" sel":"");
+    n.style.left=f.x+"px";n.style.top=f.y+"px";
+    n.querySelector(".n-title").textContent=f.title;
+    n.querySelector(".pill").textContent=f.stateLabel;
+    n.querySelector(".n-meta").textContent=f.short+(f.kind?" · "+f.kind:"");
+    n.querySelector(".n-step").textContent=f.cwd;
+    const e2=n.querySelector(".n-elapsed");e2.textContent=foreignElapsed(f);e2.dataset.fel=f.key;
+    n.setAttribute("aria-label",f.title+" — started outside relay, "+f.stateLabel);
+  });
+  nodesBox.querySelectorAll(".node.foreign").forEach(n=>{if(!S.foreign.has(n.dataset.key))n.remove()});
 }
 function edgeCls(t){
   if(t.msgUntil&&t.msgUntil>Date.now())return"edge msg";
@@ -302,15 +344,36 @@ function renderSidebar(){
     });
     sb.append(box);
   });
+  /* never mixed into the task groups, and absent entirely when there are none */
+  const fs=foreignArr();
+  if(fs.length){
+    const box=el("div","group");
+    const h=el("div","group-h");
+    h.append(el("span",null,"Outside relay"),el("span","cnt",String(fs.length)));
+    box.append(h);
+    fs.forEach(f=>{
+      const it=el("button","s-item st-foreign"+(S.fsel===f.key?" sel":""));
+      it.append(el("i","dot"));
+      const txt=el("div","txt");
+      txt.append(el("div","tt",f.title));
+      const mm=el("div","mm mono",f.stateLabel+" · "+f.cwd);txt.append(mm);
+      it.append(txt);
+      it.addEventListener("click",()=>{selectForeign(f.key);centerOnBox(f)});
+      box.append(it);
+    });
+    sb.append(box);
+  }
   sb.scrollTop=st;
 }
 
 /* ================= detail ================= */
 function renderDetail(){
-  const body=$("#dBody"),t=S.sel?S.tasks.get(S.sel):null;
-  $("#detail").classList.toggle("open",!!t);
+  const body=$("#dBody"),t=S.sel?S.tasks.get(S.sel):null,f=S.fsel?S.foreign.get(S.fsel):null;
+  $("#detail").classList.toggle("open",!!(t||f));
+  $("#dHead").textContent=f?"Session detail · outside relay":"Task detail";
   const st=body.scrollTop,openSet=new Set([...body.querySelectorAll("details[open]")].map(d=>d.dataset.i)); /* 재구성 후 복원 */
   body.textContent="";
+  if(f){renderForeignDetail(body,f);body.scrollTop=st;return}
   if(!t){body.append(el("div","d-empty","Pick a task in the graph or the sidebar to see its detail."));return}
 
   body.append(el("div","d-title",t.title));
@@ -391,18 +454,45 @@ function renderDetail(){
   });
   body.append(tl);body.scrollTop=st;
 }
+/* detail for a session relay did not start: only what is knowable, and "unknown" where it is not */
+function renderForeignDetail(body,f){
+  body.append(el("div","d-title",f.title));
+  const rows=el("dl","d-rows wide");
+  const row=(k,v,mono)=>{rows.append(el("dt",null,k));const dd=el("dd",mono?"mono":null);if(v instanceof Node)dd.append(v);else dd.textContent=v;rows.append(dd);return dd};
+  const pillWrap=el("span","st-foreign");pillWrap.append(el("span","pill",f.stateLabel));
+  row("State",pillWrap);
+  row("Session",f.sid,true);
+  row("Agent id",f.short+(f.kind?" · "+f.kind:""),true);
+  row("Directory",f.cwd,true);
+  row("PID",f.pid==null?"—":String(f.pid),true);
+  row("Started",f.startedAt?clock(f.startedAt):"unknown",true);
+  row("Elapsed",foreignElapsed(f),true).dataset.fel=f.key;
+  row("First seen",clock(f.firstSeen),true);
+  row("Last polled",clock(f.lastSeen),true);
+  body.append(rows);
+  body.append(el("div","d-note","Started outside relay. relay only watches it: no dispatch, no queue slot, no worktree, no usage attribution, and no automatic stop. Its tool activity and its answers are not visible here."));
+  const acts=el("div","d-actions");
+  const b=el("button","act","Stop this session");let armed=false; /* two-step confirm — this stops a session that is not relay's */
+  b.addEventListener("click",()=>{
+    if(!armed){armed=true;b.textContent="Confirm stop (not started by relay)";b.classList.add("danger");return}
+    relay.stopForeign(f.key);
+  });
+  acts.append(b);body.append(acts);
+}
 function famOf(id){ /* 작업 단위 = 최상위 태스크 + 그 서브에이전트 */
   const s=new Set();const t=id&&S.tasks.get(id);if(!t||t.status==="closed")return s;
   const r=(t.sub&&S.tasks.get(t.parent))||t;s.add(r.id);r.children.forEach(c=>s.add(c));return s;
 }
-function select(id){S.sel=id;refresh()}
-$("#dClose").addEventListener("click",()=>{S.sel=null;refresh()});
+function select(id){S.sel=id;S.fsel=null;refresh()}
+function selectForeign(key){S.fsel=key;S.sel=null;refresh()} /* mutually exclusive with a task selection — there is only one detail panel */
+function clearSel(){S.sel=null;S.fsel=null;refresh()}
+$("#dClose").addEventListener("click",clearSel);
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
     if(PAL.open){closePalette();return}
     if(kedEl.classList.contains("open")){closeKeysEd();return}
     if(N.open||SET.open){N.open=false;SET.open=false;renderNotif();renderSettings()}
-    else{S.sel=null;refresh()}
+    else clearSel();
   }
 });
 
@@ -421,6 +511,10 @@ function graphBoxes(){
     return n?{x:t.x,y:t.y,w:n.offsetWidth,h:n.offsetHeight,st:t.status}:null;
   }).filter(Boolean);
   boxes.push({x:gwEl.offsetLeft,y:gwEl.offsetTop,w:gwEl.offsetWidth,h:gwEl.offsetHeight,st:"gw"});
+  foreignArr().forEach(f=>{
+    const n=document.getElementById("fnode-"+f.key);
+    if(n)boxes.push({x:f.x,y:f.y,w:n.offsetWidth,h:n.offsetHeight,st:"foreign"});
+  });
   return boxes;
 }
 function fit(){
@@ -441,13 +535,15 @@ function fit(){
 }
 function maybeFit(){if(S.autofit&&!view.manual)fit()}
 function relayout(){layout();refresh();maybeFit();animateEdges()}
-function centerOn(t){
-  const n=document.getElementById("node-"+t.id);if(!n)return;
+function centerAt(n,p){
+  if(!n)return;
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
-  view.x=cw/2-(t.x+n.offsetWidth/2)*view.k;
-  view.y=ch/2-(t.y+n.offsetHeight/2)*view.k;
+  view.x=cw/2-(p.x+n.offsetWidth/2)*view.k;
+  view.y=ch/2-(p.y+n.offsetHeight/2)*view.k;
   touchView();applyView(true);
 }
+function centerOn(t){centerAt(document.getElementById("node-"+t.id),t)}
+function centerOnBox(f){centerAt(document.getElementById("fnode-"+f.key),f)}
 canvas.addEventListener("wheel",e=>{
   e.preventDefault();
   const rect=canvas.getBoundingClientRect();
@@ -470,7 +566,7 @@ canvas.addEventListener("pointermove",e=>{
   view.x=pan.ox+dx;view.y=pan.oy+dy;applyView();
 });
 canvas.addEventListener("pointerup",()=>{
-  if(pan&&!pan.moved){S.sel=null;refresh()}
+  if(pan&&!pan.moved)clearSel();
   pan=null;canvas.classList.remove("panning");
 });
 function zoomBy(f){ /* 캔버스 중심 고정 줌 */
@@ -486,7 +582,7 @@ let rzT;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout((
 const mmEl=$("#minimap");
 let mmMap=null;
 function updateMinimap(){
-  const hasTasks=tasksArr().some(t=>t.status!=="closed");
+  const hasTasks=tasksArr().some(t=>t.status!=="closed")||S.foreign.size>0;
   mmEl.style.display=hasTasks?"":"none";
   if(!hasTasks)return;
   const boxes=graphBoxes();
@@ -537,6 +633,7 @@ setInterval(()=>{
   });
   /* 사이드바·상세는 재구성하지 않고 경과 텍스트만 갱신 → 스크롤·포커스·펼침 상태 유지 */
   document.querySelectorAll("[data-el]").forEach(e=>{const t=S.tasks.get(e.dataset.el);if(t)e.textContent=e.dataset.fmt==="side"?sideMeta(t):(elapsedText(t)||"—")});
+  document.querySelectorAll("[data-fel]").forEach(e=>{const f=S.foreign.get(e.dataset.fel);if(f)e.textContent=foreignElapsed(f)});
 },1000);
 
 /* ================= notifications (macOS 방식) ================= */

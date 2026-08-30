@@ -11,5 +11,7 @@ export const attachLease = (uuid: string) => api.post<{ command: string }>(`/tas
 export const pause = () => api.post("/pause"); export const resumeAll = () => api.post("/resume-all");
 export const patchSettings = (p: { max_concurrent_agents: number }) => api.post("/settings", p, "PATCH");
 export const registerProject = (p: { name: string; path: string; description: string; keywords: string[] }) => api.post<{ id: string }>("/projects", p); export const removeProject = (id: string) => api.post(`/projects/${id}`, {}, "DELETE");
+/** The only call the dashboard can make about a session relay does not own. Everything else about it is read-only. */
+export const stopForeign = (sessionId: string) => api.post(`/foreign/${encodeURIComponent(sessionId)}/stop`);
 export const redispatch = (id: string) => api.post(`/messages/${id}/redispatch`); export const confirmCommand = (id: string) => api.post(`/commands/${id}/confirm`); export const retryCommand = (id: string) => api.post(`/commands/${id}/retry`);
 export const taskDetail = (uuid: string) => api.get<{ task: unknown; events: unknown[]; commands: unknown[] }>(`/tasks/${uuid}`);
