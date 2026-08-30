@@ -125,10 +125,9 @@ export class Outbox {
     if (k === "spawn" && t.status !== "starting") return false;
     if (k === "resume" && !(t.status === "starting" || t.paused)) return false;
     if (k === "send" && !["starting", "running", "waiting_input"].includes(t.status)) return false;
-    // Turn-boundary delivery (B1/C12) applies to the RESUME path only: it stops and restarts the session, so it must not
-    // cut a running turn. The socket reaches a busy worker mid-turn (re-measured 2026-08-31: a frame sent into a busy
-    // window was acted on 12.9s in, before the first Stop), so socket sends do not wait. onStop re-runs the queue.
-    if ((k === "send" || k === "resume") && this.deps.delivery() !== "socket" && t.process_state === "alive" && t.turn_state === "busy" && !t.paused) return false;
+    // Turn-boundary delivery (B1). The resume path must never cut a running turn (it stops and restarts the session);
+    // the socket path waits too, because mid-turn delivery is not yet established — see the busy branch in apply().
+    if ((k === "send" || k === "resume") && t.process_state === "alive" && t.turn_state === "busy" && !t.paused) return false;
     return true;
   }
   private applied(cmd: Command, t: Task, extra: Record<string, unknown> = {}) { this.log.emit({ type: "command.applied", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, ...extra } }); }
@@ -175,6 +174,12 @@ export class Outbox {
         // `agents --json` has no pid for background rows, so liveness alone gates the socket path; socketPathFor resolves
         // the inbox socket from the session registry (roadmap C3), not from this row's pid.
         if (p.kind === "send" && this.deps.delivery() === "socket" && live?.alive && this.runner.sendSocket) {
+          // A send to a busy worker is `held`, never reported as delivered: it stays pending and the Stop hook re-runs
+          // this queue at the turn boundary. Phase 0 has not settled mid-turn delivery — it was observed working once
+          // and never observed failing under a valid busy window — and `held` is correct under both outcomes.
+          // ponytail: the ceiling is a mid-turn instruction delayed to the end of the turn. The upgrade, once mid-turn
+          // delivery is confirmed deterministically, is to drop this branch and the socket half of the canRun gate.
+          if (live.busy === true) { outcome("held", "socket"); throw new HeldError("worker is busy — holding until the turn boundary"); }
           const claimed: SendOutcome = await this.runner.sendSocket(this.deps.socketPathFor(live), text, cmd.id);
           // The CLI acks nothing on this socket and the transport is lossy, so a socket send is NEVER optimistically
           // `accepted`: only the `[relay #<id8>]` marker proves delivery — echoed in UserPromptSubmit (idle), in an
