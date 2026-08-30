@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildTestApp } from "../../helpers/app.ts";
+import { FOREIGN_GRACE_MS } from "../../../src/lifecycle/foreign.ts";
+import { setNow } from "../../../src/core/clock.ts";
 describe("write routes", () => {
   test("POST /api/messages is 202, idempotent, validates reply targets before writing", async () => {
     const { req, db } = await buildTestApp();
@@ -46,5 +48,19 @@ describe("write routes", () => {
     expect((await req("POST", `/api/tasks/${w}/answer`, { text: "Allow" })).status).toBe(409); expect((db.query("select status from tasks where uuid=?").get(w) as any).status).toBe("running");
     db.run("insert into meta(key,value) values('recovering','1') on conflict(key) do update set value='1'");
     expect((await req("POST", "/api/messages", { text: "x" })).status).toBe(503); expect((await req("GET", "/api/tasks")).status).toBe(200);
+  });
+  test("the snapshot carries the sessions relay only watches, and stopping one is refused unless it is still foreign", async () => {
+    const { req, runner, foreign, seedTask } = await buildTestApp(); const t0 = Date.now(); setNow(() => t0);
+    try {
+      seedTask("running");                                                                    // relay's own: sid1 / fake01
+      expect(((await (await req("GET", "/api/tasks")).json()) as any).foreign).toEqual([]);    // the common case is none
+      runner.rows.set("out1", { short_id: "out1", session_id: "outside-1", name: "scratch", cwd: "/no/such/dir", pid: 77, alive: true, busy: false, waiting_for: null, raw: {} });
+      foreign.refresh(await runner.list(true));                                                // first sighting: held back for the grace period
+      setNow(() => t0 + FOREIGN_GRACE_MS); foreign.refresh(await runner.list(true));
+      expect((((await (await req("GET", "/api/tasks")).json()) as any).foreign as any[]).map((f) => f.session_id)).toEqual(["outside-1"]);
+      expect((await req("POST", "/api/foreign/sid1/stop")).status).toBe(404);                  // a relay worker is not stoppable through this route
+      expect((await req("POST", "/api/foreign/outside-1/stop")).status).toBe(200);
+      expect(runner.calls.filter((c) => c.kind === "stop")).toEqual([{ kind: "stop", args: "out1" }]);
+    } finally { setNow(null); }
   });
 });

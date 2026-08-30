@@ -22,6 +22,7 @@ import { recover } from "./lifecycle/recovery.ts";
 import { IdleReaper } from "./lifecycle/idle.ts";
 import { UsageGuard } from "./lifecycle/usage.ts";
 import { Watchdog } from "./lifecycle/watchdog.ts";
+import { ForeignSessions } from "./lifecycle/foreign.ts";
 import { sweep } from "./lifecycle/retention.ts";
 import { log } from "./log.ts";
 import { hookTokenFor } from "./gateway/auth.ts";
@@ -45,7 +46,8 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   for (const dir of [paths.home, paths.spool, paths.logDir]) { try { chmodSync(dir, 0o700); } catch {} }
   const db = openDb(paths.db); const mig = migrate(db); log.info("db ready", mig);
   setMeta(db, "recovering", "1");                                            // before the HTTP server opens: every hook buffers until reconcile is done
-  let hub!: WsHub; const evlog = new EventLog(db, (f) => hub.broadcast(f), cfg); hub = new WsHub(() => evlog, cfg, db);
+  let hub!: WsHub; let foreign: ForeignSessions | undefined;
+  const evlog = new EventLog(db, (f) => hub.broadcast(f), cfg); hub = new WsHub(() => evlog, cfg, db, () => foreign?.list() ?? []);
   const caps = loadCapabilities(); setMeta(db, "delivery_method", caps.delivery); setMeta(db, "version", VERSION); setMeta(db, "log_dir", paths.logDir); setMeta(db, "oauth_fallback", oauth ? "1" : "0");
   if (!getMeta(db, "relay_instance_id")) setMeta(db, "relay_instance_id", crypto.randomUUID()); const instanceId = () => getMeta(db, "relay_instance_id")!;
   const maxAgents = () => Number(getMeta(db, "max_concurrent_agents") ?? cfg.max_concurrent_agents);
@@ -67,7 +69,8 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   svc = new TaskService({ db, log: evlog, cfg, permits, scheduler, outbox, projectNameOf: (id) => (db.query("select name from projects where id=?").get(id) as any)?.name ?? id, pendingPermissions });
   svc.ingestDeps.policy = new PermissionPolicy(cfg.worker.allow_push);
   const dispatcher = new Dispatcher(db, evlog, cfg, { runClaude: opts.runClaude, onDecision: (m, d, p) => svc.applyDecision(m, d, p), onNeedsConfirm: (m, d, r) => svc.needsConfirm(m, d, r), isPaused: () => svc.paused() });
-  const usage = new UsageGuard(db, evlog, cfg, svc, permits); const idle = new IdleReaper(db, evlog, cfg, outbox, svc); const watchdog = new Watchdog(db, evlog, runner, svc, permits);
+  foreign = new ForeignSessions(db, runner, (list) => hub.broadcastForeign(list));
+  const usage = new UsageGuard(db, evlog, cfg, svc, permits); const idle = new IdleReaper(db, evlog, cfg, outbox, svc); const watchdog = new Watchdog(db, evlog, runner, svc, permits, foreign);
   // Installed before recover(), so replayed Stops are sampled and promoted too. Promotion runs BEFORE the task service
   // re-runs the outbox queue, so a delivered mid-turn send is no longer an `unknown` head blocking that queue.
   const prevStop = svc.ingestDeps.onStop;
@@ -85,7 +88,7 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   };
   svc.onToolUse = (t, promptId) => { if (usage.countToolCall(t.uuid, promptId)) { log.warn("tool-call cap hit — interrupting", { task: t.uuid }); svc.interrupt(t.uuid); } };
   svc.onNudge = () => { watchdog.tick().catch((e) => log.warn("watchdog", { e: String(e) })); };
-  const ctx: AppContext = { db, cfg, log: evlog, hub, tokens, services: { ingestDeps: svc.ingestDeps, tasks: svc, outbox, scheduler, dispatcher, permits, pendingPermissions }, dashboardHtml: () => Bun.file(dashboardHtml as unknown as string).text() };
+  const ctx: AppContext = { db, cfg, log: evlog, hub, tokens, services: { ingestDeps: svc.ingestDeps, tasks: svc, outbox, scheduler, dispatcher, permits, pendingPermissions }, foreign, dashboardHtml: () => Bun.file(dashboardHtml as unknown as string).text() };
   const http = startServer(ctx); log.info("listening", { port: cfg.port });
   const spool = new Spool(paths.spool, () => svc.ingestDeps);
   await recover({ db, log: evlog, runner, permits, outbox, dispatcher, scheduler, tasks: svc, spool, maxAgents, instanceId });

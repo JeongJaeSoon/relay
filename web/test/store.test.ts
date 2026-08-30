@@ -11,9 +11,19 @@ describe("store.applyFrame", () => {
     store.applyFrame({ seq: 8, idx: 5, type: "task.created", task: task("old", "queued") }); expect(store.state.tasks.old).toBeUndefined();
   });
   test("snapshot sets the cursor to (as_of_seq, MAX) so frames of that seq are dropped and later ones apply", () => {
-    store.applySnapshot({ as_of_seq: 5, tasks: [task("s", "running")], projects: [], state: { paused: false } as any, messages: [] });
+    store.applySnapshot({ as_of_seq: 5, tasks: [task("s", "running")], projects: [], state: { paused: false } as any, messages: [], foreign: [] });
     store.applyFrame({ seq: 5, idx: 0, type: "task.created", task: task("x", "queued") }); expect(store.state.tasks.x).toBeUndefined();
     store.applyFrame({ seq: 6, idx: 0, type: "task.created", task: task("y", "queued") }); expect(store.state.tasks.y).toBeDefined();
+  });
+  test("a foreign.sessions frame carries no cursor: it applies whatever the seq says and never moves (seq, idx)", () => {
+    const f = (id: string) => ({ session_id: id, short_id: "ab", name: "n", cwd: "/c", busy: true, pid: 1, started_at: null, kind: "bg", first_seen: 1, last_seen: 2 });
+    store.applyFrame({ seq: 7, idx: 0, type: "task.created", task: task("t", "running") });
+    store.applyFrame({ seq: 0, idx: 0, type: "foreign.sessions", sessions: [f("outside-1")] } as any);   // seq 0 < cursor 7, and it must still apply
+    expect(store.state.foreign.map((x) => x.session_id)).toEqual(["outside-1"]);
+    expect(store.state.seq).toBe(7); expect(store.state.dirty.foreign).toBe(true);
+    store.applyFrame({ seq: 0, idx: 0, type: "foreign.sessions", sessions: [] } as any);                 // the whole set arrives each time, so an empty one clears it
+    expect(store.state.foreign).toEqual([]);
+    store.applyFrame({ seq: 8, idx: 0, type: "task.created", task: task("u", "queued") }); expect(store.state.tasks.u).toBeDefined();
   });
   test("messages upsert by id and stay sorted; events capped at 200; dirty sets accumulate and drain resets them", () => {
     const m = (id: string, at: number, st = "pending") => ({ id, role: "user", source: "user", client_message_id: id, dispatch_state: st, text: "x", task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: at }) as any;
