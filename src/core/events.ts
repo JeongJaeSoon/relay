@@ -51,5 +51,5 @@ export class EventLog {
    *  and not every event produces one (system.recovered fires on every start and produces none), so an event cursor
    *  is a promise the client cannot keep — it would sit in `resync` forever. Every seq at or below this one has
    *  frames the client will apply. */
-  lastFrameSeq(): number { return (this.db.query("select coalesce(max(seq),0) s from ws_frames").get() as any).s; }
+  lastFrameSeq(): number { return (this.db.query("select coalesce(max(seq),0) s from ws_frames where frame_json<>'[]'").get() as any).s; }   // `<>'[]'` covers rows written before frameless events stopped being stored; JSON.stringify([]) is exactly that string
 }
