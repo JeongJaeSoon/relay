@@ -63,6 +63,15 @@ export function createNotifQueue(): NotifQueue {
     drain() { const c = [...chips]; chips.clear(); return { ops: ops.splice(0), chips: c }; },
   };
 }
+/** The server states the dispatcher's decision twice: on the user message as dispatch_json — which the adapter renders
+ *  as the demo's badge chips with a clickable task tag — and again as a plain system chat row (crosswalk §4,
+ *  "판단 완료 시 chat.message system 행"). Only the chips are kept; the text row is the same thing, worse. */
+export const isDispatcherBadgeRow = (m: Message) => m.role === "system" && m.text.startsWith("dispatcher · ");
+/** The timeline is the worker's observation stream — exactly what the WS carries as task.event. The detail fetch
+ *  returns the task's WHOLE event log instead, which is mostly relay's own bookkeeping: over a hundred task.patched
+ *  projection writes per task, plus command/permit/process rows whose effect the node and detail already show.
+ *  Both sources go through this filter so loading the history does not change what the timeline means. */
+export const isTimelineEvent = (type: string) => type.startsWith("hook.") || type === "send.outcome" || type === "message.sent";
 export const closeConfirmUuid = (text: string) => text.match(/\[종료 확인: POST \/api\/tasks\/([^/\]]+)\/close\]/)?.[1] ?? null;
 // ---- browser ----------------------------------------------------------------------------------------
 const note = (s: string) => D.chatNote?.(s);
@@ -79,7 +88,7 @@ export function installAdapter() {
     setMax: (n: number) => run("상한 변경", api.patchSettings({ max_concurrent_agents: Math.max(1, n) })),
     registerProject: (p: { name: string; path: string; description: string; keywords: string[] }) => run("프로젝트 등록", api.registerProject(p)), removeProject: (id: string) => run("프로젝트 삭제", api.removeProject(id)),
     redispatch: (messageId: string) => run("재시도", api.redispatch(messageId)),
-    loadDetail: (t: DemoTask) => { if (loadedDetail === t.uuid) return; loadedDetail = t.uuid; api.taskDetail(t.uuid).then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
+    loadDetail: (t: DemoTask) => { if (loadedDetail === t.uuid) return; loadedDetail = t.uuid; api.taskDetail(t.uuid).then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).filter((e) => isTimelineEvent(e.type)).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
   };
   D.relay = relay;
   const syncTasks = (uuids: Iterable<string>) => {
@@ -107,6 +116,7 @@ export function installAdapter() {
     const byId = new Map(store.state.messages.map((m) => [m.id, m]));
     for (const id of ids) {
       const m = byId.get(id); if (!m) continue;
+      if (isDispatcherBadgeRow(m)) { drawn.add(id); continue; }                   // the badge chips under the user message already say this
       if (drawn.has(id)) { const old = badgeRows.get(id); if (old && m.role === "user") { const fresh = badgeRow(m); old.replaceWith(fresh); badgeRows.set(id, fresh); } continue; }
       drawn.add(id); const task = demoOf(m.task_uuid);
       if (m.role === "user") { D.chatUser(m.text); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
@@ -117,7 +127,7 @@ export function installAdapter() {
     D.scrollChat?.();
     const users = store.state.messages.filter((m) => m.role === "user").slice(-20).reverse(); D.DLOG.length = 0; for (const m of users) D.DLOG.push(dlogEntry(m, ctx())); D.renderDlog();
   };
-  const syncEvents = (uuids: Iterable<string>) => { for (const uuid of uuids) { const t = demoOf(uuid); if (!t) continue; const list = store.state.events[uuid] ?? []; const have = new Set(t.events.map((e) => e.id)); for (const e of list) if (!have.has(e.seq)) t.events.push(eventLine(e)); if (t.events.length > 200) t.events.splice(0, t.events.length - 200); if (S.sel === t.id) D.refresh(); } };
+  const syncEvents = (uuids: Iterable<string>) => { for (const uuid of uuids) { const t = demoOf(uuid); if (!t) continue; const list = store.state.events[uuid] ?? []; const have = new Set(t.events.map((e) => e.id)); for (const e of list) if (!have.has(e.seq) && isTimelineEvent(e.type)) t.events.push(eventLine(e)); if (t.events.length > 200) t.events.splice(0, t.events.length - 200); if (S.sel === t.id) D.refresh(); } };
   const flushNotifs = () => {                                                  // decisions were made at frame time; the DOM work happens here, once per render
     const { ops, chips } = notifs.drain();
     for (const o of ops) { const d = demoOf(o.taskUuid); if (!d) continue; if (o.op === "withdraw") D.withdrawNotif(d.id, o.kind); else D.notify(o.kind, d, o.body); }

@@ -17,12 +17,12 @@ export function connect(opts: { url?: string; WebSocketImpl?: typeof WebSocket; 
         if (first || behind > 5000) {                                          // (re)load the snapshot, then apply what arrived meanwhile
           buffering = true; const r = await f("/api/tasks", { headers: { authorization: `Bearer ${token}` } }); const snap = (await r.json()) as TasksSnapshot; store.applySnapshot(snap);
           for (const b of buf) if (b.seq > snap.as_of_seq) store.applyFrame(b); buf.length = 0; buffering = false; first = false; store.setConn("ok");
-        } else { asOf = fr.as_of_seq; store.setConn(store.state.seq >= asOf ? "ok" : "resync"); }
+        } else if (store.state.seq >= fr.as_of_seq) { store.setConn("ok"); } else { asOf = fr.as_of_seq; store.setConn("resync"); }   // as_of_seq is the server's frame cursor, so the replay always reaches it
         return;
       }
       if (buffering) buf.push(fr); else { store.applyFrame(fr); if (asOf >= 0 && store.state.seq >= asOf) { asOf = -1; store.setConn("ok"); } }
     };
-    ws.onclose = () => { store.setConn("reconnecting"); setTimeout(open, backoff); backoff = Math.min(backoff * 2, 15_000); };
+    ws.onclose = () => { asOf = -1; store.setConn("reconnecting"); setTimeout(open, backoff); backoff = Math.min(backoff * 2, 15_000); };
   };
   open();
 }

@@ -15,7 +15,8 @@ export function rebuildProjections(db: Database, cfg: Config): number {
     for (const r of db.query("select * from events order by seq").all() as any[]) {
       const ev: EventEnvelope = { ...r, v: r.v ?? 1, payload: JSON.parse(r.payload_json), truncated: !!r.truncated, blob_id: r.blob_id ?? null };
       const frames = applyProjection(db, ev, cfg).map((f, idx) => ({ ...f, seq: ev.seq, idx }));
-      db.run("insert or replace into ws_frames(seq,frame_json) values(?,?)", [ev.seq, JSON.stringify(frames)]); n++;
+      if (frames.length) db.run("insert or replace into ws_frames(seq,frame_json) values(?,?)", [ev.seq, JSON.stringify(frames)]);   // same rule as EventLog.emitMany: no row for a frameless event
+      n++;
     }
   })();
   return n;

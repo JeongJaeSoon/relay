@@ -25,3 +25,25 @@ describe("ws client", () => {
     expect(store.state.messages.map((m) => m.id)).toEqual(["new", "n2", "n3"]); expect(store.state.conn).toBe("ok");
   });
 });
+
+// --- QA (2026-08-31): a restart emits system.recovered, an event that carries no frame at all ---
+describe("ws resync completion", () => {
+  test("the server promises the frame cursor, so a frameless event cannot strand the replay", async () => {
+    store.reset();
+    connect({ url: "ws://y/ws", WebSocketImpl: FakeWS as any, fetchImpl: (async () => ({ ok: true, json: async () => snapshot })) as any });
+    await new Promise((r) => setTimeout(r, 5));
+    FakeWS.last.emit({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} });                  // first load: snapshot
+    await new Promise((r) => setTimeout(r, 5));
+    FakeWS.last.close(); await new Promise((r) => setTimeout(r, 1100));                            // reconnect
+    // seq 8 is system.recovered and produces no frame, so the server's as_of_seq is 7 — the last seq that did.
+    FakeWS.last.emit({ seq: 8, idx: 0, type: "hello", as_of_seq: 7, state: {} });
+    expect(store.state.conn).toBe("resync");
+    FakeWS.last.emit({ seq: 7, idx: 0, type: "chat.message", message: { id: "r1", created_at: 9 } });
+    expect(store.state.conn).toBe("ok"); expect(store.state.seq).toBe(7);                          // reached the promise exactly, no timer involved
+  });
+  test("a hello whose as_of_seq the cursor already covers goes straight to ok", async () => {
+    FakeWS.last.close(); await new Promise((r) => setTimeout(r, 1100));
+    FakeWS.last.emit({ seq: 7, idx: 0, type: "hello", as_of_seq: 7, state: {} });
+    expect(store.state.conn).toBe("ok");
+  });
+});

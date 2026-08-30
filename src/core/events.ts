@@ -35,7 +35,7 @@ export class EventLog {
         const ev: EventEnvelope = { v: 1, seq: Number(r.lastInsertRowid), event_id, type: input.type, task_uuid: input.task_uuid ?? null, source_session_id: input.source_session_id ?? null, source_event_id: input.source_event_id ?? null,
           process_generation: input.process_generation ?? null, turn_id: input.turn_id ?? null, tool_use_id: input.tool_use_id ?? null, causation_id: input.causation_id ?? null, occurred_at: input.occurred_at ?? recorded_at, recorded_at, payload: JSON.parse(json), truncated, blob_id: blob ? event_id : null };
         const frames = applyProjection(db, ev, this.cfg).map((f, idx) => ({ ...f, seq: ev.seq, idx } as WsFrame));
-        db.run("insert or replace into ws_frames(seq,frame_json) values(?,?)", [ev.seq, JSON.stringify(frames)]);   // one row per event, array of frames
+        if (frames.length) db.run("insert or replace into ws_frames(seq,frame_json) values(?,?)", [ev.seq, JSON.stringify(frames)]);   // one row per frame-producing event, array of frames — an event with no frames (system.recovered) gets none, so max(seq) here is a cursor the client can actually reach
         pending.push(...frames); results.push(ev);
       }
     });
@@ -47,4 +47,9 @@ export class EventLog {
     return this.db.query("select frame_json from ws_frames where seq>? order by seq limit ?").all(seq, limit).flatMap((r: any) => JSON.parse(r.frame_json) as WsFrame[]);
   }
   lastSeq(): number { return (this.db.query("select coalesce(max(seq),0) s from events").get() as any).s; }
+  /** The catch-up target handed to clients. NOT lastSeq(): the dashboard cursor advances only with applied frames,
+   *  and not every event produces one (system.recovered fires on every start and produces none), so an event cursor
+   *  is a promise the client cannot keep — it would sit in `resync` forever. Every seq at or below this one has
+   *  frames the client will apply. */
+  lastFrameSeq(): number { return (this.db.query("select coalesce(max(seq),0) s from ws_frames").get() as any).s; }
 }
