@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T14:44:24.023Z",
+  "updated_at": "2026-08-30T14:45:08.108Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -444,5 +444,7 @@
       "firstTerminalAt",
       "backend"
     ]
-  }
+  },
+  "rmRefusesUnpushedWorktree": "`claude rm <id>` KEEPS the session when its worktree has commits that are not pushed anywhere: stdout `kept <id> — worktree has commits that are not pushed anywhere` + `worktree kept at <path>`, and the row stays in `agents --json --all`. B3's rm row must treat this as NOT applied (or force-remove the worktree first), otherwise close/cleanup silently leaks sessions and worktrees.",
+  "recovery": "BLOCKED: not run — the checklist needs an interactive `claude attach` for the attached row and keeps five live sessions up for minutes. Procedure in spikes/scripts/08-recovery.md."
 }
