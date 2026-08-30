@@ -34,8 +34,8 @@ export function apiRoutes(ctx: AppContext) {
   // ---- write (Task 13) ----
   const S = ctx.services; const bad = (c: any, msg: string, code = 400) => c.json({ error: msg }, code);
   const withTask = (c: any) => loadTask(ctx.db, c.req.param("id"));
-  api.use("*", async (c, next) => { if (c.req.method !== "GET" && c.req.path !== "/api/hooks" && getMeta(ctx.db, "recovering") === "1") return c.json({ error: "recovering — 잠시 후 다시 시도" }, 503); await next(); });   // writes wait for reconcile; hooks buffer durably
-  const attached = (c: any, t: Task) => (t.attach_state !== "none" ? bad(c, `터미널에 attach 중(${t.attached_by}) — 먼저 detach 하세요`, 409) : null);
+  api.use("*", async (c, next) => { if (c.req.method !== "GET" && c.req.path !== "/api/hooks" && getMeta(ctx.db, "recovering") === "1") return c.json({ error: "recovering — try again shortly" }, 503); await next(); });   // writes wait for reconcile; hooks buffer durably
+  const attached = (c: any, t: Task) => (t.attach_state !== "none" ? bad(c, `attached in a terminal (${t.attached_by}) — detach first`, 409) : null);
   api.post("/messages", async (c) => {
     const b = z.object({ text: z.string().trim().min(1).max(20_000), client_message_id: z.string().max(128).optional(), reply_to_task_id: z.string().optional(), source: z.enum(["user", "cli", "mcp", "github", "slack", "cron"]).default("user") }).safeParse(await c.req.json());
     if (!b.success) return bad(c, "invalid body");
@@ -49,7 +49,7 @@ export function apiRoutes(ctx: AppContext) {
     return c.json({ message_id: id }, 202);
   });
   api.post("/messages/:id/redispatch", (c) => { const m = ctx.db.query("select * from messages where id=?").get(c.req.param("id")); if (!m) return bad(c, "not found", 404); ctx.log.emit({ type: "dispatch.requeued", payload: { message_id: c.req.param("id"), patch: { dispatch_state: "pending", dispatch_error: null } } }); S.dispatcher.enqueue(c.req.param("id")); return c.json({ ok: true }); });
-  api.post("/tasks/:id/answer", async (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (t.status !== "waiting_input") return bad(c, `not waiting for input (${t.status}) — use POST /api/messages`, 409); const b = z.object({ text: z.string().min(1) }).safeParse(await c.req.json()); if (!b.success) return bad(c, "text required"); if (!S.tasks.answer(t.uuid, b.data.text, null)) return bad(c, "승인 요청이 이미 만료됨(자동 거부) — 워커가 계속 진행 중", 409); return c.json({ ok: true }); });
+  api.post("/tasks/:id/answer", async (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (t.status !== "waiting_input") return bad(c, `not waiting for input (${t.status}) — use POST /api/messages`, 409); const b = z.object({ text: z.string().min(1) }).safeParse(await c.req.json()); if (!b.success) return bad(c, "text required"); if (!S.tasks.answer(t.uuid, b.data.text, null)) return bad(c, "the permission request already expired (auto-denied) — the worker moved on", 409); return c.json({ ok: true }); });
   api.post("/tasks/:id/interrupt", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (["closed", "cancelled"].includes(t.status)) return bad(c, `cannot interrupt in ${t.status}`, 409); const a = attached(c, t); if (a) return a; S.tasks.interrupt(t.uuid); return c.json({ ok: true }); });
   api.post("/tasks/:id/close", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); const a = attached(c, t); if (a) return a; S.tasks.close(t.uuid); return c.json({ ok: true }); });
   api.post("/tasks/:id/retry", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (!["error", "cancelled", "needs_review"].includes(t.status)) return bad(c, `cannot retry in ${t.status}`, 409); const a = attached(c, t); if (a) return a; S.tasks.retry(t.uuid); return c.json({ ok: true }); });

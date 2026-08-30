@@ -58,7 +58,7 @@ export class TaskService {
       }
       case "route_to_task": {
         const t = this.byDisplay(dec.task_id!); if (!t) return this.needsConfirm(msg, dec, `task ${dec.task_id} not found`);
-        if (t.status === "error") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); return this.needsConfirm(msg, null, `${t.display_id}은(는) 오류 상태 — 먼저 재시작하세요`); }
+        if (t.status === "error") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); return this.needsConfirm(msg, null, `${t.display_id} is in the error state — restart it first`); }
         if (t.status === "waiting_input" && t.question?.source === "permission") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); this.answer(t.uuid, dec.prompt ?? msg.text, null); return; }
         const send = this.d.outbox.commandInput(t.uuid, msg.id, { kind: "send", text: dec.prompt ?? msg.text, marker: marker(), message_id: msg.id });
         const inputs: EmitInput[] = [done({ task_uuid: t.uuid }), badgeIn];
@@ -68,13 +68,13 @@ export class TaskService {
         this.d.log.emitMany(inputs); this.d.outbox.kick(t.uuid); void this.d.scheduler.pump(); return;
       }
       case "answer_directly": { this.d.log.emitMany([done(), badgeIn, { type: "message.received", payload: { ...sysMsg(dec.answer ?? ""), role: "dispatcher_answer" } }]); return; }
-      case "close_task": { const t = this.byDisplay(dec.task_id!); if (!t) return this.needsConfirm(msg, dec, `task ${dec.task_id} not found`); this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn, { type: "message.received", task_uuid: t.uuid, payload: sysMsg(`${t.display_id} ${t.title}을(를) 종료할까요? [종료 확인: POST /api/tasks/${t.uuid}/close]`, t.uuid) }]); return; }
+      case "close_task": { const t = this.byDisplay(dec.task_id!); if (!t) return this.needsConfirm(msg, dec, `task ${dec.task_id} not found`); this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn, { type: "message.received", task_uuid: t.uuid, payload: sysMsg(`Close ${t.display_id} ${t.title}? [close confirm: POST /api/tasks/${t.uuid}/close]`, t.uuid) }]); return; }
     }
   }
   needsConfirm(msg: Message, dec: DispatchDecision | null, reason: string) {
     const active = this.d.db.query("select display_id, title from tasks where parent_uuid is null and status not in ('closed') order by updated_at desc limit 6").all() as any[];
     const opts = active.map((t) => `${t.display_id} ${t.title}`).join(" / ");
-    const inputs: EmitInput[] = [{ type: "message.received", payload: sysMsg(`라우팅 확인 필요 (${reason}${dec ? `, 후보: ${dec.action}${dec.task_id ? " " + dec.task_id : ""}` : ""}). 어느 작업인가요? ${opts || "(활성 작업 없음 — 새 작업이면 프로젝트를 알려주세요)"}`) }];
+    const inputs: EmitInput[] = [{ type: "message.received", payload: sysMsg(`Routing needs confirmation (${reason}${dec ? `, candidate: ${dec.action}${dec.task_id ? " " + dec.task_id : ""}` : ""}). Which task? ${opts || "(no active tasks — for a new one, name the project)"}`) }];
     // Only patch a message that exists: sendTo() calls this with a synthetic id for a follow-up that never was a chat row.
     const existing = loadMessage(this.d.db, msg.id);
     if (existing && existing.dispatch_state !== "needs_confirm") inputs.unshift({ type: "dispatch.completed", payload: { message_id: msg.id, patch: { dispatch_state: "needs_confirm", dispatch_json: dec } } });
@@ -101,7 +101,7 @@ export class TaskService {
     this.sendTo(t, text, viaMessageId ?? ulid()); return true;
   }
   private sendTo(t: Task, text: string, key: string) {
-    if (t.status === "error") return this.needsConfirm({ id: key } as Message, null, `${t.display_id}은(는) 오류 상태 — 먼저 재시작하세요`);
+    if (t.status === "error") return this.needsConfirm({ id: key } as Message, null, `${t.display_id} is in the error state — restart it first`);
     const fromChat = !!loadMessage(this.d.db, key);
     const send = this.d.outbox.commandInput(t.uuid, key, { kind: "send", text, marker: marker(), message_id: fromChat ? key : undefined });
     const inputs: EmitInput[] = [send.input];
@@ -118,7 +118,7 @@ export class TaskService {
   }
   retry(taskUuid: string) {
     this.d.outbox.cancelPending(taskUuid, ["send", "resume"], "retry");
-    this.d.outbox.enqueue(taskUuid, `retry:${now()}`, { kind: "resume", prompt: "중단된 지점부터 이어서 진행하라. 끝나면 RELAY: done 블록으로 보고하라.", marker: marker() });
+    this.d.outbox.enqueue(taskUuid, `retry:${now()}`, { kind: "resume", prompt: "Continue from where you stopped. When you are finished, report with a RELAY: done block.", marker: marker() });
     this.d.scheduler.enqueue(taskUuid, true); void this.d.scheduler.pump();
   }
   close(taskUuid: string) {
@@ -143,19 +143,19 @@ export class TaskService {
   }
   resumeAll() {
     this.d.log.emit({ type: "system.resumed", payload: {} });
-    for (const r of this.d.db.query("select uuid from tasks where paused=1").all() as any[]) this.d.outbox.enqueue(r.uuid, `unpause:${now()}`, { kind: "resume", prompt: "kill switch가 해제됐다. 중단된 지점부터 이어서 진행하라.", marker: marker() });
+    for (const r of this.d.db.query("select uuid from tasks where paused=1").all() as any[]) this.d.outbox.enqueue(r.uuid, `unpause:${now()}`, { kind: "resume", prompt: "The kill switch has been released. Continue from where you stopped.", marker: marker() });
     void this.d.outbox.runAll(); void this.d.scheduler.pump();
   }
   // ---- worker signals ----------------------------------------------------------------------------
   private onCrash(t: Task, reason: string) {
     this.status(t, "error", { ended_at: now(), question: null }); this.d.permits.releaseTask(t.uuid, "crashed");
-    this.chat(chatFor("error", loadTask(this.d.db, t.uuid)!, `세션이 종료됨(${reason}) — 재시작 버튼으로 --resume`)); void this.d.scheduler.pump();
+    this.chat(chatFor("error", loadTask(this.d.db, t.uuid)!, `Session ended (${reason}) — use Restart to --resume`)); void this.d.scheduler.pump();
   }
   /** §11: subscription/rate limit seen in worker output → global pause + banner; the task goes back to the queue head for the resume. */
   private onRateLimit(t: Task, text: string) {
     if (this.paused()) return;
     const when = text.match(/(\d{1,2}:\d{2}\s*(?:am|pm)?|\d+\s*(?:minutes?|hours?|분|시간))/i)?.[1];
-    this.chat(sysMsg(`⛔ 구독 사용량 한도로 보이는 오류 — kill switch ON${when ? ` (재개 예상: ${when})` : ""}. 확인 후 재개하세요.`, t.uuid));
+    this.chat(sysMsg(`⛔ Looks like a subscription usage limit — kill switch ON${when ? ` (expected reset: ${when})` : ""}. Check, then resume.`, t.uuid));
     this.pause();
   }
   private onStop(t: Task, body: any) {
@@ -164,7 +164,7 @@ export class TaskService {
     this.d.log.emit({ type: "hook.verdict", task_uuid: t.uuid, payload: { verdict: v.status, reason: v.reason } });
     if (v.status === "running") { void this.d.outbox.run(t.uuid); return; }
     if (v.status === "waiting_input") { this.status(t, "waiting_input", { question: v.question }); this.d.permits.releaseTask(t.uuid, "waiting_input"); this.chat(chatFor(v.reason === "marker blocked" ? "blocked" : "question", t, v.question!.text + (v.question!.options.length ? ` (${v.question!.options.join(" / ")})` : ""))); }
-    else { this.status(t, v.status, { ended_at: now(), last_summary: v.summary ?? t.last_summary }); this.d.permits.releaseTask(t.uuid, v.status); if (v.status === "done") this.chat(chatFor("completed", t, v.summary ?? "")); else this.chat(chatFor("error", t, `검토 필요 — ${v.reason}: ${v.summary ?? ""}`)); }
+    else { this.status(t, v.status, { ended_at: now(), last_summary: v.summary ?? t.last_summary }); this.d.permits.releaseTask(t.uuid, v.status); if (v.status === "done") this.chat(chatFor("completed", t, v.summary ?? "")); else this.chat(chatFor("error", t, `Needs review — ${v.reason}: ${v.summary ?? ""}`)); }
     void this.d.outbox.run(t.uuid);                                      // turn boundary: deliver anything that waited for the turn to end
     void this.d.scheduler.pump();
   }

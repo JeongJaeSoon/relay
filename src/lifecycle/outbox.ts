@@ -209,7 +209,7 @@ export class Outbox {
         const r = t.short_id ? await this.runner.rm(t.short_id) : { worktreeKept: false };
         // `claude rm` keeps the session when its worktree has uncommitted or unpushed work (Phase 0 ④). B3: still
         // applied, but the user has to be told the worktree is still on disk.
-        if (r.worktreeKept) this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: t.worktree_path, reason: "커밋되지 않은 작업이 남아 worktree를 보존했습니다" } });
+        if (r.worktreeKept) this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: t.worktree_path, reason: "kept the worktree — uncommitted work remains" } });
         this.patch(t, { process_state: "stopped" }, cmd); this.applied(cmd, t, { worktreeKept: r.worktreeKept }); return;
       }
     }

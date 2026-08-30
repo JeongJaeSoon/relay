@@ -1,7 +1,7 @@
 import { CliError, RelayDown, RelayHttpError } from "./client.ts";
-const USAGE = `relay — 개인용 Claude Code 오케스트레이터
+const USAGE = `relay — a personal Claude Code orchestrator
 
-  relay serve                 서버 실행(launchd가 사용)
+  relay serve                 run the server (used by launchd)
   relay send "<msg>" [--to T-08]
   relay ls [--all] [--json]
   relay tail <T-08>
@@ -10,8 +10,8 @@ const USAGE = `relay — 개인용 Claude Code 오케스트레이터
   relay pause | resume-all
   relay setup [--yes] [--service] | doctor [--service] [--probe] [--json]
   relay db backup [file] | restore <file> | sweep | rebuild
-  relay mcp                   MCP 브리지(stdio)
-  relay hook <event>|guard    세션 훅 진입점
+  relay mcp                   MCP bridge (stdio)
+  relay hook <event>|guard    session hook entry point
 `;
 /** The only place that turns errors into exit codes (library code never calls process.exit). */
 export async function runCli(cmd: string, rest: string[]) {

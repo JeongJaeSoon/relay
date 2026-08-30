@@ -34,8 +34,8 @@ describe("write routes", () => {
     const a = seedTask("running", { attach_state: "leased", attached_by: "cli:1" });
     for (const p of ["interrupt", "close"]) expect((await req("POST", `/api/tasks/${a}/${p}`)).status).toBe(409);
     const e = seedTask("error", { attach_state: "leased", attached_by: "cli:1" }); expect((await req("POST", `/api/tasks/${e}/retry`)).status).toBe(409);
-    const w = seedTask("waiting_input", { question: { source: "permission", text: "?", options: ["허용", "거부"], asked_at: 1, permission_tool_use_id: "tu9" } });
-    expect((await req("POST", `/api/tasks/${w}/answer`, { text: "허용" })).status).toBe(409); expect((db.query("select status from tasks where uuid=?").get(w) as any).status).toBe("running");
+    const w = seedTask("waiting_input", { question: { source: "permission", text: "?", options: ["Allow", "Deny"], asked_at: 1, permission_tool_use_id: "tu9" } });
+    expect((await req("POST", `/api/tasks/${w}/answer`, { text: "Allow" })).status).toBe(409); expect((db.query("select status from tasks where uuid=?").get(w) as any).status).toBe("running");
     db.run("insert into meta(key,value) values('recovering','1') on conflict(key) do update set value='1'");
     expect((await req("POST", "/api/messages", { text: "x" })).status).toBe(503); expect((await req("GET", "/api/tasks")).status).toBe(200);
   });

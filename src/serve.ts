@@ -34,7 +34,7 @@ export async function serve(opts: { runner?: AgentRunner; runClaude?: RunClaude 
   ensureDirs(); const cfg = loadConfig();
   if (cfg.path_prepend.length) process.env.PATH = [...cfg.path_prepend, process.env.PATH ?? ""].join(":");   // launchd PATH lacks nvm/npm dirs; `claude` needs `node` for npm installs
   if (process.env.RELAY_SERVICE && existsSync(paths.serviceFailed) && readFileSync(paths.serviceFailed, "utf8").trim() === VERSION) {
-    console.error("relay: 이전 기동이 실패했습니다 — `relay doctor` 후 `brew services restart relay`"); process.exit(0);   // KeepAlive successful_exit:false → exit 0 stays down
+    console.error("relay: the previous start failed — run `relay doctor`, then `brew services restart relay`"); process.exit(0);   // KeepAlive successful_exit:false → exit 0 stays down
   }
   try { return await boot(cfg, opts); } catch (e) { log.error("boot failed", { e: String(e) }); if (process.env.RELAY_SERVICE) { writeFileSync(paths.serviceFailed, VERSION); process.exit(78); } throw e; }
 }

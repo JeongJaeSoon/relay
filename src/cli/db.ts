@@ -11,7 +11,7 @@ import { sweep } from "../lifecycle/retention.ts";
 import { CliError, client } from "./client.ts";
 
 const say = (s: string) => process.stdout.write(s + "\n");
-const refuseIfUp = async (what: string) => { if (await client().up()) throw new CliError(`relay: 서버가 실행 중입니다 — ${what} 전에 \`brew services stop relay\`(또는 relay serve 종료)`); };
+const refuseIfUp = async (what: string) => { if (await client().up()) throw new CliError(`relay: the server is running — run \`brew services stop relay\` (or quit relay serve) before ${what}`); };
 const stamp = () => new Date().toISOString().replace(/[:.]/g, "-");
 
 export async function db(rest: string[]) {
@@ -27,30 +27,30 @@ export async function db(rest: string[]) {
 
 /** `vacuum into` writes a consistent snapshot even while the server is writing — no SQLITE_BUSY, no half copy. */
 function backup(dest = `${paths.db}.bak-${stamp()}`) {
-  if (!existsSync(paths.db)) throw new CliError(`relay: DB가 없습니다: ${paths.db}`);
+  if (!existsSync(paths.db)) throw new CliError(`relay: no database at ${paths.db}`);
   const tmp = `${dest}.tmp`; if (existsSync(tmp)) unlinkSync(tmp);
   const d = openDb(paths.db); try { d.run("vacuum into ?", [tmp]); } finally { d.close(); }
-  renameSync(tmp, dest); say(`백업 완료: ${dest}`);
+  renameSync(tmp, dest); say(`Backup complete: ${dest}`);
 }
 
 async function restore(file?: string) {
   if (!file) throw new CliError("usage: relay db restore <file>", 2);
-  if (!existsSync(file)) throw new CliError(`relay: 백업 파일이 없습니다: ${file}`);
-  await refuseIfUp("복원");
-  if (existsSync(paths.db)) { const keep = `${paths.db}.pre-restore-${stamp()}`; renameSync(paths.db, keep); say(`현재 DB 보관: ${keep}`); }
+  if (!existsSync(file)) throw new CliError(`relay: backup file not found: ${file}`);
+  await refuseIfUp("a restore");
+  if (existsSync(paths.db)) { const keep = `${paths.db}.pre-restore-${stamp()}`; renameSync(paths.db, keep); say(`Kept the current DB at ${keep}`); }
   for (const suffix of ["-wal", "-shm"]) { const f = paths.db + suffix; if (existsSync(f)) unlinkSync(f); }   // stale WAL of the replaced db would be applied to the restored one
-  copyFileSync(file, paths.db); say(`복원 완료: ${file} → ${paths.db}`);
+  copyFileSync(file, paths.db); say(`Restore complete: ${file} → ${paths.db}`);
 }
 
 function sweepCmd() {
   const cfg = loadConfig(); const d = openDb(paths.db); migrate(d);
-  try { const r = sweep(d, 90, new EventLog(d, () => {}, cfg)); say(`정리 완료: 이벤트 ${r.events}건 · blob ${r.blobs}건${r.vacuumed ? " · VACUUM 실행" : ""}`); } finally { d.close(); }
+  try { const r = sweep(d, 90, new EventLog(d, () => {}, cfg)); say(`Sweep complete: ${r.events} events · ${r.blobs} blobs${r.vacuumed ? " · VACUUM run" : ""}`); } finally { d.close(); }
 }
 
 async function rebuild() {
-  await refuseIfUp("프로젝션 재생성");
+  await refuseIfUp("a projection rebuild");
   const cfg = loadConfig(); const d = openDb(paths.db); migrate(d);
-  try { say(`재생 완료: 이벤트 ${rebuildProjections(d, cfg)}건`); } finally { d.close(); }
+  try { say(`Replay complete: ${rebuildProjections(d, cfg)} events`); } finally { d.close(); }
 }
 
 /** `relay setup` path when the server is down: emit project.registered straight into the log (the log is the source of truth). */

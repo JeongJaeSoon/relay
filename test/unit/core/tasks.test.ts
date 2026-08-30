@@ -78,7 +78,7 @@ describe("TaskService", () => {
   test("close_task decision only posts a confirmation message", () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" });
     s.svc.applyDecision(s.userMsg("닫아"), { action: "close_task", task_id: "T-01", confidence: "high" });
-    expect(s.db.query("select text from messages where role='system' order by rowid desc limit 1").get()).toMatchObject({ text: expect.stringContaining("종료할까요") });
+    expect(s.db.query("select text from messages where role='system' order by rowid desc limit 1").get()).toMatchObject({ text: expect.stringContaining("[close confirm: POST /api/tasks/") });
     expect(loadTask(s.db, (s.db.query("select uuid from tasks").get() as any).uuid)!.status).not.toBe("closed");
   });
   test("kill switch pauses running tasks (stop) and resume-all resumes them", async () => {

@@ -8,11 +8,11 @@ const base = (task: Task | null, role: Message["role"], text: string): MessageIn
 /** Only these five kinds reach the chat timeline (§5.1). Everything else stays on the dashboard. */
 export function chatFor(kind: "started" | "completed" | "question" | "blocked" | "error" | "cancelled", task: Task, text: string, projectName = ""): MessageInput {
   switch (kind) {
-    case "started": return base(task, "system", `▶ [${projectName || task.project_id}] ${task.title} 시작 (${task.display_id})`);
+    case "started": return base(task, "system", `▶ [${projectName || task.project_id}] ${task.title} started (${task.display_id})`);
     case "completed": return base(task, "worker_summary", `✔ ${task.display_id} ${task.title} — ${text}`);
     case "question": return base(task, "question", `❓ ${task.display_id} ${task.title}: ${text}`);
     case "blocked": return base(task, "question", `⛔ ${task.display_id} ${task.title}: ${text}`);
     case "error": return base(task, "error", `✖ ${task.display_id} ${task.title} — ${text}`);
-    case "cancelled": return base(task, "system", `■ ${task.display_id} ${task.title} 중단됨`);
+    case "cancelled": return base(task, "system", `■ ${task.display_id} ${task.title} cancelled`);
   }
 }

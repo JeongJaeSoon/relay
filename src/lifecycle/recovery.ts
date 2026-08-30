@@ -40,7 +40,7 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
     else if (["starting", "alive"].includes(t.process_state)) {
       const crashed = ["starting", "running"].includes(t.status) && !t.paused;
       d.log.emit({ type: "process.ended", task_uuid: t.uuid, payload: { reason: "recovery: not in agents list", crashed } });
-      if (crashed) { patch.status = "error"; patch.ended_at = now(); report.crashed.push(t.uuid); d.log.emit({ type: "message.received", task_uuid: t.uuid, payload: chatFor("error", t, "relay 재시작 중 세션이 사라짐 — 재시작 버튼으로 --resume") }); }
+      if (crashed) { patch.status = "error"; patch.ended_at = now(); report.crashed.push(t.uuid); d.log.emit({ type: "message.received", task_uuid: t.uuid, payload: chatFor("error", t, "The session vanished while relay restarted — use Restart to --resume") }); }
     }
     if (patch.status) d.log.emit({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: patch.status, patch } });
     else if (Object.keys(patch).length) d.log.emit({ type: "task.patched", task_uuid: t.uuid, payload: { patch } });

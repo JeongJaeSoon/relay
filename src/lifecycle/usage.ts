@@ -34,13 +34,13 @@ export class UsageGuard {
     for (const l of this.db.query("select l.holder_id, t.size, l.acquired_at from permit_leases l join tasks t on t.uuid=l.task_uuid where l.holder_kind='subagent' and l.released_at is null").all() as any[])
       if (t - l.acquired_at > this.cfg.usage.wall_clock_min[l.size as "small" | "normal" | "epic"] * 60_000) this.permits?.release(l.holder_id, "subagent wall-clock");
     for (const r of this.db.query("select uuid, size, started_at, display_id, title from tasks where parent_uuid is null and status in ('starting','running') and started_at is not null").all() as any[]) {
-      if (t - r.started_at > this.cfg.usage.wall_clock_min[r.size as "small" | "normal" | "epic"] * 60_000) { this.tasks.interrupt(r.uuid); this.system(`⏱ ${r.display_id} ${r.title} — wall-clock 상한 초과로 중단됨`); }
+      if (t - r.started_at > this.cfg.usage.wall_clock_min[r.size as "small" | "normal" | "epic"] * 60_000) { this.tasks.interrupt(r.uuid); this.system(`⏱ ${r.display_id} ${r.title} — stopped: wall-clock limit exceeded`); }
     }
     const ceiling = this.cfg.usage.daily_ceiling_tokens;
     if (ceiling != null && !this.tasks.paused()) {
       const dayStart = new Date(t); dayStart.setHours(0, 0, 0, 0);
       const today = (this.db.query("select coalesce(sum(json_extract(payload_json,'$.delta')),0) c from events where type='usage.sampled' and occurred_at>=?").get(dayStart.getTime()) as any).c;
-      if (today >= ceiling) { this.tasks.pause(); this.system(`⛔ 일일 사용량 상한(${ceiling} tok) 도달 — kill switch ON. 내일 또는 수동 재개.`); }
+      if (today >= ceiling) { this.tasks.pause(); this.system(`⛔ Daily usage ceiling (${ceiling} tok) reached — kill switch ON. Resume tomorrow or by hand.`); }
     }
   }
   private system(text: string) { this.log.emit({ type: "message.received", payload: { id: ulid(), role: "system", source: "user", client_message_id: null, dispatch_state: "direct", text, task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } }); }

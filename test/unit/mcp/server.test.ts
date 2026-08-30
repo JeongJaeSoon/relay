@@ -8,7 +8,7 @@ test("relay_send / relay_list / relay_status round trip", async () => {
   const client = new Client({ name: "t", version: "0" }); await client.connect(b);
   const send = await client.callTool({ name: "relay_send", arguments: { text: "hi", to: "T-01" } }); expect((send.content as any)[0].text).toContain("m9"); expect(calls[0][1]).toMatchObject({ source: "mcp", reply_to_task_id: "u" });
   const list = await client.callTool({ name: "relay_list", arguments: {} }); expect((list.content as any)[0].text).toContain("T-01");
-  const st = await client.callTool({ name: "relay_status", arguments: {} }); expect((st.content as any)[0].text).toMatch(/실행 중 1/);
+  const st = await client.callTool({ name: "relay_status", arguments: {} }); expect((st.content as any)[0].text).toMatch(/Running 1/);
 });
 test("a dead relay becomes an isError result, the bridge stays alive", async () => {
   const { RelayDown } = await import("../../../src/cli/client.ts");

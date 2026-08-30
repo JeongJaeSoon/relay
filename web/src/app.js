@@ -26,7 +26,7 @@ Theme.init();
 /* ================= state ================= */
 const ROW_H=128, SUB_ROW=102, COL_TASK=312, COL_SUB=596, ROW_Y0=40;
 const S={tasks:new Map(),sel:null,maxw:10, /* 기본 10, 상한 없음(초과 시 소프트 경고) */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
-const STATUS_LABEL={run:"실행 중",wait:"응답 대기",queue:"대기열",done:"완료",err:"오류",cancelled:"중단됨",closed:"보관됨"};
+const STATUS_LABEL={run:"Running",wait:"Needs input",queue:"Queued",done:"Done",err:"Error",cancelled:"Cancelled",closed:"Archived"};
 
 const tasksArr=()=>[...S.tasks.values()];
 
@@ -66,7 +66,7 @@ function renderDlog(){
   const list=$("#dlList");if(!list)return;
   list.textContent="";
   if(!DLOG.length){
-    list.append(el("div","dl-empty","메시지를 보내면 접수 → 판단 → 배치 과정이 여기에 기록됩니다"));
+    list.append(el("div","dl-empty","Send a message and its accept → decide → dispatch trail lands here"));
     return;
   }
   DLOG.forEach(en=>{
@@ -74,7 +74,7 @@ function renderDlog(){
     row.append(el("div","dl-msg",en.text));
     const st=el("div","dl-st");
     if(en.status==="judging"){
-      st.append(el("span","judging","판단 중"));
+      st.append(el("span","judging","deciding"));
     }else{
       const r=en.result||{};
       if(r.action)st.append(el("span","mono"+(r.action==="failed"?" fail":r.action==="fast-path"?" fast":""),r.action));
@@ -86,7 +86,7 @@ function renderDlog(){
         st.append(el("span",null,r.note));
       }
       if(r.action==="failed"){
-        const b=el("button","nc-btn","재시도");
+        const b=el("button","nc-btn","Retry");
         b.addEventListener("click",()=>relay.redispatch(en.messageId));
         st.append(b);
       }
@@ -172,7 +172,7 @@ function nodeEl(t){
   return n;
 }
 function elapsedText(t){
-  if(t.status==="queue")return"대기 중";
+  if(t.status==="queue")return"Queued";
   if(!t.startedAt)return"";
   return dur((t.endedAt||new Date())-t.startedAt);
 }
@@ -188,10 +188,10 @@ function renderNodes(){
     n.className="node st-"+t.status+(t.sub?" sub":"")+(!t.sub&&t.status==="queue"?" queued":"")+(S.sel===t.id?" sel":"")+(fam.has(t.id)?" rel":"")+(n.dataset.fresh?" fresh":"");
     n.style.left=t.x+"px";n.style.top=t.y+"px";
     n.querySelector(".n-title").textContent=t.title;
-    let pillTxt=t.status==="run"&&S.paused?"정지됨":(t.statusLabel||STATUS_LABEL[t.status]);
+    let pillTxt=t.status==="run"&&S.paused?"Stopped":(t.statusLabel||STATUS_LABEL[t.status]);
     if(!t.sub&&t.status==="queue"){
       const qi=queuedTasks().filter(x=>!x.sub).indexOf(t);
-      pillTxt="대기 "+(qi+1);
+      pillTxt="Queued "+(qi+1);
     }
     n.querySelector(".pill").textContent=pillTxt;
     n.querySelector(".n-meta").textContent=t.sub
@@ -270,18 +270,18 @@ function animateEdges(){ /* 노드 위치 전환(300ms) 동안 엣지가 따라�
 
 /* ================= sidebar ================= */
 const GROUPS=[
-  {label:"조치 필요",match:t=>t.status==="wait"||t.status==="err"||t.status==="cancelled",cls:"attn"},
-  {label:"실행 중",match:t=>t.status==="run"},
-  {label:"대기열",match:t=>t.status==="queue"},
-  {label:"완료 · 보관",match:t=>t.status==="done"||t.status==="closed"},
+  {label:"Needs attention",match:t=>t.status==="wait"||t.status==="err"||t.status==="cancelled",cls:"attn"},
+  {label:"Running",match:t=>t.status==="run"},
+  {label:"Queued",match:t=>t.status==="queue"},
+  {label:"Done · Archived",match:t=>t.status==="done"||t.status==="closed"},
 ];
 const sideMeta=t=>t.id+" · "+t.project+" · "+(elapsedText(t)||"—");
 function renderSidebar(){
   const fam=famOf(S.sel);
   const sb=$("#sidebar"),st=sb.scrollTop;sb.textContent="";
   const pool=el("div","pool"+(S.usage>(S.dailyCeiling||1e6)*.8?" warn":""));
-  const r1=el("div");r1.append(el("b",null,"에이전트 "+runningCount()+"/"+S.maxw),el("span",null," · 대기 "+tasksArr().filter(t=>t.status==="queue").length+(S.paused?" · ⏸ 일시정지":"")));
-  const r2=el("div");r2.append(el("span",null,"오늘 사용량 ≈ "),el("b",null,Math.round(S.usage/1000)+"k 토큰"),el("span",null," (추정)"+(S.usage>(S.dailyCeiling||1e6)*.8?" · 소프트 한도 초과":"")));
+  const r1=el("div");r1.append(el("b",null,"Agents "+runningCount()+"/"+S.maxw),el("span",null," · queued "+tasksArr().filter(t=>t.status==="queue").length+(S.paused?" · ⏸ paused":"")));
+  const r2=el("div");r2.append(el("span",null,"Today ≈ "),el("b",null,Math.round(S.usage/1000)+"k tok"),el("span",null," (est.)"+(S.usage>(S.dailyCeiling||1e6)*.8?" · over the soft limit":"")));
   pool.append(r1,r2);sb.append(pool);
   GROUPS.forEach(g=>{
     const list=tasksArr().filter(t=>!t.sub&&g.match(t));
@@ -289,7 +289,7 @@ function renderSidebar(){
     const h=el("div","group-h"+(g.cls&&list.length?" "+g.cls:""));
     h.append(el("span",null,g.label),el("span","cnt",String(list.length)));
     box.append(h);
-    if(!list.length)box.append(el("div","group-empty","없음"));
+    if(!list.length)box.append(el("div","group-empty","None"));
     list.forEach(t=>{
       const it=el("button","s-item st-"+t.status+(S.sel===t.id?" sel":fam.has(t.id)?" rel":"")+(t.status==="closed"?" closed":""));
       it.append(el("i","dot"));
@@ -311,7 +311,7 @@ function renderDetail(){
   $("#detail").classList.toggle("open",!!t);
   const st=body.scrollTop,openSet=new Set([...body.querySelectorAll("details[open]")].map(d=>d.dataset.i)); /* 재구성 후 복원 */
   body.textContent="";
-  if(!t){body.append(el("div","d-empty","그래프나 사이드바에서 태스크를 선택하면 상세가 표시됩니다."));return}
+  if(!t){body.append(el("div","d-empty","Pick a task in the graph or the sidebar to see its detail."));return}
 
   body.append(el("div","d-title",t.title));
 
@@ -324,19 +324,19 @@ function renderDetail(){
   };
   const pillWrap=el("span","st-"+t.status);
   pillWrap.append(el("span","pill",(t.statusLabel||STATUS_LABEL[t.status])));
-  row("상태",pillWrap);
+  row("Status",pillWrap);
   row("ID",t.id,true);
-  row("프로젝트",t.project,true);
-  row("크기",t.sub?"sub · "+t.agentType:t.size+" ("+t.model+"·"+t.effort+")");
-  if(!t.sub)row("브랜치",t.branch,true);
-  row("세션",t.sid+" · "+t.proc+" · gen "+t.gen+(t.attached?" · attach("+t.attached+")":""),true);
-  row("시작",t.startedAt?clock(t.startedAt):"—",true);
-  row("경과",elapsedText(t)||"—",true).dataset.el=t.id;
+  row("Project",t.project,true);
+  row("Size",t.sub?"sub · "+t.agentType:t.size+" ("+t.model+"·"+t.effort+")");
+  if(!t.sub)row("Branch",t.branch,true);
+  row("Session",t.sid+" · "+t.proc+" · gen "+t.gen+(t.attached?" · attach("+t.attached+")":""),true);
+  row("Started",t.startedAt?clock(t.startedAt):"—",true);
+  row("Elapsed",elapsedText(t)||"—",true).dataset.el=t.id;
   const kin=(t.sub?[t.parent]:t.children).filter(id=>{const r=S.tasks.get(id);return r&&r.status!=="closed"});
   if(kin.length){ /* 같은 작업 단위 — 클릭하면 그쪽으로 이동 */
     const chips=el("div","chips");
     kin.forEach(id=>{const r=S.tasks.get(id);const b=el("button","chip",id+" · "+r.title);b.addEventListener("click",()=>{select(id);centerOn(r)});chips.append(b)});
-    row(t.sub?"상위":"하위",chips);
+    row(t.sub?"Parent":"Children",chips);
   }
   body.append(rows);
 
@@ -354,24 +354,24 @@ function renderDetail(){
 
   if(!t.sub){
     const btns=el("div","d-btns");
-    const b1=el("button","act","터미널에서 열기");
+    const b1=el("button","act","Open in terminal");
     b1.addEventListener("click",()=>relay.attach(t));
-    const b2=el("button","act","worktree 경로 복사");
-    b2.addEventListener("click",()=>{const pth=t.worktree||"(worktree 없음)";navigator.clipboard&&navigator.clipboard.writeText(pth).catch(()=>{});chatNote("클립보드에 복사: "+pth)});
+    const b2=el("button","act","Copy worktree path");
+    b2.addEventListener("click",()=>{const pth=t.worktree||"(no worktree)";navigator.clipboard&&navigator.clipboard.writeText(pth).catch(()=>{});chatNote("Copied to clipboard: "+pth)});
     btns.append(b1,b2);body.append(btns);
     const acts=el("div","d-actions");
     if(t.status==="run"||t.status==="wait"){
-      const b=el("button","act danger","중단");
+      const b=el("button","act danger","Stop");
       b.addEventListener("click",()=>stopTask(t));acts.append(b);
     }
-    if(t.status==="err"||t.status==="cancelled"||t.statusLabel==="검토 필요"){
-      const b=el("button","act","재시작");
+    if(t.status==="err"||t.status==="cancelled"||t.statusLabel==="Needs review"){
+      const b=el("button","act","Restart");
       b.addEventListener("click",()=>restartTask(t));acts.append(b);
     }
-    if(["done","err","cancelled"].includes(t.status)||t.statusLabel==="검토 필요"){
-      const b=el("button","act","보관");let armed=false; /* 2단계 확인 — worktree 정리는 되돌릴 수 없다 */
+    if(["done","err","cancelled"].includes(t.status)||t.statusLabel==="Needs review"){
+      const b=el("button","act","Archive");let armed=false; /* 2단계 확인 — worktree 정리는 되돌릴 수 없다 */
       b.addEventListener("click",()=>{
-        if(!armed){armed=true;b.textContent="보관 확인 (worktree 정리)";b.classList.add("danger");return}
+        if(!armed){armed=true;b.textContent="Confirm archive (clean worktree)";b.classList.add("danger");return}
         archiveTask(t);
       });
       acts.append(b);
@@ -379,7 +379,7 @@ function renderDetail(){
     if(acts.children.length)body.append(acts);
   }
 
-  body.append(el("div","d-sec","타임라인"));
+  body.append(el("div","d-sec","Timeline"));
   const tl=el("div","tl");
   t.events.slice(-30).forEach(e2=>{
     const r=el("div","tl-row");
@@ -541,7 +541,7 @@ setInterval(()=>{
 
 /* ================= notifications (macOS 방식) ================= */
 const N={items:[],dnd:false,open:false,expand:{}};
-const NKIND={wait:"응답 대기",err:"중단·오류",done:"완료"};
+const NKIND={wait:"Needs input",err:"Stopped · errored",done:"Done"};
 let nseq=0;
 const toastsBox=$("#toasts"),ncEl=$("#notifCenter"),notifBtn=$("#notifBtn");
 function notify(kind,t,body){
@@ -573,7 +573,7 @@ function ncard(it){
   c.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();c.click()}});
   const nt=el("div","nt");
   nt.append(el("b",null,it.title),el("time","mono",clock(it.at)));
-  const x=el("button","nx","✕");x.setAttribute("aria-label","알림 삭제");
+  const x=el("button","nx","✕");x.setAttribute("aria-label","Dismiss notification");
   x.addEventListener("click",e=>{e.stopPropagation();dropNotif(it);renderNotif()});
   c.append(nt,el("div","nb2",it.body),x);
   return c;
@@ -604,7 +604,7 @@ function renderCenter(){
   if(!N.open)return;
   const body=ncEl.querySelector(".nc-body");body.textContent="";
   const centerItems=N.items.filter(i=>i.loc==="center");
-  if(!centerItems.length){body.append(el("div","nc-empty","새 알림이 없습니다"));return}
+  if(!centerItems.length){body.append(el("div","nc-empty","No new notifications"));return}
   ["wait","err","done"].forEach(k=>{
     const list=centerItems.filter(i=>i.kind===k).sort((a,b)=>b.id-a.id);
     if(!list.length)return;
@@ -612,11 +612,11 @@ function renderCenter(){
     const gh=el("div","nc-gh");
     gh.append(el("i","dot"),el("span",null,NKIND[k]),el("span",null,String(list.length)),el("span","grow"));
     if(list.length>1){
-      const fold=el("button","nc-btn",N.expand[k]?"접기":"펼치기");
+      const fold=el("button","nc-btn",N.expand[k]?"Collapse":"Expand");
       fold.addEventListener("click",()=>{N.expand[k]=!N.expand[k];renderNotif()});
       gh.append(fold);
     }
-    const clr=el("button","nc-btn","지우기");
+    const clr=el("button","nc-btn","Clear");
     clr.addEventListener("click",()=>{list.forEach(dropNotif);renderNotif()});
     gh.append(clr);
     g.append(gh);
@@ -630,7 +630,7 @@ function renderCenter(){
     }else{ /* macOS식 스택: 최신 1장(본문 유지) + 뒤 카드 겹침, 클릭하면 펼침. 삭제는 헤더 '지우기' 한 곳으로 */
       const w=el("div","stack"),c=ncard(list[0]);
       c.querySelector(".nx").remove();
-      c.setAttribute("aria-label",NKIND[k]+" 알림 "+list.length+"건 펼치기");
+      c.setAttribute("aria-label","Expand "+list.length+" "+NKIND[k]+" notifications");
       c.addEventListener("click",()=>{N.expand[k]=true;renderNotif()});
       w.append(c);g.append(w);
     }
@@ -641,19 +641,19 @@ function renderNotif(){renderToasts();renderCenter()}
 function renderBanner(){
   const b=$("#banner");b.textContent="";
   const conn=$("#conn");conn.className="conn"+(S.conn==="reconnecting"?" off":S.conn==="replaying"?" sync":"");
-  $("#connTxt").textContent=S.conn==="reconnecting"?"재연결 중":S.conn==="replaying"?"이벤트 재생 중":"연결됨";
+  $("#connTxt").textContent=S.conn==="reconnecting"?"Reconnecting":S.conn==="replaying"?"Replaying events":"Connected";
   let msg="",cls="";
-  if(S.conn==="reconnecting"){msg="연결 끊김 — 서버에 재연결 중… (마지막 seq "+(S.lastSeq||0)+")";cls="err"}
-  else if(S.conn==="replaying"){msg="재연결됨 — 이벤트 재생 중"}
-  else if(S.recovering){msg="relay 복구 중 — 세션 대조 후 명령을 재개합니다"}
-  else if(S.paused){msg="⏸ 전역 일시정지 (kill switch) — 새 디스패치·슬롯 배정 중단, 실행 중 워커는 정지 요청됨"}
+  if(S.conn==="reconnecting"){msg="Disconnected — reconnecting to the server… (last seq "+(S.lastSeq||0)+")";cls="err"}
+  else if(S.conn==="replaying"){msg="Reconnected — replaying events"}
+  else if(S.recovering){msg="relay is recovering — reconciling sessions before commands resume"}
+  else if(S.paused){msg="⏸ Paused (kill switch) — no new dispatches or slots, running workers asked to stop"}
   const was=b.classList.contains("on");
   b.className=msg?"on "+cls:"";
   if(was!==!!msg&&S.autofit&&!view.manual)fit(); /* 배너 행이 캔버스 높이를 바꾸므로 */
   const setBh=()=>document.documentElement.style.setProperty("--bh",(msg?b.offsetHeight:0)+"px"); /* 리사이저 시작 높이 보정 */
   if(!msg){setBh();return}
   b.append(el("span",null,msg));
-  if(S.paused&&S.conn==="ok"){const r=el("button","act","재개");r.addEventListener("click",()=>togglePause());b.append(r)}
+  if(S.paused&&S.conn==="ok"){const r=el("button","act","Resume");r.addEventListener("click",()=>togglePause());b.append(r)}
   setBh();
 }
 ncEl.addEventListener("click",e=>e.stopPropagation()); /* 패널 내부 클릭이 외부클릭 판정으로 새지 않게 */
@@ -680,21 +680,21 @@ function renderSettings(){
   document.querySelectorAll("#segLayout button").forEach(b=>b.classList.toggle("on",b.dataset.l===S.layout));
   document.querySelectorAll("#segAlign button").forEach(b=>b.classList.toggle("on",b.dataset.a===RZ.align));
   $("#maxwVal").textContent=String(S.maxw);
-  const mh=$("#maxwHint");mh.textContent=S.maxw>10?"⚠ 기본값 초과":"";mh.title=S.maxw>10?"기본값 10 초과 — 구독 사용량 급증 주의":""; /* 한 줄 유지, 상세는 툴팁 */
+  const mh=$("#maxwHint");mh.textContent=S.maxw>10?"⚠ over the default":"";mh.title=S.maxw>10?"Above the default of 10 — watch for a spike in subscription usage":""; /* 한 줄 유지, 상세는 툴팁 */
   $("#setAutofit").checked=S.autofit;
   $("#setDnd").checked=N.dnd;
   $("#setReduce").checked=S.reduce;
   renderProjects();
-  $("#setInfo").textContent="게이트웨이 127.0.0.1:"+(location.port||80)+" · relay v"+(S.version||"—")+" · 전달: "+(S.delivery||"—");
+  $("#setInfo").textContent="Gateway 127.0.0.1:"+(location.port||80)+" · relay v"+(S.version||"—")+" · delivery: "+(S.delivery||"—");
 }
 function renderProjects(){ /* S.projects는 어댑터가 서버 projects.updated로 채운다 */
   const box=$("#projList");box.textContent="";
   const list=S.projects||[];
-  if(!list.length){box.append(el("div","group-empty","등록된 프로젝트가 없습니다"));return}
+  if(!list.length){box.append(el("div","group-empty","No projects registered"));return}
   list.forEach(p=>{
     const rowEl=el("div","set-proj");
     const txt=el("div","txt");txt.append(el("div","tt",p.name),el("div","mm mono",p.path));
-    const x=el("button","nx","✕");x.setAttribute("aria-label",p.name+" 삭제");
+    const x=el("button","nx","✕");x.setAttribute("aria-label","Remove "+p.name);
     x.addEventListener("click",()=>relay.removeProject(p.id));
     rowEl.append(txt,x);box.append(rowEl);
   });
@@ -714,7 +714,7 @@ $("#setAutofit").addEventListener("change",e=>{S.autofit=e.target.checked});
 $("#setDnd").addEventListener("change",e=>{N.dnd=e.target.checked;renderNotif();renderSettings()});
 $("#projAdd").addEventListener("click",()=>{
   const name=$("#projName").value.trim(),path=$("#projPath").value.trim();
-  if(!name||!path){chatNote("프로젝트 등록 실패: 이름과 경로가 필요합니다");return}
+  if(!name||!path){chatNote("Project registration failed: name and path are required");return}
   relay.registerProject({name,path,description:$("#projDesc").value.trim(),keywords:$("#projKw").value.split(",").map(k=>k.trim()).filter(Boolean)});
   ["#projName","#projPath","#projDesc","#projKw"].forEach(sel=>{$(sel).value=""});
 });
@@ -810,32 +810,32 @@ const PAL={open:false,idx:0,list:[]};
 const palEl=$("#palette"),palInput=$("#palInput"),palList=$("#palList");
 function commands(){
   return [
-    {t:"전체 보기 (fit)",run:fit},
-    {t:"사이드바 토글",k:KEYS.toggleSidebar,run:()=>togglePanel("sb")},
-    {t:"상세 패널 토글",k:KEYS.toggleDetail,run:()=>togglePanel("dt")},
-    {t:"채팅 패널 토글",k:KEYS.toggleChat,run:()=>togglePanel("ch")},
-    {t:"채팅 높이 키우기",k:KEYS.chatGrow,run:()=>chatResize(40)},
-    {t:"채팅 높이 줄이기",k:KEYS.chatShrink,run:()=>chatResize(-40)},
-    {t:"테마: 자동",run:()=>Theme.set("system")},
-    {t:"테마: 라이트",run:()=>Theme.set("light")},
-    {t:"테마: 다크",run:()=>Theme.set("dark")},
-    {t:"그래프 레이아웃: 계단",run:()=>setGraphLayout("tree")},
-    {t:"그래프 레이아웃: 방사",run:()=>setGraphLayout("radial")},
-    {t:"패널 정렬: 전체",run:()=>setAlign("justify")},
-    {t:"패널 정렬: 중앙",run:()=>setAlign("center")},
-    {t:"패널 정렬: 왼쪽",run:()=>setAlign("left")},
-    {t:"패널 정렬: 오른쪽",run:()=>setAlign("right")},
-    {t:"알림 센터 열기",run:()=>{N.open=true;N.items.forEach(i=>{if(i.loc==="toast"){clearTimeout(i.timer);i.loc="center"}});renderNotif()}},
-    {t:"설정 열기",run:()=>{SET.open=true;renderSettings()}},
-    {t:"방해 금지 토글",run:()=>{N.dnd=!N.dnd;renderNotif();renderSettings()}},
-    {t:"알림 모두 지우기",run:()=>{N.items.forEach(i=>clearTimeout(i.timer));N.items=[];renderNotif()}},
-    {t:"동시 실행 상한 +1",run:()=>relay.setMax(S.maxw+1)},
-    {t:"동시 실행 상한 −1",run:()=>relay.setMax(S.maxw-1)},
-    {t:"새 태스크 자동 맞춤 토글",run:()=>{S.autofit=!S.autofit;renderSettings()}},
-    {t:"애니메이션 감소 토글",run:()=>{S.reduce=!S.reduce;document.documentElement.classList.toggle("reduce",S.reduce);renderSettings()}},
-    {t:"전역 일시정지 (kill switch) 토글",run:togglePause},
-    {t:"프로젝트 등록…",run:()=>{SET.open=true;renderSettings();$("#projPath").focus()}},
-    {t:"단축키 JSON 편집…",run:openKeysEd},
+    {t:"Fit to view",run:fit},
+    {t:"Toggle sidebar",k:KEYS.toggleSidebar,run:()=>togglePanel("sb")},
+    {t:"Toggle detail panel",k:KEYS.toggleDetail,run:()=>togglePanel("dt")},
+    {t:"Toggle chat panel",k:KEYS.toggleChat,run:()=>togglePanel("ch")},
+    {t:"Grow the chat panel",k:KEYS.chatGrow,run:()=>chatResize(40)},
+    {t:"Shrink the chat panel",k:KEYS.chatShrink,run:()=>chatResize(-40)},
+    {t:"Theme: auto",run:()=>Theme.set("system")},
+    {t:"Theme: light",run:()=>Theme.set("light")},
+    {t:"Theme: dark",run:()=>Theme.set("dark")},
+    {t:"Graph layout: steps",run:()=>setGraphLayout("tree")},
+    {t:"Graph layout: radial",run:()=>setGraphLayout("radial")},
+    {t:"Panel alignment: justify",run:()=>setAlign("justify")},
+    {t:"Panel alignment: center",run:()=>setAlign("center")},
+    {t:"Panel alignment: left",run:()=>setAlign("left")},
+    {t:"Panel alignment: right",run:()=>setAlign("right")},
+    {t:"Open notifications",run:()=>{N.open=true;N.items.forEach(i=>{if(i.loc==="toast"){clearTimeout(i.timer);i.loc="center"}});renderNotif()}},
+    {t:"Open settings",run:()=>{SET.open=true;renderSettings()}},
+    {t:"Toggle do not disturb",run:()=>{N.dnd=!N.dnd;renderNotif();renderSettings()}},
+    {t:"Clear all notifications",run:()=>{N.items.forEach(i=>clearTimeout(i.timer));N.items=[];renderNotif()}},
+    {t:"Max concurrent agents +1",run:()=>relay.setMax(S.maxw+1)},
+    {t:"Max concurrent agents −1",run:()=>relay.setMax(S.maxw-1)},
+    {t:"Toggle auto-fit on new tasks",run:()=>{S.autofit=!S.autofit;renderSettings()}},
+    {t:"Toggle reduce motion",run:()=>{S.reduce=!S.reduce;document.documentElement.classList.toggle("reduce",S.reduce);renderSettings()}},
+    {t:"Toggle pause (kill switch)",run:togglePause},
+    {t:"Register a project…",run:()=>{SET.open=true;renderSettings();$("#projPath").focus()}},
+    {t:"Edit shortcuts JSON…",run:openKeysEd},
   ];
 }
 function togglePalette(){PAL.open?closePalette():openPalette()}
@@ -851,7 +851,7 @@ function renderPal(){
   PAL.list=commands().filter(c=>!q||q.split(/\s+/).every(n=>c.t.toLowerCase().includes(n)));
   if(PAL.idx>=PAL.list.length)PAL.idx=Math.max(0,PAL.list.length-1);
   palList.textContent="";
-  if(!PAL.list.length){palList.append(el("div","pal-empty","일치하는 명령이 없습니다"));palInput.removeAttribute("aria-activedescendant");return}
+  if(!PAL.list.length){palList.append(el("div","pal-empty","No matching commands"));palInput.removeAttribute("aria-activedescendant");return}
   PAL.list.forEach((c,i)=>{
     const it=el("div","pal-item"+(i===PAL.idx?" act":""));it.id="pal-"+i;it.setAttribute("role","option");it.setAttribute("aria-selected",i===PAL.idx?"true":"false");
     it.append(el("span",null,c.t));
@@ -887,11 +887,11 @@ $("#kedSave").addEventListener("click",()=>{
   try{
     const v=JSON.parse($("#kedText").value);
     const bad=Object.keys(v).filter(k=>!(k in KEY_DEFAULTS));
-    if(bad.length)throw new Error("알 수 없는 동작: "+bad.join(", "));
+    if(bad.length)throw new Error("Unknown action: "+bad.join(", "));
     KEYS=Object.assign({},KEY_DEFAULTS,v);
     localStorage.setItem("relay-keys",JSON.stringify(KEYS));
     closeKeysEd();
-  }catch(err){$("#kedErr").textContent="저장 실패: "+err.message}
+  }catch(err){$("#kedErr").textContent="Save failed: "+err.message}
 });
 $("#kedReset").addEventListener("click",()=>{
   $("#kedText").value=JSON.stringify(KEY_DEFAULTS,null,2);

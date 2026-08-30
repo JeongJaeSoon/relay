@@ -129,7 +129,7 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
       patch({ last_step: stepOf(body) });
       if (body.tool_name === "Agent") {
         const holder = `sub:${task.uuid}:${body.tool_use_id}`;
-        if (!d.permits.acquire({ holder_kind: "subagent", holder_id: holder, task_uuid: task.uuid })) return { status: 200, json: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "relay: 동시 실행 슬롯 없음 — 이 작업은 직접 순차 처리하라" } } };
+        if (!d.permits.acquire({ holder_kind: "subagent", holder_id: holder, task_uuid: task.uuid })) return { status: 200, json: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "relay: no concurrency slot free — do this work yourself, sequentially" } } };
       }
       return { status: 200, json: {} };
     }
@@ -140,14 +140,14 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
       if (RATE_LIMIT.test(JSON.stringify(body.tool_response ?? "").slice(0, 2000))) d.onRateLimit(task, String(body.tool_response).slice(0, 200));
       return { status: 200, json: {} };
     }
-    case "PostToolUseFailure": { patch({ last_step: `실패: ${body.tool_name}` }); d.onToolUse(task, body.prompt_id ?? null); if (body.tool_name === "Agent") releaseProvisional(); if (RATE_LIMIT.test(String(body.error ?? ""))) d.onRateLimit(task, String(body.error).slice(0, 200)); return { status: 200, json: {} }; }
+    case "PostToolUseFailure": { patch({ last_step: `failed: ${body.tool_name}` }); d.onToolUse(task, body.prompt_id ?? null); if (body.tool_name === "Agent") releaseProvisional(); if (RATE_LIMIT.test(String(body.error ?? ""))) d.onRateLimit(task, String(body.error).slice(0, 200)); return { status: 200, json: {} }; }
     case "PermissionRequest": {
       if (opts.replay) return { status: 200, json: {} };                      // the CLI moved on to its own prompt long ago; never hold a replayed request
       const decision = d.policy.decide(body, task);
       if (decision !== "ask") return { status: 200, json: { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: decision } } } };
       const permId = permissionId(body);
       const key: PermissionKey = `${body.session_id}:${permId}`;
-      const q: TaskQuestion = { text: `권한 승인 필요: ${body.tool_name} ${JSON.stringify(body.tool_input ?? {}).slice(0, 200)}`, options: ["허용", "거부"], asked_at: now(), source: "permission", permission_tool_use_id: permId };
+      const q: TaskQuestion = { text: `Permission needed: ${body.tool_name} ${JSON.stringify(body.tool_input ?? {}).slice(0, 200)}`, options: ["Allow", "Deny"], asked_at: now(), source: "permission", permission_tool_use_id: permId };
       d.log.emit({ type: "question.asked", task_uuid: task.uuid, payload: { patch: { question: q } } });
       // The task lease is kept: the worker continues the instant relay answers (roadmap B4/I6 exception).
       d.log.emit({ type: "task.status_changed", task_uuid: task.uuid, payload: { status: "waiting_input", patch: { status: "waiting_input" } } });

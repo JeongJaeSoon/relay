@@ -14,12 +14,12 @@ describe("relay cli", () => {
   test("send posts with bearer and client_message_id; --to sets reply_to_task_id", async () => {
     const { runCli } = await import("../../../src/cli/index.ts");
     const out = await capture(() => runCli("send", ["hello", "--to", "u1"]));
-    expect(out).toContain("접수 m1"); const c = calls.find((x) => x[1] === "/api/messages"); expect(c[2]).toBe("Bearer TOK"); expect(c[3].reply_to_task_id).toBe("u1"); expect(c[3].client_message_id).toMatch(/\S/);
+    expect(out).toContain("Accepted m1"); const c = calls.find((x) => x[1] === "/api/messages"); expect(c[2]).toBe("Bearer TOK"); expect(c[3].reply_to_task_id).toBe("u1"); expect(c[3].client_message_id).toMatch(/\S/);
   });
   test("ls prints a table with display id, status, project and elapsed; Korean titles keep the columns aligned", async () => {
     const { runCli } = await import("../../../src/cli/index.ts"); const out = await capture(() => runCli("ls", []));
     expect(out).toContain("T-01"); expect(out).toContain("running"); expect(out).toContain("myapp"); expect(out).toMatch(/1m/);
-    const [head, row] = out.split("\n"); expect(Bun.stringWidth(head.split("경과")[0])).toBe(Bun.stringWidth(row.split("1m")[0]));   // the 경과 column starts at the same visual offset
+    const [head, row] = out.split("\n"); expect(Bun.stringWidth(head.split("Elapsed")[0])).toBe(Bun.stringWidth(row.split("1m")[0]));   // the Elapsed column starts at the same visual offset
   });
   test("pause/resume-all hit the endpoints", async () => { const { runCli } = await import("../../../src/cli/index.ts"); await capture(() => runCli("pause", [])); await capture(() => runCli("resume-all", [])); expect(calls.some((c) => c[1] === "/api/pause")).toBe(true); expect(calls.some((c) => c[1] === "/api/resume-all")).toBe(true); });
   test("a dead server throws RelayDown instead of exiting the process", async () => {
