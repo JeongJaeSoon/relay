@@ -999,7 +999,7 @@ kedEl.addEventListener("click",e=>{if(e.target===kedEl)closeKeysEd()});
 
 /* ================= input ================= */
 const input=$("#input"),chatForm=$("#chatForm"),DRAFT="relay-draft";
-function autogrow(){input.style.height="auto";input.style.height=input.scrollHeight+"px"} /* CSS max-height caps it, then it scrolls */
+function autogrow(){input.style.height="auto";input.style.height=input.scrollHeight+(input.offsetHeight-input.clientHeight)+"px"} /* +border: box-sizing is border-box but scrollHeight is not. CSS max-height caps it, then it scrolls */
 chatForm.addEventListener("submit",e=>{
   e.preventDefault(); /* IME 조합 중 Enter 가드는 아래 keydown이 담당 */
   send(input.value);input.value="";localStorage.removeItem(DRAFT);autogrow();

@@ -1,8 +1,8 @@
-import { planArgv, unknownMessage } from "./argv.ts";
+import { planArgv } from "./argv.ts";
 import { CliError, RelayDown, RelayHttpError } from "./client.ts";
 const USAGE = `relay — a personal Claude Code orchestrator
 
-  relay "<msg>" [--to T-08]   send a message to the dispatcher (same as relay send)
+  relay "<msg>" [--to T-08]   send a message to the dispatcher — quote it (same as relay send)
   relay serve                 run the server (used by launchd)
   relay send "<msg>" [--to T-08]
   relay ls [--all] [--json]
@@ -27,7 +27,7 @@ export async function runCli(cmd: string, rest: string[]) {
 async function dispatch(cmd: string, rest: string[]) {
   const p = planArgv([cmd, ...rest]);
   if (p.kind === "help") { process.stdout.write(USAGE); return; }
-  if (p.kind === "unknown") { process.stdout.write(USAGE); throw new CliError(unknownMessage(p.token), 2); }
+  if (p.kind === "usage") { process.stdout.write(USAGE); throw new CliError(p.reason, 2); }
   const s = await import("./simple.ts");
   if (p.kind === "message") return s.send(p.argv);                            // `relay "refactor the auth module"` — no subcommand, straight to the dispatcher
   switch (p.cmd) {
