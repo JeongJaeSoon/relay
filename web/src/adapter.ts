@@ -124,7 +124,7 @@ export function installAdapter() {
     const sys = store.state.sys; if (sys) { S.maxw = sys.max_concurrent_agents; S.paused = sys.paused; S.usage = sys.today_tokens; S.running = sys.running; S.recovering = sys.recovering; S.version = sys.version; S.delivery = sys.delivery_method; S.dailyCeiling = sys.daily_ceiling; S.cliDrift = sys.cli_drift; }
     S.projects = store.state.projects;
     S.conn = store.state.conn === "resync" ? "replaying" : store.state.conn; S.lastSeq = store.state.seq;
-    D.renderBanner(); D.renderSettings();
+    D.renderBanner(); D.renderSettings(); D.renderSidebar();   // the pool card carries the paused chip and the running/queued counts, and a pause frame changes no task
     D.gwEl.classList.toggle("judging", store.state.messages.some((m) => m.dispatch_state === "deciding")); D.gwEl.querySelector(".gw-s").textContent = D.gwEl.classList.contains("judging") ? "dispatcher deciding (fable)" : `:${location.port || 80} · always listening`;
   };
   const badgeRow = (m: Message) => {
