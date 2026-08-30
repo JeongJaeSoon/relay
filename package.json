@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "spike": "bun run"
+    "spike": "bun run",
+    "build:web": "bun scripts/build-web.ts",
+    "test:web": "bun test web/test"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "^1.4.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
     "hono": "4.13.5",
+    "ulid": "3.0.2",
     "zod": "4.5.2"
   }
 }

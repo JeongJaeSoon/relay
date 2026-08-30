@@ -92,7 +92,9 @@ results.busy = (await send("busy0001", "after the current command, reply BUSY-AC
 await waitFor(async () => hookLines(LOG).some((l) => l.e === "Stop"), 120_000);
 results.idle = (await send("idle0001", "reply IDLE-ACK")) + "/" + (await both("idle0001", "IDLE-ACK"));
 // burst 10 to idle
-await waitFor(async () => hookLines(LOG).filter((l) => l.e === "Stop").length >= 3, 180_000);   // wait for the idle-send turn to finish too
+const stopsBeforeBurst = hookLines(LOG).filter((l) => l.e === "Stop").length;   // relative, not a fixed count: the
+// number of turns before this point varies (a backgrounded tool adds a notification turn), and a fixed 3 stalls the run.
+await waitFor(async () => hookLines(LOG).filter((l) => l.e === "Stop").length > stopsBeforeBurst, 180_000).catch(() => null);
 const burst = await Promise.all(Array.from({ length: 10 }, (_, i) => send(`burst00${i}`, `reply B${i}`)));
 const burstHook = (await Promise.all(Array.from({ length: 10 }, (_, i) => hookArrived(`burst00${i}`)))).filter(Boolean).length;
 const burstAck = (await Promise.all(Array.from({ length: 10 }, (_, i) => ackArrived(`B${i}`, 180_000)))).filter(Boolean).length;

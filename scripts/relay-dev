@@ -1,0 +1,3 @@
+#!/bin/sh
+# Dev shim: lets worker hooks call `relay` without a compiled binary. Point RELAY_BIN at this file (runner/settings.ts).
+exec bun "$(cd "$(dirname "$0")/.." && pwd)/src/main.ts" "$@"
