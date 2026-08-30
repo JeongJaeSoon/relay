@@ -103,8 +103,10 @@ export class Outbox {
     if (k === "spawn" && t.status !== "starting") return false;
     if (k === "resume" && !(t.status === "starting" || t.paused)) return false;
     if (k === "send" && !["starting", "running", "waiting_input"].includes(t.status)) return false;
-    // turn-boundary delivery (B1/C12): the resume path must not cut a running turn; TaskService.onStop re-runs the queue
-    if ((k === "send" || k === "resume") && this.deps.delivery() !== "socket" && t.process_state === "alive" && t.turn_state === "busy" && !t.paused) return false;
+    // Turn-boundary delivery (B1). Phase 0 corrects roadmap C12: a busy session does NOT read its inbox between tool
+    // calls — the frame is silently dropped (`deliveryBusyOverSocket`) — so BOTH delivery paths wait for the turn to end.
+    // TaskService.onStop re-runs the queue at that boundary.
+    if ((k === "send" || k === "resume") && t.process_state === "alive" && t.turn_state === "busy" && !t.paused) return false;
     return true;
   }
   private applied(cmd: Command, t: Task, extra: Record<string, unknown> = {}) { this.log.emit({ type: "command.applied", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, ...extra } }); }
@@ -151,6 +153,9 @@ export class Outbox {
         // `agents --json` has no pid for background rows, so liveness alone gates the socket path; socketPathFor resolves
         // the inbox socket from the session registry (roadmap C3), not from this row's pid.
         if (p.kind === "send" && this.deps.delivery() === "socket" && live?.alive && this.runner.sendSocket) {
+          // A busy inbox drops the frame without a trace (phase 0 `deliveryRule`), so a send to a busy worker is `held`,
+          // never "delivered": it stays pending and the Stop hook re-runs this queue at the turn boundary.
+          if (live.busy === true) { outcome("held", "socket"); throw new HeldError("worker is busy — the inbox would drop this frame"); }
           const o: SendOutcome = await this.runner.sendSocket(this.deps.socketPathFor(live), text, cmd.id);
           outcome(o, "socket");
           if (o === "accepted") { this.applied(cmd, t); return; }
