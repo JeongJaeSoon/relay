@@ -21,7 +21,7 @@ interface Deps { db: Database; log: EventLog; cfg: Config; permits: PermitPool; 
 const marker = () => randomBytes(4).toString("hex");
 const markerFor = (key: string) => createHash("sha256").update(key).digest("hex").slice(0, 8);
 /** One item of a decision, planned but not yet emitted: `created` must be emitted before `rest` (task rows are a FK for the chat rows and commands that follow). */
-type TaskPlan = { uuid: string; display_id: string; created: EmitInput[]; rest: EmitInput[]; kick: boolean };
+type TaskPlan = { uuid: string; display_id: string; project_id: string; created: EmitInput[]; rest: EmitInput[]; kick: boolean };
 const sysMsg = (text: string, taskUuid: string | null = null): MessageInput => ({ id: ulid(), role: "system", source: "user", client_message_id: null, dispatch_state: "direct", text, task_uuid: taskUuid, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() });
 
 export class TaskService {
@@ -73,20 +73,26 @@ export class TaskService {
   private applySplit(msg: Message, dec: DispatchDecision, done: (extra?: Partial<Message>) => EmitInput) {
     const refused = splitGuard(dec, this.d.cfg.dispatcher.max_split);
     if (refused) return this.needsConfirm(msg, dec, refused);
-    const plans: TaskPlan[] = []; let newTasks = 0;
+    const plans: TaskPlan[] = []; let newTasks = 0; let plan: TaskPlan;
     for (const [i, it] of dec.items!.entries()) {
       const at = `split item ${i + 1}`; const key = `${msg.id}:${i}`;
       if (it.action === "new_task") {
-        const p = this.planNewTask(msg, it, key, newTasks++);
+        const p = this.planNewTask(msg, it, key, newTasks);
         if ("error" in p) return this.needsConfirm(msg, dec, `${at}: ${p.error}`);
-        plans.push(p); continue;
+        plan = p; newTasks++;
+      } else {
+        const t = this.byDisplay(it.task_id!);
+        if (!t) return this.needsConfirm(msg, dec, `${at}: task ${it.task_id} not found`);
+        if (t.status === "error") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is in the error state — restart it first`);
+        if (t.status === "waiting_input" && t.question?.source === "permission") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is waiting on a permission answer — answer it first`);
+        plan = this.planRoute(msg, it, t, key);
       }
-      const t = this.byDisplay(it.task_id!);
-      if (!t) return this.needsConfirm(msg, dec, `${at}: task ${it.task_id} not found`);
-      if (t.status === "error") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is in the error state — restart it first`);
-      if (t.status === "waiting_input" && t.question?.source === "permission") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is waiting on a permission answer — answer it first`);
-      if (plans.some((p) => p.uuid === t.uuid)) return this.needsConfirm(msg, dec, `${at}: ${t.display_id} appears twice in one split`);
-      plans.push(this.planRoute(msg, it, t, key));
+      // C.2, and the only guard that holds when the model is wrong: two worktrees on one repository can edit
+      // overlapping files, leaving a merge for a human. "Ships separately" and "different lifetimes" both read as
+      // splittable for same-repo work, so the criterion enforced here is the structural one — one project per split.
+      const clash = plans.find((p) => p.project_id === plan.project_id);
+      if (clash) return this.needsConfirm(msg, dec, `${at}: same project (${this.d.projectNameOf(plan.project_id)}) as ${clash.display_id} — work sharing one repository stays a single task`);
+      plans.push(plan);
     }
     const ids = plans.map((p) => p.display_id);
     this.d.log.emitMany([
@@ -109,7 +115,7 @@ export class TaskService {
       session_id: null, short_id: null, worktree_path: null, branch: null, base_sha: null, process_state: "none", process_generation: 0, turn_state: "idle", attach_state: "none", attached_by: null, paused: false,
       last_summary: null, last_step: null, question: null, parent_uuid: null, agent_id: null, agent_type: null, queued_at: t, qhead: false, started_at: null, ended_at: null, created_at: t, updated_at: t, closed_at: null, usage_tokens: 0, summary_json: null };
     const spawn = this.d.outbox.commandInput(uuid, key, { kind: "spawn", spec: this.spec(task, `[relay #${markerFor(key)}] ${task.display_id} · project=${this.d.projectNameOf(proj.id)} · size=${size}\n\n${it.prompt ?? msg.text}`) });
-    return { uuid, display_id: task.display_id, created: [{ type: "task.created", task_uuid: uuid, causation_id: msg.id, payload: task }],
+    return { uuid, display_id: task.display_id, project_id: proj.id, created: [{ type: "task.created", task_uuid: uuid, causation_id: msg.id, payload: task }],
       rest: [{ type: "message.received", task_uuid: uuid, payload: chatFor("started", task, "", this.d.projectNameOf(proj.id)) }, spawn.input], kick: false };
   }
 
@@ -122,7 +128,7 @@ export class TaskService {
     if (t.status === "waiting_input") rest.push({ type: "question.answered", task_uuid: t.uuid, causation_id: msg.id, payload: { text, patch: { question: null } } });
     rest.push(send.input);
     if (["done", "needs_review", "cancelled", "waiting_input"].includes(t.status)) rest.push({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: "queued", patch: { status: "queued", queued_at: now(), qhead: true, ended_at: null } } });
-    return { uuid: t.uuid, display_id: t.display_id, created: [], rest, kick: true };
+    return { uuid: t.uuid, display_id: t.display_id, project_id: t.project_id, created: [], rest, kick: true };
   }
   needsConfirm(msg: Message, dec: DispatchDecision | null, reason: string) {
     const active = this.d.db.query("select display_id, title from tasks where parent_uuid is null and status not in ('closed') order by updated_at desc limit 6").all() as any[];

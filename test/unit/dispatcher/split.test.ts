@@ -100,6 +100,46 @@ describe("dispatch corpus", () => {
     expect(s.runner.calls.filter((x: any) => x.kind === "spawn").length).toBe(1);            // only the seed task ever spawned
   });
 
+  // The scenario the splitting rule is meant to prevent but reads as permitted: a long-running same-repo task plus a
+  // hotfix that "ships on its own PR" and has a wildly different lifetime — two live worktrees on one repository.
+  const hotfix = (project: string) => ({ action: "split", confidence: "high", items: [
+    { action: "route_to_task", task_id: "T-01", prompt: "keep going" },
+    { action: "new_task", project, title: "hotfix", size: "small", prompt: "ship the one-line hotfix as its own PR" },
+  ] });
+
+  test("a follow-up plus new work in the SAME project is refused whole", async () => {
+    const s = setup(stub(hotfix("relay"))); await seed(s);
+    const id = s.say("T-01 은 계속 가고, 한 줄 핫픽스는 따로 PR 로 지금 올려줘"); await settle();
+    expect(loadMessage(s.db, id)!.dispatch_state as string).toBe("needs_confirm");
+    expect(created(s.db)).toEqual([]); expect(routed(s.db)).toEqual([]);
+    const reason = (s.db.query("select text from messages where text like 'Routing needs confirmation%'").get() as any).text;
+    expect(reason).toContain("same project (relay) as T-01");
+    expect((s.db.query("select count(*) c from commands").get() as any).c).toBe(1);            // just the seed task's spawn
+  });
+
+  test("two new tasks in the same project are refused; the same pair across two projects still splits", async () => {
+    const two = (a: string, b: string) => ({ action: "split", confidence: "high", items: [
+      { action: "new_task", project: a, title: "one", size: "small", prompt: "one" },
+      { action: "new_task", project: b, title: "two", size: "small", prompt: "two" },
+    ] });
+    const same = setup(stub(two("relay", "relay"))); await seed(same);
+    const a = same.say("두 가지 다 해줘"); await settle();
+    expect(loadMessage(same.db, a)!.dispatch_state as string).toBe("needs_confirm");
+    expect(created(same.db)).toEqual([]);
+
+    const apart = setup(stub(two("relay", "meterly"))); await seed(apart);
+    const b = apart.say("두 가지 다 해줘"); await settle();
+    expect(loadMessage(apart.db, b)!.dispatch_state as string).toBe("dispatched");
+    expect(created(apart.db)).toEqual(["T-02", "T-03"]);
+  });
+
+  test("the same follow-up plus new work across two projects splits normally", async () => {
+    const s = setup(stub(hotfix("meterly"))); await seed(s);
+    const id = s.say("T-01 은 계속 가고, meterly 핫픽스는 따로 올려줘"); await settle();
+    expect(loadMessage(s.db, id)!.dispatch_state as string).toBe("dispatched");
+    expect(created(s.db)).toEqual(["T-02"]); expect(routed(s.db)).toEqual(["T-01"]);
+  });
+
   test("an unknown project in one item aborts the whole split before anything is emitted", async () => {
     const s = setup(stub({ action: "split", confidence: "high", items: [
       { action: "new_task", project: "relay", title: "a", size: "small", prompt: "a" },
