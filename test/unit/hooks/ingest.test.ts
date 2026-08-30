@@ -98,6 +98,24 @@ describe("ingestHook", () => {
     s.post({ hook_event_name: "Notification", notification_type: "permission_prompt", message: "…" }); expect(s.nudges).toEqual(["u1"]);
     s.post({ hook_event_name: "SessionEnd", reason: "other" }); expect(loadTask(s.db, "u1")!.process_state).toBe("crashed"); expect(s.crashes).toEqual(["SessionEnd(other) while running"]);
   });
+  test("the SessionEnd relay's own resume causes is not a crash, and process.ended carries the generation that ended", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    // The measured crash loop (task a50d62e0, 2026-08-31): `--bg --resume` stops the live session before forking, so the
+    // superseded process's SessionEnd lands while relay's own resume command is still running.
+    s.log.emit({ type: "command.queued", task_uuid: "u1", payload: { id: "resume:1", kind: "resume", payload: { kind: "resume", prompt: "continue", marker: "0000aaaa" } } });
+    s.log.emit({ type: "command.running", task_uuid: "u1", payload: { id: "resume:1" } });
+    s.post({ hook_event_name: "SessionEnd", reason: "other" });
+    expect(s.crashes).toEqual([]); expect(loadTask(s.db, "u1")!.status).toBe("running"); expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
+    const first = s.db.query("select process_generation g, payload_json p from events where type='process.ended' order by seq limit 1").get() as any;
+    expect(first.g).toBe(1); expect(JSON.parse(first.p)).toMatchObject({ generation: 1, crashed: false });
+    // …and the converse: once the fork is up and nothing of ours is in flight, a SessionEnd is a real crash.
+    s.log.emit({ type: "command.applied", task_uuid: "u1", payload: { id: "resume:1" } });
+    s.post({ hook_event_name: "SessionStart", source: "resume" }); expect(loadTask(s.db, "u1")!.process_generation).toBe(2);
+    s.post({ hook_event_name: "SessionEnd", reason: "other" });
+    expect(s.crashes).toEqual(["SessionEnd(other) while running"]); expect(loadTask(s.db, "u1")!.process_state).toBe("crashed");
+    const last = s.db.query("select process_generation g, payload_json p from events where type='process.ended' order by seq desc limit 1").get() as any;
+    expect(last.g).toBe(2); expect(JSON.parse(last.p)).toMatchObject({ generation: 2, crashed: true });
+  });
   test("SessionEnd after a task is done is a plain stop, not a crash", () => {
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
     s.log.emit({ type: "task.status_changed", task_uuid: "u1", payload: { status: "done", patch: { status: "done" } } });
