@@ -7,8 +7,9 @@ import { authMiddleware } from "./auth.ts";
 import { apiRoutes } from "./routes.ts";
 import { WsHub } from "./ws.ts";
 import type { Services } from "../core/tasks.ts";
+import type { ForeignSessions } from "../lifecycle/foreign.ts";
 
-export interface AppContext { db: Database; cfg: Config; log: EventLog; hub: WsHub; tokens: { api: string; hook: string }; services: Services; dashboardHtml: () => Promise<string> }
+export interface AppContext { db: Database; cfg: Config; log: EventLog; hub: WsHub; tokens: { api: string; hook: string }; services: Services; foreign: ForeignSessions; dashboardHtml: () => Promise<string> }
 
 export function buildApp(ctx: AppContext) {
   const { upgradeWebSocket, websocket } = createBunWebSocket();

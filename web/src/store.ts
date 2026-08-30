@@ -1,12 +1,12 @@
 // web/src/store.ts — server frames in, one plain object out. No framework: the adapter renders through the demo engine.
-import type { EventEnvelope, Message, Project, SystemState, Task, TasksSnapshot, WsFrame } from "@shared/types.ts";
+import type { EventEnvelope, ForeignSession, Message, Project, SystemState, Task, TasksSnapshot, WsFrame } from "@shared/types.ts";
 export type Conn = "ok" | "reconnecting" | "resync";
-export interface State { seq: number; idx: number; conn: Conn; sys: SystemState | null; projects: Project[]; tasks: Record<string, Task>; messages: Message[]; events: Record<string, EventEnvelope[]>; dirty: Dirty }
-export interface Dirty { tasks: Set<string>; messages: Set<string>; events: Set<string>; sys: boolean; projects: boolean; all: boolean }
+export interface State { seq: number; idx: number; conn: Conn; sys: SystemState | null; projects: Project[]; tasks: Record<string, Task>; messages: Message[]; events: Record<string, EventEnvelope[]>; foreign: ForeignSession[]; dirty: Dirty }
+export interface Dirty { tasks: Set<string>; messages: Set<string>; events: Set<string>; sys: boolean; projects: boolean; foreign: boolean; all: boolean }
 export interface Store { state: State; subscribe(fn: (f?: WsFrame) => void): () => void; applyFrame(f: WsFrame): void; applySnapshot(s: TasksSnapshot): void; setConn(c: Conn): void; drain(): Dirty; reset(): void }
 const EVENTS_CAP = 200;
-const freshDirty = (): Dirty => ({ tasks: new Set(), messages: new Set(), events: new Set(), sys: false, projects: false, all: false });
-const initial = (): State => ({ seq: 0, idx: 0, conn: "reconnecting", sys: null, projects: [], tasks: {}, messages: [], events: {}, dirty: freshDirty() });
+const freshDirty = (): Dirty => ({ tasks: new Set(), messages: new Set(), events: new Set(), sys: false, projects: false, foreign: false, all: false });
+const initial = (): State => ({ seq: 0, idx: 0, conn: "reconnecting", sys: null, projects: [], tasks: {}, messages: [], events: {}, foreign: [], dirty: freshDirty() });
 export function createStore(): Store {
   const state = initial(); const subs = new Set<(f?: WsFrame) => void>(); const emit = (frame?: WsFrame) => { for (const f of subs) f(frame); };   // the applied frame reaches subscribers so notification diffing can happen per frame, not per render
   const upsertMessage = (m: Message) => { const i = state.messages.findIndex((x) => x.id === m.id); if (i >= 0) state.messages[i] = m; else { state.messages.push(m); state.messages.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)); } state.dirty.messages.add(m.id); };
@@ -14,6 +14,9 @@ export function createStore(): Store {
     state,
     subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
     applyFrame(f) {
+      // Sessions relay does not own are poll state, not events: the frame carries no cursor, and the whole current set
+      // arrives each time, so it is applied before the (seq, idx) gate and never moves the cursor.
+      if (f.type === "foreign.sessions") { state.foreign = f.sessions; state.dirty.foreign = true; emit(f); return; }
       if (f.type !== "hello" && (f.seq < state.seq || (f.seq === state.seq && f.idx <= state.idx))) return;   // duplicate/replayed frame — compare (seq, idx), never seq alone
       if (f.type !== "hello") { state.seq = f.seq; state.idx = f.idx; }                                     // the cursor advances only with applied frames — never with hello (its replay would be dropped)
       switch (f.type) {
@@ -27,7 +30,7 @@ export function createStore(): Store {
     },
     applySnapshot(s) {
       state.seq = s.as_of_seq; state.idx = Number.MAX_SAFE_INTEGER;                                      // every frame of as_of_seq is inside the snapshot
-      state.sys = s.state; state.projects = s.projects; state.tasks = Object.fromEntries(s.tasks.map((t) => [t.uuid, t])); state.messages = [...s.messages].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+      state.sys = s.state; state.projects = s.projects; state.tasks = Object.fromEntries(s.tasks.map((t) => [t.uuid, t])); state.messages = [...s.messages].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)); state.foreign = s.foreign ?? [];
       state.dirty.all = true; emit();
     },
     setConn(c) { state.conn = c; state.dirty.sys = true; emit(); },                              // always emits: the first ws.onclose repeats the initial "reconnecting", and the dashboard must still be told it is not connected

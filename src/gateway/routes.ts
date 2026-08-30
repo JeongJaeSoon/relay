@@ -22,7 +22,7 @@ export function apiRoutes(ctx: AppContext) {
     return c.json(r.json as any, r.status as any);
   });
   // ---- read (Task 4) ----
-  api.get("/tasks", (c) => c.json(snapshot(ctx.db, ctx.cfg, c.req.query("include") === "closed")));
+  api.get("/tasks", (c) => c.json(snapshot(ctx.db, ctx.cfg, c.req.query("include") === "closed", ctx.foreign.list())));
   api.get("/tasks/:id", (c) => {
     const t = loadTask(ctx.db, c.req.param("id")); if (!t) return c.json({ error: "not found" }, 404);
     const events = ctx.db.query("select * from events where task_uuid=? order by seq desc limit 200").all(t.uuid).reverse().map((r: any) => ({ ...r, payload: JSON.parse(r.payload_json), truncated: !!r.truncated }));
@@ -68,6 +68,10 @@ export function apiRoutes(ctx: AppContext) {
   api.patch("/settings", async (c) => { const b = z.object({ max_concurrent_agents: z.number().int().min(1).optional() }).safeParse(await c.req.json()); if (!b.success) return bad(c, "invalid settings"); ctx.log.emit({ type: "settings.changed", payload: b.data }); void S.scheduler.pump(); return c.json(snapshot(ctx.db, ctx.cfg).state); });
   api.post("/pause", (c) => { S.tasks.pause(); return c.json({ ok: true }); });
   api.post("/resume-all", (c) => { S.tasks.resumeAll(); S.dispatcher.drainPending(); return c.json({ ok: true }); });
+  // The one thing relay ever does TO a session it did not start, and only because a human clicked it. Every automatic
+  // stop path (idle reaper, usage guard, kill switch, recovery, watchdog) works from the `tasks` table, which a foreign
+  // session is never in — see ForeignSessions.stop, which re-checks the roster before it acts.
+  api.post("/foreign/:id/stop", async (c) => { const r = await ctx.foreign.stop(c.req.param("id")); return r.ok ? c.json({ ok: true }) : c.json({ error: r.error }, r.status); });
   api.post("/commands/:id/confirm", (c) => { S.outbox.confirm(c.req.param("id")); return c.json({ ok: true }); });
   api.post("/commands/:id/retry", (c) => { S.outbox.retry(c.req.param("id")); return c.json({ ok: true }); });
   return api;

@@ -72,6 +72,24 @@ export function socketPathForSession(sessionId: string | null | undefined, dir =
   } catch {}
   return null;
 }
+/** Everything the session registry knows about the sessions currently on this machine, keyed by session id. For a
+ *  session relay never spawned this is the only source of a real start time, a pid and the launch kind (`bg` vs a
+ *  terminal): `agents --json` carries none of them for background rows (Phase 0 ④). One readdir, whatever the caller
+ *  needs to look up. */
+export function sessionRegistryIndex(dir = join(homedir(), ".claude", "sessions")): Map<string, { pid: number | null; started_at: number | null; kind: string | null }> {
+  const out = new Map<string, { pid: number | null; started_at: number | null; kind: string | null }>();
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const j = JSON.parse(readFileSync(join(dir, f), "utf8"));
+        if (typeof j?.sessionId === "string") out.set(j.sessionId, { pid: typeof j.pid === "number" ? j.pid : null, started_at: typeof j.startedAt === "number" ? j.startedAt : null, kind: typeof j.kind === "string" ? j.kind : null });
+      } catch {}
+    }
+  } catch {}
+  return out;
+}
+
 /** The text a peer frame carries, whichever shape it arrived in. */
 export const frameText = (f: any): string => String(f?.message?.content ?? f?.message ?? f?.text ?? "");
 /** Our `[relay #<id8>]` markers inside a frame — the only per-send correlation that exists (the reply's `msg_id` is

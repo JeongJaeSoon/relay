@@ -81,6 +81,7 @@ button,input{font-family:inherit;font-size:inherit;color:inherit}
 .st-err   {--st:var(--c-err);  --st-bg:var(--c-err-bg);  --st-g:var(--c-err-g)}
 .st-closed{--st:var(--muted);  --st-bg:var(--surface2);  --st-g:var(--muted)}
 .st-cancelled{--st:var(--c-cancel);--st-bg:var(--c-cancel-bg);--st-g:var(--c-cancel-g)}
+.st-foreign{--st:var(--muted); --st-bg:var(--surface2); --st-g:var(--muted)}   /* sessions outside relay get no status colour — nothing that could read as a task */
 .pill{
   display:inline-flex;align-items:center;gap:5px;
   font-size:var(--fs-micro);font-weight:600;letter-spacing:.02em;
@@ -227,6 +228,11 @@ header{
 .node.queued{width:210px;padding:8px 10px 8px 13px}
 .node.queued .n-title{font-size:var(--fs-small)}
 .node.queued .n-step,.node.queued .n-foot{display:none}
+/* a session relay did not start: dashed border, no status colour = "outside". No pulse, and no gateway edge */
+.node.foreign{width:230px;background:var(--surface2);border:1px dashed var(--line-strong);animation:none}
+.node.foreign::before{background:var(--muted);opacity:.45}
+.node.foreign .n-step{color:var(--muted);font-size:var(--fs-micro)}
+.node.foreign .n-foot .br{color:var(--muted);font-style:italic}
 
 .legend{
   position:absolute;left:12px;bottom:12px;display:flex;gap:12px;align-items:center;
@@ -266,7 +272,9 @@ header{
 .d-empty{color:var(--muted);font-size:var(--fs-small);padding:24px 6px;text-align:center}
 .d-title{font-size:var(--fs-title);font-weight:700;line-height:1.4}
 .d-rows{display:grid;grid-template-columns:64px 1fr;row-gap:7px;column-gap:10px;font-size:var(--fs-small);margin:0}
+.d-rows.wide{grid-template-columns:84px 1fr}
 .d-rows dt{color:var(--muted)}
+.d-note{font-size:var(--fs-small);color:var(--muted);border-left:2px dashed var(--line-strong);padding-left:10px}
 .d-rows dd{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .d-sec{font-size:var(--fs-micro);font-weight:700;letter-spacing:.07em;color:var(--muted);
   padding-bottom:5px;border-bottom:1px solid var(--line)}
@@ -601,6 +609,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
           <div class="gw-s mono">:8790 · always listening</div>
         </div>
         <div class="lane-label" id="laneLabel">Queue</div>
+        <div class="lane-label" id="foreignLabel">Outside relay · watching only</div>
         <div id="emptyHint">
           <div class="big">← Tasks stack up here</div>
           <div>Start from the chat below · ⌘⇧P command palette</div>
@@ -625,7 +634,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
     </section>
 
     <aside class="detail" id="detail" aria-label="Task detail">
-      <div class="d-head">Task detail
+      <div class="d-head"><span id="dHead">Task detail</span>
         <button class="x" id="dClose" aria-label="Close detail">✕</button>
       </div>
       <div class="d-body" id="dBody"></div>
