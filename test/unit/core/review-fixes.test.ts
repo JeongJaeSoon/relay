@@ -58,6 +58,25 @@ test("a late process.ended from a superseded generation does not stop the live p
   expect((db.query("select count(*) c from process_instances where task_uuid='u1' and ended_at is null").get() as any).c).toBe(1);   // I4
 });
 
+test("enum columns reject values outside the shared type unions", () => {
+  const db = open();
+  const log = new EventLog(db);
+  task(db, "u1", 1);
+  for (const patch of [{ turn_state: "BOGUS" }, { attach_state: "BOGUS" }, { effort: "BOGUS" }])
+    expect(() => log.emit({ type: "task.status_changed", task_uuid: "u1", payload: { patch } })).toThrow();
+  const t = db.query("select turn_state, attach_state, effort from tasks where uuid='u1'").get() as any;
+  expect(t).toEqual({ turn_state: "busy", attach_state: "none", effort: "xhigh" });
+});
+
+test("an event with no task broadcasts no task frame", () => {
+  const db = open();
+  const frames: any[] = [];
+  const log = new EventLog(db, (f) => frames.push(...f));
+  log.emit({ type: "task.status_changed", task_uuid: null, payload: {} });
+  expect(frames.filter((f) => f.type === "task.updated")).toEqual([]);       // never `{ task: null }` on the wire
+  expect((db.query("select count(*) c from events").get() as any).c).toBe(1); // still recorded
+});
+
 test("settings.changed cannot write meta keys the runtime owns", () => {
   const db = open();
   const log = new EventLog(db);

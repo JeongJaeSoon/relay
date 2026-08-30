@@ -10,7 +10,7 @@ export function authMiddleware(tokens: { api: string; hook: string }, port?: num
     const origin = c.req.header("origin"); if (origin) { try { if (!localHost(new URL(origin).host)) return c.text("forbidden origin", 403); } catch { return c.text("bad origin", 403); } }
     // browsers cannot set headers on WebSocket upgrades, so /ws (and only /ws) may carry the token as a query parameter
     const auth = c.req.header("authorization") ?? (c.req.path === "/ws" ? new URL(c.req.url).searchParams.get("token") : null) ?? "";
-    const token = auth.replace(/^Bearer /, "");
+    const token = auth.replace(/^Bearer +/i, "");                                  // RFC 7235: the scheme is case-insensitive
     const isHooks = c.req.path === "/api/hooks"; const taskHeader = c.req.header("x-relay-task") ?? "";
     const hookOk = isHooks && taskHeader.length > 0 && timingSafe(token, hookTokenFor(tokens.hook, taskHeader));
     const ok = token.length > 0 && (timingSafe(token, tokens.api) || hookOk);

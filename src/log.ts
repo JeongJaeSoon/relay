@@ -13,7 +13,7 @@ function rotate(file: string) {
   try { renameSync(file, `${file}.1`); } catch {}
 }
 function write(level: "info" | "warn" | "error", msg: string, fields?: Fields) {
-  const line = redact(JSON.stringify({ t: new Date(now()).toISOString(), level, msg, ...fields }));
+  const line = JSON.stringify({ t: new Date(now()).toISOString(), level, msg, ...fields }, (_k, v) => (typeof v === "string" ? redact(v) : v));   // per value: redacting the serialized line can break the JSON
   process.stderr.write(line + "\n");                                        // stderr only: stdout stays clean for `relay mcp` (stdio transport)
   if (process.env.RELAY_NO_FILE_LOG) return;
   try { mkdirSync(paths.logDir, { recursive: true, mode: 0o700 }); const f = join(paths.logDir, "relay.log"); rotate(f); appendFileSync(f, line + "\n", { mode: 0o600 }); } catch {}

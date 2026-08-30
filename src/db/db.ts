@@ -1,12 +1,13 @@
 import { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, renameSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, renameSync } from "node:fs";
 import { join, basename } from "node:path";
-import { MIGRATIONS, SCHEMA_VERSION } from "./schema.ts";
+import { MIGRATIONS } from "./schema.ts";
 export { MIGRATIONS, SCHEMA_VERSION } from "./schema.ts";
 
 export function openDb(path: string): Database {
   const db = new Database(path, { create: true, strict: true });
   db.run("pragma journal_mode = wal"); db.run("pragma foreign_keys = on"); db.run("pragma busy_timeout = 5000");
+  if (path !== ":memory:") for (const f of [path, `${path}-wal`, `${path}-shm`]) { try { chmodSync(f, 0o600); } catch {} }   // B8: 0600, not just an 0700 parent
   return db;
 }
 const version = (db: Database): number => {

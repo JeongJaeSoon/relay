@@ -14,7 +14,7 @@ export function buildApp(ctx: AppContext) {
   const { upgradeWebSocket, websocket } = createBunWebSocket();
   const app = new Hono();
   app.get("/", async (c) => {
-    if (![`localhost:${ctx.cfg.port}`, `127.0.0.1:${ctx.cfg.port}`].includes(c.req.header("host") ?? "")) return c.text("forbidden host", 403);
+    if (![`localhost:${ctx.cfg.port}`, `127.0.0.1:${ctx.cfg.port}`, `[::1]:${ctx.cfg.port}`].includes(c.req.header("host") ?? "")) return c.text("forbidden host", 403);   // same list as authMiddleware
     const html = (await ctx.dashboardHtml()).replace("<head>", `<head><meta name="relay-token" content="${ctx.tokens.api}">`);
     return c.html(html);
   });
@@ -22,7 +22,8 @@ export function buildApp(ctx: AppContext) {
   app.use("/ws", authMiddleware(ctx.tokens, ctx.cfg.port));
   app.route("/api", apiRoutes(ctx));
   app.get("/ws", upgradeWebSocket((c) => {
-    const q = c.req.query("from_seq"); const fromSeq = q == null ? ctx.log.lastSeq() : Number(q);   // no from_seq = live only (first load takes the snapshot); reconnects pass their last seq
+    const q = c.req.query("from_seq"); const fromSeq = q == null ? ctx.log.lastSeq() : Number(q);
+    if (!Number.isFinite(fromSeq) || fromSeq < 0) throw new Error(`bad from_seq: ${q}`);   // a NaN cursor would silently replay nothing   // no from_seq = live only (first load takes the snapshot); reconnects pass their last seq
     return { onOpen(_e, ws) { ctx.hub.handleOpen(ws.raw as any, fromSeq); }, onClose(_e, ws) { ctx.hub.handleClose(ws.raw as any); } };
   }));
   return { app, websocket };

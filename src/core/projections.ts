@@ -54,7 +54,9 @@ export function systemState(db: Database, cfg: Config, extra: Partial<SystemStat
 /** Apply one event to the projections. Returns the WS frame bodies to broadcast (seq is stamped by EventLog). Throws to roll back. */
 export function applyProjection(db: Database, ev: EventEnvelope, cfg: Config): FrameBody[] {
   const p: any = ev.payload ?? {}; const at = ev.recorded_at; const frames: FrameBody[] = [];
-  const taskFrame = (uuid: string) => frames.push({ type: "task.updated", task: loadTask(db, uuid)! });
+  // An event without a task (or naming one that is gone) must not put `task: null` on the wire — the dashboard reads
+  // `task.uuid` on every frame. Such an event is still recorded; it just projects nothing.
+  const taskFrame = (uuid: string | null) => { const t = uuid ? loadTask(db, uuid) : null; if (t) frames.push({ type: "task.updated", task: t }); };
   const msgFrame = (id: string, chat = false) => { const m = loadMessage(db, id)!; frames.push({ type: "dispatch.updated", message: m }); if (chat) frames.push({ type: "chat.message", message: m }); };
   const state = () => frames.push({ type: "system.state", state: systemState(db, cfg) });
   switch (true) {
