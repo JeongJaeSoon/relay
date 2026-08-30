@@ -9,8 +9,10 @@ const one = (m: any, tasks: any = {}, trail: any[] = []) => requestRows([m, ...t
 
 test("a needs_confirm request that was never resolved stays waiting for the user, with the reason and a redispatch", () => {
   const m = msg({ text: "어디에 던지면 좋을지 모르겠을때 물어보도록", dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-02", confidence: "low" } });
+  // routing into an errored task emits the decision's badge row first — the prompt after it is the one that says why this stalled
+  const badge = msg({ role: "system", dispatch_state: "direct", text: "dispatcher · route_to_task · T-02" });
   const prompt = msg({ role: "system", dispatch_state: "direct", text: "Routing needs confirmation (confidence=low, candidate: route_to_task T-02). Which task? T-02 relay cli / T-03 freee-mcp" });
-  const r = one(m, {}, [prompt]);
+  const r = one(m, {}, [badge, prompt]);
   expect(r).toMatchObject({ disposition: "needs_confirm", dispositionLabel: "Waiting for your confirmation", state: "Waiting for you", st: "wait", bucket: "needs_you", answerKind: "question", actions: ["redispatch"] });
   expect(r.answer).toContain("Which task?");
   // no confirmation prompt in the snapshot (older than the last 200 messages): the recorded candidate still says why it stalled

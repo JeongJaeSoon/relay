@@ -1,13 +1,13 @@
 # relay dashboard — browser QA
 
-Vanilla dashboard: the demo engine (`src/app.js`) rendered from server state by five TS modules
-(`consts`/`store`/`ws`/`api`/`notify`/`adapter`), built into one self-contained `web/dist/index.html`
-by `scripts/build-web.ts`. Zero runtime dependencies, zero external references.
+Vanilla dashboard: the demo engine (`src/app.js`) rendered from server state by six TS modules
+(`consts`/`store`/`ws`/`api`/`notify`/`ledger`/`adapter`), built into one self-contained
+`web/dist/index.html` by `scripts/build-web.ts`. Zero runtime dependencies, zero external references.
 
 ```
 bun run build:web                 # → web/dist/index.html (98 KB, no external refs)
 bun scripts/dev-fake.ts           # real server + FakeRunner sessions → http://127.0.0.1:8790/
-bun test web/test                 # pure modules (store / ws / notify / adapter)
+bun test web/test                 # pure modules (store / ws / notify / ledger / adapter)
 ```
 
 The server reads `web/dist/index.html` per request and injects `<meta name="relay-token">` into
@@ -17,6 +17,32 @@ The server reads `web/dist/index.html` per request and injects `<meta name="rela
 sessions (`RELAY_HOME=~/.config/relay-fake`, project `myapp` at `/tmp/relay-fake/myapp`). Prompts:
 `myapp … 리팩토링` (normal), `질문` (question), `에픽` (2 subagents), `오류` (crash), `후속:`
 (route_to_task), `상태?` (fast-path).
+
+## Request ledger
+
+The chat's right rail is one row per user message: the request, what relay did with it
+(`web/src/ledger.ts`, `requestRows(messages, tasks)`), the live state of that disposition, the answer
+if one came back, and the action that unblocks it. Ordered needs-you first, filtered to Open by
+default. It replaced the dispatch log, which said what the dispatcher decided and never said whether
+an answer came back. Pure derivation over the snapshot the client already holds — no server change.
+
+### Results — 2026-08-31, Chrome, `bun scripts/dev-fake.ts` (isolated RELAY_HOME, port 8801)
+
+| 상태 | 행 | 결과 |
+|---|---|---|
+| `needs_confirm` (task not found) | `follow-up: add tests too` | PASS — Waiting for you · "Routing needs confirmation (task T-01 not found…)" · Retry |
+| `needs_confirm` (target in error) | `follow-up: 그거 마저 해줘` | PASS — 확인 프롬프트 본문 + T-01 칩 · Retry/Restart (디스패처 배지 행이 아니라 프롬프트를 집는다) |
+| `dispatched` → task errored | `follow-up: 테스트도 붙여줘` | PASS — Routed into T-01 · Error · Restart → 재개 후 행이 settled로 이동 |
+| `dispatched` `new_task` | `myapp 질문 있는 작업` | PASS — Needs input · 질문 본문 · `a.txt`/`b.txt` chip → 답변 후 Running, 카운트 8 → 7 |
+| `dispatched` `close_task` | `close T-01` | PASS — Close 요청 · Close 액션, 대상이 done이 되자 Restart만 사라짐 |
+| `fastpath` | `status?` | PASS — Answered from the status fast path · 즉답 본문 |
+| `dispatched` `answer_directly` | `hello there` | PASS — Answered by the dispatcher · `dispatch_json.answer` |
+| `failed` | (fake db에 주입) | PASS — Failed · `timeout` · `slack` source 배지 · Retry |
+| 필터/빈 상태 | — | PASS — Open 11→8행, All 11행, "Nothing open" + "Show all N", 초기 빈 문구 |
+
+Console stayed clean. `failed`와 "라우팅 직후 대상이 error가 되는" 두 형태는 FakeRunner가 스크립트를
+HTTP 왕복보다 빨리 끝내 재현이 레이스가 되므로, **fake db**에 직접 써서 렌더 경로만 확인했다
+(사용자의 실제 `~/.config/relay/relay.db`는 읽지도 쓰지도 않았다).
 
 ## Results — 2026-08-31, Chrome, `bun scripts/dev-fake.ts`
 

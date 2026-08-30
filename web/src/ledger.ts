@@ -71,8 +71,10 @@ function answerOf(d: Disposition, m: Message, task: Task | null, trail: Message[
   const trailText = (role: Message["role"]) => trail.find((t) => t.role === role)?.text ?? null;
   if (d === "failed") return { answer: m.dispatch_error, answerKind: "error" };
   if (d === "needs_confirm") {
-    const dec = m.dispatch_json;
-    return { answer: trailText("system") ?? (dec ? `Routing needs confirmation — candidate: ${dec.action}${dec.task_id ? ` ${dec.task_id}` : ""}` : "Routing needs confirmation."), answerKind: "question" };
+    // The prompt TaskService.needsConfirm() promotes — matched on its opening words, because the trail also holds
+    // the `dispatcher · …` badge row the same decision emits, and that one says nothing about why this stalled.
+    const dec = m.dispatch_json; const prompt = trail.find((t) => t.role === "system" && t.text.startsWith("Routing needs confirmation"))?.text;
+    return { answer: prompt ?? (dec ? `Routing needs confirmation — candidate: ${dec.action}${dec.task_id ? ` ${dec.task_id}` : ""}` : "Routing needs confirmation."), answerKind: "question" };
   }
   if (task?.status === "waiting_input" && task.question) return { answer: task.question.text, answerKind: "question" };
   if (task && ENDED.has(task.status)) return { answer: task.last_summary ?? (m.task_uuid ? outcome.get(m.task_uuid) ?? null : null), answerKind: task.status === "error" ? "error" : "summary" };
