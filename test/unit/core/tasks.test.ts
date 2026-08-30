@@ -75,6 +75,22 @@ describe("TaskService", () => {
     s.svc.retry(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("starting"); expect(s.runner.calls.at(-1)!.kind).toBe("resume");
     s.svc.close(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("closed"); expect(s.runner.calls.at(-1)!.kind).toBe("rm");
   });
+  test("closing a task that ran three generations disposes of all three, stopping each before removing it", async () => {
+    const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid;
+    s.runner.rows.clear();
+    // three forks: each one rebound tasks.session_id, so only process_instances still knows the earlier two
+    for (const [g, short] of [[1, "g1"], [2, "g2"], [3, "g3"]] as [number, string][]) {
+      s.runner.rows.set(short, { short_id: short, session_id: `s-${short}`, name: "relay:T-01 a", cwd: "/tmp/myapp", pid: g, alive: true, busy: false, waiting_for: null, raw: {} });
+      s.log.emit({ type: "process.started", task_uuid: t, process_generation: g, payload: { generation: g, session_id: `s-${short}`, short_id: short } });
+    }
+    s.runner.calls.length = 0;
+    s.svc.close(t); await s.outbox.run(t);
+    expect(loadTask(s.db, t)!.status).toBe("closed");
+    expect(s.runner.calls.map((c) => `${c.kind} ${c.args}`)).toEqual(["stop g3", "rm g3", "stop g1", "stop g2", "rm g1", "rm g2"]);   // nothing is removed before it is stopped
+    expect([...s.runner.rows.keys()]).toEqual([]);                                                    // none left registered with the CLI
+    expect(s.db.query("select count(*) c from commands where state<>'applied'").get()).toEqual({ c: 0 });   // I5: a closed task keeps no pending commands
+  });
   test("close_task decision only posts a confirmation message", () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" });
     s.svc.applyDecision(s.userMsg("닫아"), { action: "close_task", task_id: "T-01", confidence: "high" });
