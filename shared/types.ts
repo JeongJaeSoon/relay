@@ -44,10 +44,19 @@ export type MessageRole = "user" | "system" | "worker_summary" | "dispatcher_ans
 export type MessageSource = "user" | "cli" | "mcp" | "github" | "slack" | "cron";
 export type DispatchState = "pending" | "deciding" | "dispatched" | "fastpath" | "needs_confirm" | "failed" | "direct";
 
+/** One piece of a `split` decision: task creation only — no nesting, no answer_directly/close_task. */
+export interface DispatchItem {
+  action: "new_task" | "route_to_task";
+  task_id?: string; project?: string; title?: string; size?: TaskSize;
+  prompt?: string; confidence?: "high" | "low";                // absent = the message's own confidence
+}
+
 export interface DispatchDecision {
-  action: "new_task" | "route_to_task" | "answer_directly" | "close_task";
+  action: "new_task" | "route_to_task" | "answer_directly" | "close_task" | "split";
   task_id?: string; project?: string; title?: string; size?: TaskSize;
   prompt?: string; answer?: string; confidence: "high" | "low";
+  items?: DispatchItem[];                                      // split only, from the model
+  task_ids?: string[];                                         // split only, filled in by relay: every task the split produced, in item order (messages.task_uuid holds just the first)
 }
 
 export interface Message {
