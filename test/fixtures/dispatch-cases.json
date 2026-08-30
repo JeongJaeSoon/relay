@@ -1,5 +1,5 @@
 {
-  "_note": "Dispatcher regression corpus (design C.5). `world` is the context every case is judged against; `model_output` is the structured output the model is expected to produce for `message`, and `expect` is what relay must then do with it. The unit test replays `model_output` through the real Dispatcher + TaskService, so it guards the pipeline and the guardrails. A live accuracy run compares a real model's output against `model_output`.",
+  "_note": "Dispatcher regression corpus (design C.5). `world` is the context every case is judged against; `model_output` is the structured output the model is expected to produce for `message`, and `expect` is what relay must then do with it. The unit test replays `model_output` through the real Dispatcher + TaskService, so it guards the pipeline and the guardrails. No live accuracy runner reads this file yet: `model_output` is recorded so one can diff a real model against it later.",
   "world": {
     "max_split": 4,
     "projects": [
