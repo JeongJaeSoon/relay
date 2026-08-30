@@ -62,7 +62,47 @@ Some steps are blocked for an agent session (the auto-mode classifier refuses se
 The exact commands live in each task's section of
 `docs/superpowers/plans/2026-08-30-relay-01-phase0-spike.md`, and in `08-recovery.md`.
 
-## Results
+## Results (run 2026-08-30, CLI 2.1.251, bun 1.3.10)
 
-See `spikes/results/capabilities.json` (committed) and the summary table at the end of this file
-once the run is complete. `spikes/results/*.jsonl` (raw hook logs) are gitignored.
+Full data in `spikes/results/capabilities.json` (also copied to
+`~/.config/relay/capabilities.json`, which 02's `runner/capabilities.ts` reads).
+`spikes/results/*.jsonl` (raw hook logs) are gitignored.
+
+| # | verdict | evidence |
+|---|---|---|
+| ① gate | **PASS** | `GATE PASSED`; `bgResume: context-kept`; every required flag present; `--json-schema` → `structured_output`. launchd auth BLOCKED (see below) |
+| ② delivery | **PASS (go)** | socket delivery lands on an idle worker, burst 10/10 exactly once; a busy worker drops it, so busy/stopped go through `--bg --resume` |
+| ③ verdict | **PASS** | `RELAY: done/question/blocked` all parse from `last_assistant_message`; `background_tasks` populated; `AskUserQuestion` blocked |
+| ④ races | PASS (recorded) | supervisor restarts a `kill -9`'d worker in ~12s; `--bg --resume` forks a new session id; no `SubagentStop` when the parent is stopped; hooks lost during a 6s receiver outage |
+| ⑤ permit | PASS | `PreToolUse(Agent)` deny held subagents to 1 of 3; the worker did the rest sequentially |
+| ⑥ spool / permhold | PASS | spool 5/5; a held `PermissionRequest` blocks the worker for exactly the hold; a hook TIMEOUT allows the tool. Guard step BLOCKED |
+| ⑦ identity | PASS | two sessions share a name; `claude rm` keeps a dirty/unpushed worktree and the session with it |
+| ⑧ recovery | **BLOCKED** | needs an interactive `claude attach`; procedure in `08-recovery.md` |
+| ⑨ dispatcher | PASS | 10/10 routing accuracy, p50 7.4s / p95 10.1s, ~99k tok and ~$0.67 per message, timeout kill exit 143 in 1.7s, kill switch 3/3 stopped and resumed with context |
+| ⑩ bun / MCP | PASS | 61MB compiled binary: http, ws, `bun:sqlite`, embedded html, spawning `claude`, MCP round trip |
+
+### Corrections to the roadmap this run produced
+
+- `WorktreeCreate` / `WorktreeRemove` are **provider** hooks, not observation hooks — registering one
+  and returning nothing kills the session before init.
+- `agents --json` reports the **launch** cwd, not the worktree, and background rows usually carry no
+  `pid`. The worktree path comes from the hook payload `cwd`; the pid and the live idle/busy status
+  come from `~/.claude/sessions/<pid>.json`, matched on `sessionId`.
+- `--advisor` does not exist in 2.1.251, so the epic-task advisor in the roadmap has no flag.
+- `claude --bg --resume <uuid>` **forks** (new session id, `SessionStart source: "fork"`); the daemon's
+  own respawn keeps the session id (`source: "resume"`). Task identity must follow the fork chain.
+- The cross-session socket has **no ack frame**: a send is `unknown` until the `[relay #…]` marker
+  appears in the worker's `UserPromptSubmit`.
+- A `PermissionRequest` payload has **no `tool_use_id`**; correlate with the preceding `PreToolUse`.
+- A `PermissionRequest` hook timeout **allows** the tool, so relay's auto-deny must fire first.
+- `claude rm` refuses (keeps the session) when the worktree has uncommitted or unpushed work.
+
+### Still needs the user
+
+1. **launchd auth (①)** — `launchctl bootstrap` is refused by this session's permission system:
+   `sh spikes/scripts/01-launchd-auth.sh`
+2. **attach ↔ send (④ Step 2)** — attach a worker in one terminal, then from another:
+   `claude --bg --resume <uuid> "[relay #att0001] reply ATTACHED"`, and record what each side shows.
+3. **guard (⑥ Step 3)** — a worker told to `git push` and to write outside its worktree, to capture
+   the `PermissionDenied` payload and the deny-rule behaviour.
+4. **recovery checklist (⑧)** — `spikes/scripts/08-recovery.md`.
