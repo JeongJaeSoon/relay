@@ -31,7 +31,8 @@ test("the wizard probes when nothing is measured, re-probes on drift, and stays 
   expect(probeReason(false, "unknown", "2.1.251 (Claude Code)")).toBe("missing");
   expect(probeReason(true, "2.1.251", "2.4.0 (Claude Code)")).toBe("drift");     // minor bump: re-measure
   expect(probeReason(true, "2.1.251", "3.0.0")).toBe("drift");
+  expect(probeReason(true, "2.1.251", "2.1.299")).toBe("drift");                 // and a patch bump too: this CLI releases there
   expect(probeReason(true, "2.1.251", "2.1.251 (Claude Code)")).toBeNull();      // in sync: no session, no usage
-  expect(probeReason(true, "2.1.251", "2.1.299")).toBeNull();                    // patch bump is not worth a probe
+  expect(probeReason(true, "2.1.299", "2.1.299")).toBeNull();                    // the gate's own stamp: a probed CLI is not re-probed every run
   expect(probeReason(true, "unknown", "2.1.251")).toBeNull();                    // an unreadable version is not evidence of drift
 });

@@ -7,14 +7,16 @@ import { client, relayArgv, has } from "./client.ts";
 import worker from "../../agents/relay-worker.md" with { type: "file" };     // embedded straight from the source files (bun build --compile)
 import explore from "../../agents/relay-explore.md" with { type: "file" };
 import verify from "../../agents/relay-verify.md" with { type: "file" };
-import { driftWarns, loadCapabilities, showVersion, versionDrift, versionOk } from "../runner/capabilities.ts";
+import { driftWarns, gateVersion, loadCapabilities, showVersion, versionDrift, versionOk } from "../runner/capabilities.ts";
 export { parseVersion, versionOk } from "../runner/capabilities.ts";          // they live there because serve.ts needs them and must not import this module
 /** Why the wizard should spend a probe, or null for "not now". `relay setup` after a `claude update` is the obvious
  *  thing to do, and gating the probe on the file merely existing left those measurements stale for good. Probing
  *  stays here, in the wizard the user chose to run: it spawns a real background session and about a minute of
- *  subscription usage, which is never something a `serve` or a plain `doctor` should decide to spend. */
-export const probeReason = (hasCapabilities: boolean, recorded: string, current: string): "missing" | "drift" | null =>
-  !hasCapabilities ? "missing" : driftWarns(versionDrift(recorded, current)) ? "drift" : null;
+ *  subscription usage, which is never something a `serve` or a plain `doctor` should decide to spend.
+ *  `probed` is the gate's own stamp, not the file's `cli_version`: the probe can only refresh the gate, so asking
+ *  the wider question here would re-probe on every single run once the CLI has moved past the spikes' build. */
+export const probeReason = (hasCapabilities: boolean, probed: string, current: string): "missing" | "drift" | null =>
+  !hasCapabilities ? "missing" : driftWarns(versionDrift(probed, current)) ? "drift" : null;
 export function tomlStringify(c: Config): string {
   const q = (v: unknown): string => (typeof v === "string" ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(q).join(", ")}]` : v === null ? "" : String(v));
   const lines: string[] = [`port = ${c.port}`, `max_concurrent_agents = ${c.max_concurrent_agents}`, `claude_bin = ${q(c.claude_bin)}`, `path_prepend = ${q(c.path_prepend)}`, ""];
@@ -129,11 +131,11 @@ export async function setup(rest: string[]) {
   if (!hasMcp) { const r = await run([cfg.claude_bin, "mcp", "add", "--scope", "user", "relay", "--", ...relayArgv(), "mcp"]); if (r.code === 0) p.log.success("MCP server relay registered (user scope)"); else p.log.warn(`MCP registration failed: ${r.err.slice(0, 200)}`); }
   else p.log.success("MCP server relay already registered");
   // ⑧ capabilities — the probe only (doctor() is a CLI entry point that exits)
-  const caps = loadCapabilities(); const reason = probeReason(existsSync(paths.capabilities), caps.cli_version, ver);
+  const caps = loadCapabilities(); const reason = probeReason(existsSync(paths.capabilities), gateVersion(caps), ver);
   if (reason) {
     const d = await import("./doctor.ts");
     const why = reason === "drift"
-      ? `Re-probing capabilities: claude moved ${showVersion(caps.cli_version)} → ${showVersion(ver)} since they were measured`
+      ? `Re-checking the --bg --resume gate: claude moved ${showVersion(gateVersion(caps))} → ${showVersion(ver)} since it was measured`
       : "Probing capabilities";
     const c = await withSpinner(`${why} — spawns one background session (about a minute)`,
       () => d.probeCapabilities(cfg.claude_bin), (r) => `capabilities — ${r.detail}`);

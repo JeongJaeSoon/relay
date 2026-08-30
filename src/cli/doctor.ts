@@ -4,7 +4,7 @@ import { homedir } from "node:os"; import { join } from "node:path";
 import { loadConfig, paths } from "../config.ts";
 import { openDb } from "../db/db.ts";
 import { NativeSessionRunner } from "../runner/native.ts";
-import { driftWarns, loadCapabilities, showVersion, versionDrift, type DriftLevel } from "../runner/capabilities.ts";
+import { driftWarns, loadCapabilities, showVersion, versionDrift, versionOk, type DriftLevel } from "../runner/capabilities.ts";
 import { has, relayBin } from "./client.ts";
 export interface Check { name: string; ok: boolean; detail: string; fix?: string }
 export const checkPerms = (p: string, mode: number): Check => { if (!existsSync(p)) return { name: p, ok: false, detail: "missing" }; const m = statSync(p).mode & 0o777; return { name: p, ok: m === mode, detail: m.toString(8), fix: m === mode ? undefined : `chmod ${mode.toString(8)} ${p}` }; };
@@ -36,7 +36,7 @@ async function serviceChecks(): Promise<Check[]> {
 /** Library entry: every check, no process.exit (setup reuses pieces, tests call it directly). */
 export async function runChecks(opts: { service?: boolean; probe?: boolean } = {}): Promise<Check[]> {
   const cfg = loadConfig(); const r: Check[] = []; const pathEnv = [...cfg.path_prepend, process.env.PATH ?? ""].join(":");
-  const ver = (await run([cfg.claude_bin, "--version"])).out.trim(); r.push({ name: "claude CLI", ok: /(\d+)\.(\d+)\.(\d+)/.test(ver) && (await import("./setup.ts")).versionOk(ver), detail: ver || "missing", fix: "claude update" });
+  const ver = (await run([cfg.claude_bin, "--version"])).out.trim(); r.push({ name: "claude CLI", ok: /(\d+)\.(\d+)\.(\d+)/.test(ver) && versionOk(ver), detail: ver || "missing", fix: "claude update" });
   const login = await run([cfg.claude_bin, "-p", "reply OK", "--tools", "", "--max-turns", "1", "--effort", "low", "--output-format", "json"], 60_000); r.push({ name: "CLI login", ok: login.code === 0 && !/"is_error":true/.test(login.out), detail: login.code === 0 ? "ok" : login.err.slice(0, 80), fix: "claude → /login" });
   for (const bin of ["node", "claude"]) { const w = await run(["sh", "-c", `PATH="${pathEnv}" command -v ${bin}`]); r.push({ name: `${bin} on PATH`, ok: w.code === 0, detail: w.out.trim(), fix: "relay setup (refreshes path_prepend)" }); }
   r.push({ name: "ANTHROPIC_API_KEY unset", ok: !process.env.ANTHROPIC_API_KEY, detail: process.env.ANTHROPIC_API_KEY ? "set (stripped in the service)" : "", fix: "unset ANTHROPIC_API_KEY" });
@@ -60,22 +60,29 @@ export async function runChecks(opts: { service?: boolean; probe?: boolean } = {
   const ds = await run([cfg.claude_bin, "daemon", "status"]);   // hidden subcommand (not in --help); informational only — a stopped supervisor is normal and starts on the first --bg
   r.push({ name: "claude supervisor", ok: true, detail: ds.code === 0 ? `pid ${parseDaemonStatus(ds.out).pid} · ${parseDaemonStatus(ds.out).version}` : "not running (starts on the first --bg)" });
   r.push({ name: "capabilities", ok: existsSync(paths.capabilities), detail: existsSync(paths.capabilities) ? `delivery=${JSON.parse(readFileSync(paths.capabilities, "utf8")).delivery}` : "missing", fix: "relay doctor --probe" });
-  if (existsSync(paths.capabilities)) r.push(cliDriftCheck(loadCapabilities().cli_version, ver));   // never probed is the check above's job, not this one's
+  if (existsSync(paths.capabilities)) { const caps = loadCapabilities(); r.push(cliDriftCheck(caps.cli_version, ver, caps.probe_cli_version)); }   // never probed is the check above's job, not this one's
   if (opts.probe) r.push(await probeCapabilities(cfg.claude_bin));
   if (opts.service) { r.push(...(await serviceChecks())); r.push({ name: "[service] Keychain auth", ok: (await serviceAuthProbe(cfg.claude_bin)) === "keychain" || existsSync(paths.oauthToken), detail: existsSync(paths.oauthToken) ? "token file fallback" : "", fix: "claude setup-token → relay setup --service" }); }
   return r;
 }
 const DRIFT_NOTE: Record<DriftLevel, string> = {
-  same: "in sync", patch: "patch bump — the measured behaviour is assumed to hold",
-  minor: "minor bump — the measured CLI behaviour may be stale", major: "major bump — the measured CLI behaviour may be stale",
+  same: "in sync", patch: "patch bump — this CLI ships its releases here, so the measured behaviour can still move",
+  minor: "minor bump — the measured CLI behaviour may be stale", major: "major bump — expect the measured CLI behaviour to be stale",
   unknown: "not comparable",
 };
+export const DRIFT_FIX = "relay doctor --probe — re-checks the --bg --resume gate only; the rest of capabilities.json comes from the Phase 0 spikes and only a spike re-run refreshes it";
+/** A probe spends a real background session, so never ask for one the user has already run against this CLI. */
+export const DRIFT_FIX_PROBED = "the --bg --resume gate is already re-checked on this CLI — another probe would tell you nothing new; the rest of capabilities.json comes from the Phase 0 spikes and only a spike re-run refreshes it";
 /** capabilities.json is measured once against one CLI build and nothing re-measures it on `claude update`, so a
  *  changed CLI otherwise shows up only as quiet misbehaviour (a spawn parsed as `unknown`, a hook payload that
- *  projects wrong). Probing is the user's call — it spawns a real session — so this only ever reports. */
-export function cliDriftCheck(recorded: string, current: string): Check {
+ *  projects wrong). Probing is the user's call — it spawns a real session — so this only ever reports.
+ *  `probed` is the gate's own stamp: it is reported, never used to clear the warning, because re-measuring two of
+ *  the file's ~70 facts says nothing about the other 68. */
+export function cliDriftCheck(recorded: string, current: string, probed?: string): Check {
   const level = versionDrift(recorded, current);
-  return { name: "CLI version drift", ok: !driftWarns(level), detail: `probed against ${showVersion(recorded)} · currently ${showVersion(current)} (${DRIFT_NOTE[level]})`, fix: "relay doctor --probe" };
+  const reprobed = driftWarns(level) && versionDrift(probed ?? "", current) === "same";
+  const gate = reprobed ? ` · --bg --resume re-checked on ${showVersion(current)}` : "";
+  return { name: "CLI version drift", ok: !driftWarns(level), detail: `probed against ${showVersion(recorded)} · currently ${showVersion(current)} (${DRIFT_NOTE[level]})${gate}`, fix: reprobed ? DRIFT_FIX_PROBED : DRIFT_FIX };
 }
 /** CLI entry: the only function here that exits. */
 export async function doctor(rest: string[]) {
@@ -83,6 +90,13 @@ export async function doctor(rest: string[]) {
   if (has(rest, "--json")) process.stdout.write(JSON.stringify(r, null, 2) + "\n"); else if (!has(rest, "--quiet")) process.stdout.write(summarize(r) + "\n");
   process.exit(r.some((c) => !c.ok) ? 1 : 0);
 }
+/** What a probe run is allowed to write back. `cli_version` is deliberately absent from the result: it records the
+ *  CLI the *whole* file was measured against, and this probe re-measures two of its ~70 facts. Restamping it would
+ *  clear a true drift warning on the strength of a measurement that never happened — and on a failed probe it would
+ *  do that while writing `bgResume: "fail"`. The probe's own reach is recorded separately, outcome either way.
+ *  `delivery` moves only on success: a failed gate is no evidence for a delivery method (no print fallback, C9). */
+export const mergeProbeResult = (caps: Record<string, any>, cliVersion: string, ok: boolean, at = new Date().toISOString()): Record<string, any> =>
+  ({ ...caps, bgResume: ok ? "context-kept" : "fail", ...(ok ? { delivery: caps.delivery ?? "resume" } : {}), probe_cli_version: cliVersion, probed_at: at });
 /** Abridged Phase 0 ①: --bg spawn → wait idle → stop → --bg --resume → alive. All CLI parsing lives in NativeSessionRunner (roadmap Global Constraints). Budget ≈ 90s. */
 export async function probeCapabilities(claudeBin: string): Promise<Check> {
   const runner = new NativeSessionRunner(probeEnv, { claudeBin }); const cwd = join(paths.home, "probe"); mkdirSync(cwd, { recursive: true });
@@ -98,7 +112,7 @@ export async function probeCapabilities(claudeBin: string): Promise<Check> {
     const r = await runner.resume({ sessionId: row.session_id, cwd, name: "relay-probe", settingsJson: "{}", prompt: "What was the word? Reply with it only.", env: {} }); short2 = r.short_id;
     const ok = !!(await poll((rows) => rows.some((x) => x.short_id === short2 && x.alive), 30_000));
     const caps = existsSync(paths.capabilities) ? JSON.parse(readFileSync(paths.capabilities, "utf8")) : {};
-    writeFileSync(paths.capabilities, JSON.stringify({ ...caps, cli_version: (await run([claudeBin, "--version"])).out.trim(), bgResume: ok ? "context-kept" : "fail", ...(ok ? { delivery: caps.delivery ?? "resume" } : {}), probed_at: new Date().toISOString() }, null, 2));   // no print fallback (C9)
+    writeFileSync(paths.capabilities, JSON.stringify(mergeProbeResult(caps, (await run([claudeBin, "--version"])).out.trim(), ok), null, 2));
     return { name: "capability probe", ok, detail: ok ? "--bg --resume ok" : "--bg --resume failed — Phase 0 ① needs a rethink (no print fallback)" };
   } catch (e) { return { name: "capability probe", ok: false, detail: String(e).slice(0, 160) }; }
   finally { await cleanup([short2, short]); }

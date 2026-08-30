@@ -11,10 +11,12 @@ test("an identical version is not drift", () => {
   expect(driftWarns("same")).toBe(false);
 });
 
-test("a patch bump is reported but stays quiet", () => {
+// Claude Code's release stream lives in the patch field — the floor is 2.1.251 and `claude update` moves to 2.1.3xx —
+// so a patch bump is the common case, not a negligible one, and it does move measured surfaces (roadmap C7).
+test("a patch bump warns", () => {
   expect(versionDrift("2.1.251", "2.1.260")).toBe("patch");
   expect(versionDrift("2.1.260", "2.1.251")).toBe("patch");                     // a downgrade is the same distance
-  expect(driftWarns("patch")).toBe(false);
+  expect(driftWarns("patch")).toBe(true);
 });
 
 test("a minor bump warns", () => {
@@ -43,6 +45,7 @@ test("currentCliVersion reads the version line, and yields \"\" when the binary 
   const v = await currentCliVersion(bin);
   expect(v).toBe("2.1.240 (Claude Code)");
   expect(versionOk(v)).toBe(false);                                             // below the 2.1.251 floor → boot warns
-  expect(versionDrift("2.1.251", v)).toBe("patch");                             // ...while the drift check stays quiet: the two are independent
+  expect(versionDrift("2.1.251", v)).toBe("patch");                             // ...and drifts too, but the two answer different questions
+  expect(versionDrift("unknown", v)).toBe("unknown");                           // a never-measured file leaves only the floor warning
   expect(await currentCliVersion(join(dir, "no-such-binary"))).toBe("");
 });
