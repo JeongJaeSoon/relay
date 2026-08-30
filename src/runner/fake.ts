@@ -7,7 +7,9 @@ export class FakeRunner implements AgentRunner {
   constructor(public ingest: Hook = () => {}) {}
   private mk(name: string, cwd: string, sessionId: string = crypto.randomUUID()) { const short = `fake${++this.n}`; this.rows.set(short, { short_id: short, session_id: sessionId, name, cwd, pid: 1000 + this.n, alive: true, busy: true, waiting_for: null, raw: {} }); return short; }
   async spawn(spec: SpawnSpec) { this.calls.push({ kind: "spawn", args: spec }); const short = this.mk(spec.name, spec.cwd); return { short_id: short, name: spec.name }; }
-  async resume(p: { sessionId: string; cwd: string; name: string; prompt: string }) { this.calls.push({ kind: "resume", args: p }); return { short_id: this.mk(p.name, p.cwd, p.sessionId) }; }
+  /** `claude --bg --resume <uuid>` FORKS: the resumed session gets a NEW session id and reports SessionStart
+   *  source "fork" (Phase 0 ④). Only the supervisor's own respawn keeps the id. */
+  async resume(p: { sessionId: string; cwd: string; name: string; prompt: string }) { this.calls.push({ kind: "resume", args: p }); return { short_id: this.mk(p.name, p.cwd) }; }
   async stop(shortId: string) { this.calls.push({ kind: "stop", args: shortId }); const r = this.rows.get(shortId); if (r) { r.alive = false; r.pid = null; r.busy = null; } }
   async rm(shortId: string) { this.calls.push({ kind: "rm", args: shortId }); this.rows.delete(shortId); return { worktreeKept: false }; }
   async list(all = false) { return [...this.rows.values()].filter((r) => all || r.alive); }

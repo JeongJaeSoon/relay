@@ -7,6 +7,7 @@ import { EventLog, loadTask } from "../core/events.ts";
 import { taskUuid as newUuid, ulid } from "../core/ids.ts";
 import { log as slog } from "../log.ts";
 import { getMeta } from "../db/db.ts";
+import { writeOwner } from "../lifecycle/outbox.ts";
 import { pushInbox } from "./inbox.ts";
 
 /** Every hook event relay understands on `POST /api/hooks`. */
@@ -36,7 +37,10 @@ export type IngestResult = { status: number; json: unknown } | { status: 200; wa
 
 /** Identifies one permission request. The measured payload (Phase 0 `permission-request.json`) carries **no
  *  `tool_use_id`** — the request is raised before the tool call exists — so fall back to a digest of the turn plus the
- *  tool and its input. Two deliveries of the same request hash the same, which is exactly the dedupe B4 wants. */
+ *  tool and its input. Two deliveries of the same request hash the same, which is exactly the dedupe B4 wants.
+ *  ponytail: the ceiling is two IDENTICAL pending tool calls in one turn — they share a digest and so share one
+ *  allow/deny. Fixing that means correlating back to the preceding PreToolUse (which does carry `tool_use_id`) and
+ *  carrying that state per turn; not worth it until someone sees it happen. */
 export const permissionId = (b: any): string => b.tool_use_id ?? `pr:${createHash("sha256").update(`${b.prompt_id ?? ""}|${b.tool_name ?? ""}|${JSON.stringify(b.tool_input ?? {})}`).digest("hex").slice(0, 16)}`;
 
 export function sourceEventId(b: any, gen: number | null): string {
@@ -54,8 +58,17 @@ export function resolveTask(db: Database, b: any, headerTask?: string): Task | n
   if (headerTask) { const t = loadTask(db, headerTask); if (t) return t; }
   if (b.relay_task_uuid) { const t = loadTask(db, b.relay_task_uuid); if (t) return t; }
   const r = db.query("select uuid from tasks where session_id=?").get(b.session_id) as any; if (r) return loadTask(db, r.uuid);
+  // a superseded link in the session chain: `--bg --resume` forks to a new id, and every id relay has seen for this
+  // task survives on its process_instances rows, so a late hook from the old process still lands on the right task
+  const pi = db.query("select task_uuid from process_instances where session_id=? order by generation desc limit 1").get(b.session_id) as any; if (pi) return loadTask(db, pi.task_uuid);
   const w = db.query("select uuid from tasks where worktree_path=? and parent_uuid is null and status!='closed'").get(b.cwd) as any; return w ? loadTask(db, w.uuid) : null;
 }
+/** `--bg --resume` forks to a NEW session id (source "fork"); a supervisor respawn keeps the old one (source "resume"). */
+const RESUMED_SOURCES = new Set(["resume", "fork"]);
+const START_WINDOW_MS = 120_000;
+/** A spawn/resume relay itself issued just now — the only situation in which a task may bind to a different session id. */
+const startInFlight = (db: Database, taskUuid: string): boolean =>
+  !!db.query("select 1 from commands where task_uuid=? and kind in ('spawn','resume') and (state='running' or (state='applied' and applied_at>=?))").get(taskUuid, now() - START_WINDOW_MS);
 const stepOf = (b: any) => { const i = b.tool_input ?? {}; const d = i.file_path ?? i.path ?? i.pattern ?? (typeof i.command === "string" ? i.command.slice(0, 40) : i.description); return d ? `${b.tool_name} ${String(d).split("/").slice(-2).join("/")}`.slice(0, 60) : String(b.tool_name); };
 const PERMISSION_AUTO_DENY_MS = 14 * 60_000;   // must stay below the hook timeout (900s) so the CLI never sees a dangling request
 const RATE_LIMIT = /(rate.?limit|usage limit|quota|too many requests|429)/i;
@@ -71,18 +84,32 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
   if (!task) return orphan();
   const base = (gen: number | null) => ({ source_session_id: body.session_id ?? null, source_event_id: sourceEventId(body, gen), tool_use_id: body.tool_use_id ?? null, turn_id: body.prompt_id ?? null, payload: body });
   if (ev === "SessionStart") {
-    // Binding guard: a task binds to a session once; another session id cannot claim it (a prompt-injected worker with a forged header still fails).
-    if (task.session_id && task.session_id !== body.session_id) return orphan();
-    const gen = headerGen ?? (task.process_state === "alive" && task.session_id === body.session_id && body.source !== "resume" ? task.process_generation : task.process_generation + 1);
+    // Binding guard. A task's session identity is a CHAIN, not a value: `claude --bg --resume` forks to a new session
+    // id, so a differing id is legitimate exactly when this task's own token addressed us, relay has a spawn/resume in
+    // flight, and no other task already owns that id (tasks.session_id is UNIQUE — orphan beats a rolled-back emit).
+    const rebind = task.session_id != null && task.session_id !== body.session_id;
+    if (rebind && !(headers["x-relay-task"] === task.uuid && startInFlight(d.db, task.uuid) && !d.db.query("select 1 from tasks where session_id=? and uuid<>?").get(body.session_id, task.uuid))) return orphan();
+    const resumed = RESUMED_SOURCES.has(String(body.source ?? ""));
+    const gen = headerGen ?? (task.process_state === "alive" && task.session_id === body.session_id && !resumed ? task.process_generation : task.process_generation + 1);
     if (headerGen != null && headerGen < task.process_generation) return { status: 200, json: {} };   // late SessionStart of an older process
-    const stored = d.log.emit({ type: "process.started", task_uuid: task.uuid, process_generation: gen, ...base(gen), payload: { generation: gen, session_id: body.session_id, source: body.source, patch: { ...(body.source === "resume" ? { turn_state: "busy" } : {}), ...(task.status === "starting" ? { status: "running", started_at: task.started_at ?? now() } : {}) } } });
+    // The worktree path is exposed to relay only here (`agents --json` reports the launch cwd), so this is also where a
+    // spawn-time stamp that had to be deferred finally lands (roadmap B8).
+    const worktree = task.worktree_path ?? (typeof body.cwd === "string" && body.cwd ? body.cwd : null);
+    if (!task.worktree_path && worktree) writeOwner(worktree, { relay_instance_id: getMeta(d.db, "relay_instance_id") ?? "", task_uuid: task.uuid, session_id: body.session_id ?? null });
+    const stored = d.log.emit({ type: "process.started", task_uuid: task.uuid, process_generation: gen, ...base(gen), payload: { generation: gen, session_id: body.session_id, source: body.source, patch: { ...(!task.worktree_path && worktree ? { worktree_path: worktree } : {}), ...(resumed ? { turn_state: "busy" } : {}), ...(task.status === "starting" ? { status: "running", started_at: task.started_at ?? now() } : {}) } } });
     if (stored && task.status === "starting") d.log.emit({ type: "task.status_changed", task_uuid: task.uuid, payload: { status: "running", patch: {} } });
     return { status: 200, json: {} };
   }
   const gen = task.process_generation;
-  // I7: a hook from an older process of this session is recorded but must not touch projections. Primary signal = the generation nonce; fallback = the turn's first-seen generation (--resume keeps the session UUID).
+  // I7: a hook from an older process is recorded but must not touch projections. Staleness is decided by GENERATION,
+  // never by comparing session ids — after a fork the live session's id differs from every earlier one, so an id test
+  // would freeze the task forever. Signals, in order: the generation nonce (X-Relay-Gen); the generation this session
+  // id was last seen with (process_instances); the turn's first-seen generation (a supervisor respawn keeps the id).
+  const otherSession = body.session_id != null && task.session_id != null && body.session_id !== task.session_id;
+  const sessionGen = otherSession ? (d.db.query("select generation g from process_instances where task_uuid=? and session_id=? order by generation desc limit 1").get(task.uuid, body.session_id) as any)?.g ?? null : null;
+  const unplaceable = otherSession && sessionGen == null && headerGen == null;   // a session relay has never seen and cannot date
   const firstGen = headerGen == null && body.prompt_id ? (d.db.query("select process_generation g from events where source_session_id=? and turn_id=? and process_generation is not null order by seq limit 1").get(body.session_id, body.prompt_id) as any)?.g ?? null : null;
-  const stale = (task.session_id && body.session_id !== task.session_id) || (headerGen != null && headerGen < gen) || (firstGen != null && firstGen < gen) || (ev !== "SessionEnd" && ["stopped", "crashed"].includes(task.process_state));
+  const stale = unplaceable || (sessionGen != null && sessionGen < gen) || (headerGen != null && headerGen < gen) || (firstGen != null && firstGen < gen) || (ev !== "SessionEnd" && ["stopped", "crashed"].includes(task.process_state));
   const stored = d.log.emit({ type: `hook.${ev}`, task_uuid: task.uuid, process_generation: headerGen ?? gen, ...base(headerGen ?? gen) });
   if (stale) return { status: 200, json: {} };
   if (!stored) {                                                             // duplicate delivery: replay the same answer for a still-pending PermissionRequest, otherwise no-op

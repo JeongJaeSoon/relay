@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { openDb, migrate } from "../../../src/db/db.ts";
+import { mkdtempSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
+import { openDb, migrate, setMeta } from "../../../src/db/db.ts";
 import { EventLog, loadTask } from "../../../src/core/events.ts";
 import { parseConfig } from "../../../src/config.ts";
-import { ingestHook, permissionId, type IngestDeps } from "../../../src/hooks/ingest.ts";
+import { readOwner } from "../../../src/lifecycle/outbox.ts";
+import { ingestHook, permissionId, resolveTask, type IngestDeps } from "../../../src/hooks/ingest.ts";
 import stopFx from "../../fixtures/stop-done.json";
 import permFx from "../../fixtures/permission-request.json";
 import subStartFx from "../../fixtures/subagent-start.json";
@@ -124,6 +126,32 @@ describe("ingestHook", () => {
     s.post({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_use_id: "tuA", tool_input: {} }); expect(s.acquired).toEqual(["sub:u1:tuA"]);
     s.post({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: "tuA", tool_input: {}, error: "denied" }); expect(s.acquired).toEqual([]);
     s.post({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "tuB", tool_input: {}, tool_response: "Error: 429 rate limit exceeded, resets 3:00pm" }); expect(s.limits.length).toBe(1);
+  });
+  test("a --bg --resume fork rebinds the session chain: the new id takes over, the old one stays resolvable, and its late hooks are stale rather than foreign", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    expect(loadTask(s.db, "u1")!.session_id).toBe("sess-1");
+    // relay issued the resume that produced the fork
+    s.log.emit({ type: "command.queued", task_uuid: "u1", payload: { id: "resume:u1", kind: "resume", payload: { kind: "resume", prompt: "go on", marker: "0000ffff" } } });
+    s.log.emit({ type: "command.applied", task_uuid: "u1", payload: { id: "resume:u1" } });
+    const forked = ingestHook({ session_id: "sess-2", transcript_path: "/t", cwd: "/p/.claude/worktrees/relay-x", hook_event_name: "SessionStart", source: "fork" }, { "x-relay-task": "u1" }, s.deps);
+    expect(forked.status).toBe(200);
+    const t = loadTask(s.db, "u1")!; expect(t.session_id).toBe("sess-2"); expect(t.process_generation).toBe(2); expect(t.turn_state).toBe("busy");   // "fork" counts as a resume
+    expect(resolveTask(s.db, { session_id: "sess-1" })!.uuid).toBe("u1");                              // superseded id still resolves via process_instances
+    s.post({ ...(stopFx as any), session_id: "sess-1", prompt_id: "old-turn" }); expect(s.stops.length).toBe(0);   // I7: older generation, recorded only
+    ingestHook({ ...(stopFx as any), session_id: "sess-2", transcript_path: "/t", cwd: "/p", prompt_id: "new-turn" }, { "x-relay-task": "u1" }, s.deps);
+    expect(s.stops.length).toBe(1);                                                                    // the live session still drives the verdict
+  });
+  test("a fork source does not bypass the binding guard when relay has no spawn/resume in flight", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    const r = ingestHook({ session_id: "sess-9", transcript_path: "/t", cwd: "/x", hook_event_name: "SessionStart", source: "fork" }, { "x-relay-task": "u1" }, s.deps);
+    expect(r.status).toBe(202); expect(loadTask(s.db, "u1")!.session_id).toBe("sess-1");
+  });
+  test("the first hook records the worktree path (the only place the CLI exposes it) and lands the deferred ownership stamp", () => {
+    const s = setup(); const wt = mkdtempSync(join(tmpdir(), "relay-wt-hook-"));
+    s.db.run("update tasks set worktree_path=null where uuid='u1'"); setMeta(s.db, "relay_instance_id", "inst");
+    ingestHook({ session_id: "sess-1", transcript_path: "/t", cwd: wt, hook_event_name: "SessionStart", source: "startup" }, { "x-relay-task": "u1" }, s.deps);
+    expect(loadTask(s.db, "u1")!.worktree_path).toBe(wt);
+    expect(readOwner(wt)).toMatchObject({ task_uuid: "u1", relay_instance_id: "inst", session_id: "sess-1" });
   });
   test("an unknown hook name is rejected; WorktreeCreate is accepted even though relay never injects it", () => {
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });

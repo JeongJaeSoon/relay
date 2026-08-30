@@ -3,10 +3,17 @@ import { openDb, migrate } from "../../../src/db/db.ts";
 import { EventLog, loadTask } from "../../../src/core/events.ts";
 import { parseConfig } from "../../../src/config.ts";
 import { FakeRunner } from "../../../src/runner/fake.ts";
-import { Outbox } from "../../../src/lifecycle/outbox.ts";
-import { mkdtempSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
+import { Outbox, readOwner } from "../../../src/lifecycle/outbox.ts";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
 
 const cfg = parseConfig("");
+/** Stand in for ~/.claude/jobs/<short>/state.json, the only place the CLI exposes a session's worktree path. */
+function jobsDir(map: Record<string, string>) {
+  const base = mkdtempSync(join(tmpdir(), "relay-jobs-"));
+  for (const [short, worktreePath] of Object.entries(map)) { mkdirSync(join(base, short), { recursive: true }); writeFileSync(join(base, short, "state.json"), JSON.stringify({ worktreePath })); }
+  const saved = process.env.RELAY_CLAUDE_JOBS_DIR; process.env.RELAY_CLAUDE_JOBS_DIR = base;
+  return { restore: () => { if (saved === undefined) delete process.env.RELAY_CLAUDE_JOBS_DIR; else process.env.RELAY_CLAUDE_JOBS_DIR = saved; } };
+}
 const spec = (uuid: string) => ({ taskUuid: uuid, displayId: "T-01", name: "relay:T-01 t", cwd: "/p", worktree: "relay-abc", model: "m", effort: "xhigh" as const, permissionMode: "auto", advisor: null, agent: "relay-worker", settingsJson: "{}", prompt: "[relay #00000001] T-01\n\nhi", env: {} });
 function setup(delivery: "socket" | "resume" = "resume") {
   const db = openDb(":memory:"); migrate(db); const log = new EventLog(db, () => {}, cfg); db.run("insert into projects(id,name,path,created_at) values('p','p','/p',1)");
@@ -25,12 +32,30 @@ describe("Outbox", () => {
     s.log.emit({ type: "task.status_changed", task_uuid: "u1", payload: { status: "starting", patch: { status: "starting" } } }); await s.ob.run("u1");
     expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(1); expect(s.states()).toEqual(["applied"]); expect(loadTask(s.db, "u1")!.short_id).toBe("fake1");
   });
-  test("spawn adopts an already-running session only when its cwd carries our owner stamp (crash between exec and record)", async () => {
+  test("spawn adopts an already-running session only when its WORKTREE carries our owner stamp (crash between exec and record)", async () => {
     const s = setup(); s.mk("u1", "starting");
-    const cwd = mkdtempSync(join(tmpdir(), "relay-wt-")); writeFileSync(join(cwd, ".relay-owner"), JSON.stringify({ relay_instance_id: "inst", task_uuid: "u1", session_id: "sid" }));
-    s.runner.rows.set("pre", { short_id: "pre", session_id: "sid", name: "relay:T-01 t", cwd, pid: 5, alive: true, busy: true, waiting_for: null, raw: {} });
+    // `agents --json` reports the launch cwd (the project root); the worktree lives in ~/.claude/jobs/<short>/state.json
+    const wt = mkdtempSync(join(tmpdir(), "relay-wt-")); writeFileSync(join(wt, ".relay-owner"), JSON.stringify({ relay_instance_id: "inst", task_uuid: "u1", session_id: "sid" }));
+    const jobs = jobsDir({ pre: wt });
+    s.runner.rows.set("pre", { short_id: "pre", session_id: "sid", name: "relay:T-01 t", cwd: "/p", pid: 5, alive: true, busy: true, waiting_for: null, raw: {} });
     s.ob.enqueue("u1", "k", { kind: "spawn", spec: spec("u1") }); await s.ob.run("u1");
-    expect(s.runner.calls.length).toBe(0); expect(loadTask(s.db, "u1")!.short_id).toBe("pre"); expect(loadTask(s.db, "u1")!.session_id).toBe("sid");
+    jobs.restore();
+    expect(s.runner.calls.length).toBe(0); expect(loadTask(s.db, "u1")!.short_id).toBe("pre"); expect(loadTask(s.db, "u1")!.session_id).toBe("sid"); expect(loadTask(s.db, "u1")!.worktree_path).toBe(wt);
+  });
+  test("a stamp in the LAUNCH cwd never adopts a git-project session — that directory is shared by every task in the project", async () => {
+    const s = setup(); s.mk("u1", "starting");
+    const launch = mkdtempSync(join(tmpdir(), "relay-proj-")); writeFileSync(join(launch, ".relay-owner"), JSON.stringify({ relay_instance_id: "inst", task_uuid: "u1", session_id: "sid" }));
+    s.runner.rows.set("pre", { short_id: "pre", session_id: "sid", name: "relay:T-01 t", cwd: launch, pid: 5, alive: true, busy: true, waiting_for: null, raw: {} });
+    s.ob.enqueue("u1", "k", { kind: "spawn", spec: spec("u1") }); await s.ob.run("u1");
+    expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(1);       // not adopted
+    expect(loadTask(s.db, "u1")!.worktree_path).toBeNull();                        // stamp deferred to the first hook
+  });
+  test("a non-git task stamps its launch cwd, which is its working directory", async () => {
+    const s = setup(); s.mk("u1", "starting");
+    const dir = mkdtempSync(join(tmpdir(), "relay-nogit-"));
+    s.ob.enqueue("u1", "k", { kind: "spawn", spec: { ...spec("u1"), worktree: null, cwd: dir } }); await s.ob.run("u1");
+    const row = [...s.runner.rows.values()].find((r) => r.short_id === "fake1")!;
+    expect(readOwner(dir)).toMatchObject({ task_uuid: "u1", session_id: row.session_id }); expect(loadTask(s.db, "u1")!.worktree_path).toBe(dir);
   });
   test("a same-named session without our owner stamp is NOT adopted — a fresh spawn happens", async () => {
     const s = setup(); s.mk("u1", "starting"); s.runner.rows.set("pre", { short_id: "pre", session_id: "sid", name: "relay:T-01 t", cwd: "/p", pid: 5, alive: true, busy: true, waiting_for: null, raw: {} });

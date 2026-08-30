@@ -1,6 +1,7 @@
 // src/lifecycle/outbox.ts — commands table + per-task serial executor (roadmap B3).
 import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Command, CommandKind, DeliveryMethod, SendOutcome, Task } from "@shared/types.ts";
 import { now } from "../core/clock.ts";
@@ -22,6 +23,17 @@ const rowToCommand = (r: any): Command => ({ ...r, payload: JSON.parse(r.payload
 export const OWNER_FILE = ".relay-owner";
 export interface Owner { relay_instance_id: string; task_uuid: string; session_id: string | null }
 export function readOwner(cwd: string | null): Owner | null { try { return cwd ? JSON.parse(readFileSync(join(cwd, OWNER_FILE), "utf8")) : null; } catch { return null; } }
+/** Stamp a directory as owned by one task (roadmap B8). Returns false when the directory is not there (yet). */
+export function writeOwner(dir: string | null, owner: Owner): boolean {
+  try { if (!dir || !existsSync(dir)) return false; writeFileSync(join(dir, OWNER_FILE), JSON.stringify(owner)); return true; } catch (e) { slog.warn("owner stamp failed", { dir, e: String(e) }); return false; }
+}
+/** `agents --json` reports a session's LAUNCH cwd, never its worktree (Phase 0 ④). The worktree path is exposed in
+ *  `~/.claude/jobs/<short>/state.json` as `worktreePath`, and later as the hook payload `cwd`. */
+export function jobWorktree(shortId: string | null): string | null {
+  if (!shortId) return null;
+  const base = process.env.RELAY_CLAUDE_JOBS_DIR ?? join(homedir(), ".claude", "jobs");
+  try { const j = JSON.parse(readFileSync(join(base, shortId, "state.json"), "utf8")); return typeof j.worktreePath === "string" && j.worktreePath ? j.worktreePath : null; } catch { return null; }
+}
 
 export class Outbox {
   private inflight = new Map<string, Promise<void>>(); private again = new Set<string>();
@@ -99,23 +111,36 @@ export class Outbox {
   private patch(t: Task, patch: Record<string, unknown>, cmd: Command) { this.log.emit({ type: "task.patched", task_uuid: t.uuid, causation_id: cmd.id, payload: { patch } }); }
   private async waitGone(shortId: string, ms = 10_000) { const t0 = now(); while (now() - t0 < ms) { const r = (await this.runner.list()).find((x) => x.short_id === shortId); if (!r || !r.alive) return true; await Bun.sleep(300); } return false; }
   private async waitRow(shortId: string, ms = 10_000): Promise<AgentRow | undefined> { const t0 = now(); for (;;) { const r = (await this.runner.list(true)).find((x) => x.short_id === shortId); if (r?.cwd && r.session_id) return r; if (now() - t0 > ms) return r; await Bun.sleep(300); } }
-  /** Ownership stamp + base_sha, written right after spawn (roadmap B8/§6.3). Adoption and reconcile require it to match. */
-  private stampWorktree(t: Task, row: AgentRow) {
-    const owner: Owner = { relay_instance_id: this.deps.instanceId(), task_uuid: t.uuid, session_id: row.session_id };
-    let base_sha: string | null = null, branch: string | null = null;
-    try { if (row.cwd && existsSync(row.cwd)) { writeFileSync(join(row.cwd, OWNER_FILE), JSON.stringify(owner)); const g = (a: string[]) => { const p = Bun.spawnSync(["git", "-C", row.cwd!, ...a], { stdout: "pipe", stderr: "ignore" }); return p.exitCode === 0 ? p.stdout.toString().trim() : null; }; base_sha = g(["rev-parse", "HEAD"]); branch = g(["rev-parse", "--abbrev-ref", "HEAD"]); } } catch (e) { slog.warn("owner stamp failed", { e: String(e) }); }
-    return { worktree_path: row.cwd, session_id: row.session_id, base_sha, branch };
+  /** Where this session's `.relay-owner` belongs. For a git project the row's cwd is the PROJECT ROOT, shared by every
+   *  task in it — stamping there would let one task adopt another's session (B8). The worktree is only in the job state
+   *  file, or later in the hook payload `cwd` (which ingest records as `worktree_path`). Without a worktree the launch
+   *  cwd IS the working directory, and the scheduler keeps a non-git project to one live task. */
+  private ownerDir(row: AgentRow, worktreeExpected: boolean, known: string | null): string | null {
+    return worktreeExpected ? jobWorktree(row.short_id) ?? known : row.cwd;
+  }
+  /** Ownership stamp + base_sha, written right after spawn (roadmap B8/§6.3). Adoption and reconcile require it to
+   *  match. If the worktree path is not knowable yet the stamp is deferred to the first hook (ingest writes it). */
+  private stampWorktree(t: Task, row: AgentRow, worktreeExpected: boolean): Record<string, unknown> {
+    const out: Record<string, unknown> = { session_id: row.session_id ?? undefined };
+    const dir = this.ownerDir(row, worktreeExpected, t.worktree_path);
+    if (!writeOwner(dir, { relay_instance_id: this.deps.instanceId(), task_uuid: t.uuid, session_id: row.session_id })) {
+      if (!dir) slog.info("owner stamp deferred to the first hook — worktree path not known yet", { task: t.uuid, short: row.short_id });
+      return out;
+    }
+    const g = (a: string[]) => { const p = Bun.spawnSync(["git", "-C", dir!, ...a], { stdout: "pipe", stderr: "ignore" }); return p.exitCode === 0 ? p.stdout.toString().trim() : null; };
+    return { ...out, worktree_path: dir, base_sha: g(["rev-parse", "HEAD"]), branch: g(["rev-parse", "--abbrev-ref", "HEAD"]) };
   }
   private async apply(cmd: Command, t: Task) {
     const p = cmd.payload as CommandPayload;
     switch (p.kind) {
       case "spawn": {
         const gen = t.process_generation + 1;
-        // adopt only a session that is provably ours: same name AND our owner stamp in its cwd (a crash between exec and record)
-        const existing = (await this.runner.list()).find((r) => r.name === p.spec.name && r.alive && readOwner(r.cwd)?.task_uuid === t.uuid);
+        const worktreeExpected = p.spec.worktree != null;
+        // adopt only a session that is provably ours: same name AND our owner stamp in its WORKTREE (a crash between exec and record)
+        const existing = (await this.runner.list()).find((r) => r.name === p.spec.name && r.alive && readOwner(this.ownerDir(r, worktreeExpected, t.worktree_path))?.task_uuid === t.uuid);
         const res = existing ? { short_id: existing.short_id!, name: existing.name! } : await this.runner.spawn({ ...p.spec, settingsJson: this.deps.settingsJson(t), env: this.deps.env(t, gen) });
         const row = existing ?? (await this.waitRow(res.short_id));
-        this.patch(t, { short_id: res.short_id, process_state: "starting", ...(row ? this.stampWorktree(t, row) : {}) }, cmd);
+        this.patch(t, { short_id: res.short_id, process_state: "starting", ...(row ? this.stampWorktree(t, row, worktreeExpected) : {}) }, cmd);
         this.applied(cmd, t, { short_id: res.short_id, adopted: !!existing }); return;
       }
       case "send": case "resume": {
@@ -137,7 +162,10 @@ export class Outbox {
         if (live?.alive && live.short_id) { await this.runner.stop(live.short_id); if (!(await this.waitGone(live.short_id))) throw new Error("stop not confirmed"); }
         const gen = t.process_generation + 1;
         const r = await this.runner.resume({ sessionId: t.session_id, cwd: live?.cwd ?? t.worktree_path ?? process.cwd(), name: `relay:${t.display_id} ${t.title}`, settingsJson: this.deps.settingsJson(t), prompt: text, env: this.deps.env(t, gen) });
-        this.patch(t, { short_id: r.short_id, process_state: "starting", paused: false }, cmd);
+        // `--bg --resume` FORKS to a NEW session id (Phase 0 ④). Bind the task to it now so the fork's SessionStart is
+        // the ordinary path; if the row is not there yet, ingest rebinds when that SessionStart arrives.
+        const fresh = await this.waitRow(r.short_id);
+        this.patch(t, { short_id: r.short_id, process_state: "starting", paused: false, ...(fresh?.session_id ? { session_id: fresh.session_id } : {}) }, cmd);
         outcome("accepted", "resume");                                       // B3: applied at `backgrounded ·` parse time; SessionStart(gen) confirms, watchdog fills a gap
         this.applied(cmd, t, { short_id: r.short_id }); return;
       }
@@ -148,6 +176,9 @@ export class Outbox {
       }
       case "rm": {
         const r = t.short_id ? await this.runner.rm(t.short_id) : { worktreeKept: false };
+        // `claude rm` keeps the session when its worktree has uncommitted or unpushed work (Phase 0 ④). B3: still
+        // applied, but the user has to be told the worktree is still on disk.
+        if (r.worktreeKept) this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: t.worktree_path, reason: "커밋되지 않은 작업이 남아 worktree를 보존했습니다" } });
         this.patch(t, { process_state: "stopped" }, cmd); this.applied(cmd, t, { worktreeKept: r.worktreeKept }); return;
       }
     }
