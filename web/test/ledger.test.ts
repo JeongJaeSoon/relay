@@ -65,8 +65,20 @@ test("a reply aimed at a task, a close request, and a task archived out of the s
   const t = task("u1", "T-01", "done");
   expect(one(msg({ dispatch_state: "direct", task_uuid: "u1", reply_to_task_uuid: "u1" }), byId(t))).toMatchObject({ disposition: "delivered", dispositionLabel: "Sent to T-01", bucket: "settled" });
   expect(one(msg({ task_uuid: "u1", dispatch_json: { action: "close_task", task_id: "T-01", confidence: "high" } }), byId(t))).toMatchObject({ disposition: "close_request", dispositionLabel: "Close T-01 requested", bucket: "needs_you", actions: ["close"] });
-  // the task closed long ago and no longer ships in the snapshot — the row must still say where the request went
-  expect(one(msg({ task_uuid: "gone", dispatch_json: { action: "new_task", confidence: "high" } }))).toMatchObject({ disposition: "new_task", dispositionLabel: "Started a task", state: "Archived", st: "closed", bucket: "settled", taskId: null });
+  // the task closed long ago and no longer ships in the snapshot — the row must still say where the request went,
+  // and a uuid the tasks map does not know can never become an action target
+  expect(one(msg({ task_uuid: "gone", dispatch_json: { action: "new_task", confidence: "high" } }))).toMatchObject({ disposition: "new_task", dispositionLabel: "Started a task", state: "Archived", st: "closed", bucket: "settled", taskId: null, actions: [] });
+});
+
+// A session relay did not start lives in store.foreign, never in store.tasks, and no message ever requested it. The
+// ledger is a fold over user messages, so it cannot invent a row for one — and an id the tasks map lacks yields no action.
+test("sessions relay only watches produce no ledger row and no action target", () => {
+  const foreignId = "4b49b9fc-2784-4322-8c08-2fb4b2a59316";
+  const rows = requestRows([msg({ text: "myapp refactor auth", task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } })], byId(task("u1", "T-01", "running")));
+  expect(rows).toHaveLength(1);
+  expect(rows.every((r) => r.taskUuid !== foreignId)).toBe(true);
+  const stray = one(msg({ dispatch_state: "direct", task_uuid: foreignId }));   // even were a session id to reach a message, it resolves to no task
+  expect(stray).toMatchObject({ taskId: null, taskStatus: null, actions: [] });
 });
 
 test("the stranded requests come first, then the in-flight ones, newest first inside each tier", () => {

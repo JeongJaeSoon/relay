@@ -39,6 +39,19 @@ an answer came back. Pure derivation over the snapshot the client already holds 
 | `dispatched` `answer_directly` | `hello there` | PASS — Answered by the dispatcher · `dispatch_json.answer` |
 | `failed` | (fake db에 주입) | PASS — Failed · `timeout` · `slack` source 배지 · Retry |
 | 필터/빈 상태 | — | PASS — Open 11→8행, All 11행, "Nothing open" + "Show all N", 초기 빈 문구 |
+| 외부 세션과 공존 | `RELAY_FAKE_FOREIGN=2` | PASS — 태스크 노드 3 + 외부 세션 노드 2(자체 열·점선·게이트웨이 엣지 없음), 사이드바 `Outside relay 2`, 원장 11행/7 need you가 동시에 정상. 외부 세션은 원장 행이 되지 않고(`S.foreign` 키가 `S.tasks`에 0건) 액션 대상도 되지 않는다. 상세 패널 배타성 양방향 확인: 외부 노드 → `Session detail · outside relay`, 원장의 T-01 칩 → `Task detail`(`fsel` 해제) |
+
+### QA에서 고친 것 (main 선재 버그)
+
+승격된 `question` 채팅 행은 태스크가 이미 `waiting_input`을 떠난 뒤에도 스냅숏에 남는다. 어댑터는
+`m.role === "question" && task`만 보고 `chatQuestion(t)`을 불렀고, 이 함수는 `t.question.q`를 읽는다 —
+`toDemoTask`는 `waiting_input`일 때만 `question`을 채우므로 **질문에 답한 뒤 새로고침하면**
+`TypeError: Cannot read properties of null (reading 'q')`가 `syncMessages` 안에서 터지고, 그 프레임의
+`sync()`가 통째로 중단돼 그래프·사이드바·원장이 아무것도 그려지지 않는다. `task?.question`으로 좁히고
+질문이 없으면 아래의 일반 채팅 행으로 떨어뜨린다(그 행의 텍스트가 이미 `❓ T-03 …`이다).
+
+이 줄은 `d9f5b8e`(어댑터 최초 커밋) 이후 그대로였고 `origin/main`과 동일하다 — 이 브랜치가 만든 회귀가
+아니라, 이 브랜치 검증 중에 드러난 것이다.
 
 Console stayed clean. `failed`와 "라우팅 직후 대상이 error가 되는" 두 형태는 FakeRunner가 스크립트를
 HTTP 왕복보다 빨리 끝내 재현이 레이스가 되므로, **fake db**에 직접 써서 렌더 경로만 확인했다
