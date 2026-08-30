@@ -94,17 +94,21 @@ describe("Outbox", () => {
     outcome = "unknown"; s.ob.enqueue("u1", "d", { kind: "send", text: "d", marker: "0000000d" }); s.ob.enqueue("u1", "e", { kind: "send", text: "e", marker: "0000000e" }); await s.ob.run("u1");
     expect(s.states().slice(-2)).toEqual(["unknown", "pending"]);                                     // an unknown head blocks its queue until promoted or confirmed
   });
-  test("socket delivery to a BUSY worker is held, never reported as delivered", async () => {
+  test("a socket send to a BUSY worker goes straight through; only the resume path waits for the turn boundary", async () => {
+    // Phase 0 ②: a frame sent mid-turn is read between tool calls (acked 22.8s into a turn whose Stop came at 86.6s).
     const s = setup("socket"); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive", turn_state: "busy" }); s.live("u1", "fake1", true);
     let sent = 0; (s.runner as any).sendSocket = async () => { sent++; return "accepted"; };
     s.ob.enqueue("u1", "a", { kind: "send", text: "a", marker: "0000000a" }); await s.ob.run("u1");
-    expect(sent).toBe(0); expect(s.states()).toEqual(["pending"]);                                    // the turn-boundary gate holds it before the socket is touched
-    s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { turn_state: "idle" } } });   // Stop hook
-    s.runner.rows.get("fake1")!.busy = true;                                                          // roster still says busy: hold again rather than send blind
-    await s.ob.run("u1"); expect(sent).toBe(0); expect(s.states()).toEqual(["pending"]);
-    expect(s.db.query("select json_extract(payload_json,'$.outcome') o from events where type='send.outcome'").all()).toEqual([{ o: "held" }]);
-    s.runner.rows.get("fake1")!.busy = false; await s.ob.run("u1");
-    expect(sent).toBe(1); expect(s.states()).toEqual(["unknown"]);                                    // sent, but unproven until the marker echo
+    expect(sent).toBe(1); expect(s.states()).toEqual(["unknown"]);                                    // delivered mid-turn, unproven until the marker echo
+    expect(s.db.query("select json_extract(payload_json,'$.outcome') o from events where type='send.outcome'").all()).toEqual([{ o: "unknown" }]);
+    s.ob.markAccepted("u1", "0000000a"); expect(s.states()).toEqual(["applied"]);
+
+    // The resume path still waits: it stops and restarts the session, so running it mid-turn would cut the turn.
+    const r = setup("resume"); r.mk("u2", "running", { session_id: "sid2", short_id: "fake2", process_state: "alive", turn_state: "busy" }); r.live("u2", "fake2", true);
+    r.ob.enqueue("u2", "b", { kind: "send", text: "b", marker: "0000000b" }); await r.ob.run("u2");
+    expect(r.states()).toEqual(["pending"]);
+    r.log.emit({ type: "task.patched", task_uuid: "u2", payload: { patch: { turn_state: "idle" } } });   // Stop hook
+    await r.ob.run("u2"); expect(r.states()).not.toEqual(["pending"]);
   });
   test("promoteFromTranscript clears a send that fired no UserPromptSubmit hook", async () => {
     const s = setup("socket"); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive", turn_state: "idle" }); s.live("u1", "fake1", false);
