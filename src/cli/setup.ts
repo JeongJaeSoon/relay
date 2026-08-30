@@ -7,8 +7,8 @@ import { client, relayArgv, has } from "./client.ts";
 import worker from "../../agents/relay-worker.md" with { type: "file" };     // embedded straight from the source files (bun build --compile)
 import explore from "../../agents/relay-explore.md" with { type: "file" };
 import verify from "../../agents/relay-verify.md" with { type: "file" };
-export const parseVersion = (s: string) => (s.match(/(\d+)\.(\d+)\.(\d+)/) ?? []).slice(1, 4).map(Number);
-export const versionOk = (s: string) => { const [a, b, c] = parseVersion(s); return a > 2 || (a === 2 && (b > 1 || (b === 1 && c >= 251))); };
+import { versionOk } from "../runner/capabilities.ts";
+export { parseVersion, versionOk } from "../runner/capabilities.ts";          // they live there because serve.ts needs them and must not import this module
 export function tomlStringify(c: Config): string {
   const q = (v: unknown): string => (typeof v === "string" ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(q).join(", ")}]` : v === null ? "" : String(v));
   const lines: string[] = [`port = ${c.port}`, `max_concurrent_agents = ${c.max_concurrent_agents}`, `claude_bin = ${q(c.claude_bin)}`, `path_prepend = ${q(c.path_prepend)}`, ""];

@@ -4,6 +4,7 @@ import { homedir } from "node:os"; import { join } from "node:path";
 import { loadConfig, paths } from "../config.ts";
 import { openDb } from "../db/db.ts";
 import { NativeSessionRunner } from "../runner/native.ts";
+import { driftWarns, loadCapabilities, showVersion, versionDrift, type DriftLevel } from "../runner/capabilities.ts";
 import { has, relayBin } from "./client.ts";
 export interface Check { name: string; ok: boolean; detail: string; fix?: string }
 export const checkPerms = (p: string, mode: number): Check => { if (!existsSync(p)) return { name: p, ok: false, detail: "missing" }; const m = statSync(p).mode & 0o777; return { name: p, ok: m === mode, detail: m.toString(8), fix: m === mode ? undefined : `chmod ${mode.toString(8)} ${p}` }; };
@@ -59,9 +60,22 @@ export async function runChecks(opts: { service?: boolean; probe?: boolean } = {
   const ds = await run([cfg.claude_bin, "daemon", "status"]);   // hidden subcommand (not in --help); informational only — a stopped supervisor is normal and starts on the first --bg
   r.push({ name: "claude supervisor", ok: true, detail: ds.code === 0 ? `pid ${parseDaemonStatus(ds.out).pid} · ${parseDaemonStatus(ds.out).version}` : "not running (starts on the first --bg)" });
   r.push({ name: "capabilities", ok: existsSync(paths.capabilities), detail: existsSync(paths.capabilities) ? `delivery=${JSON.parse(readFileSync(paths.capabilities, "utf8")).delivery}` : "missing", fix: "relay doctor --probe" });
+  if (existsSync(paths.capabilities)) r.push(cliDriftCheck(loadCapabilities().cli_version, ver));   // never probed is the check above's job, not this one's
   if (opts.probe) r.push(await probeCapabilities(cfg.claude_bin));
   if (opts.service) { r.push(...(await serviceChecks())); r.push({ name: "[service] Keychain auth", ok: (await serviceAuthProbe(cfg.claude_bin)) === "keychain" || existsSync(paths.oauthToken), detail: existsSync(paths.oauthToken) ? "token file fallback" : "", fix: "claude setup-token → relay setup --service" }); }
   return r;
+}
+const DRIFT_NOTE: Record<DriftLevel, string> = {
+  same: "in sync", patch: "patch bump — the measured behaviour is assumed to hold",
+  minor: "minor bump — the measured CLI behaviour may be stale", major: "major bump — the measured CLI behaviour may be stale",
+  unknown: "not comparable",
+};
+/** capabilities.json is measured once against one CLI build and nothing re-measures it on `claude update`, so a
+ *  changed CLI otherwise shows up only as quiet misbehaviour (a spawn parsed as `unknown`, a hook payload that
+ *  projects wrong). Probing is the user's call — it spawns a real session — so this only ever reports. */
+export function cliDriftCheck(recorded: string, current: string): Check {
+  const level = versionDrift(recorded, current);
+  return { name: "CLI version drift", ok: !driftWarns(level), detail: `probed against ${showVersion(recorded)} · currently ${showVersion(current)} (${DRIFT_NOTE[level]})`, fix: "relay doctor --probe" };
 }
 /** CLI entry: the only function here that exits. */
 export async function doctor(rest: string[]) {
