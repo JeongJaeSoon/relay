@@ -6,6 +6,8 @@ import { now } from "./clock.ts";
 type DistributiveOmit<T, K extends keyof any> = T extends unknown ? Omit<T, K> : never;
 export type FrameBody = DistributiveOmit<WsFrame, "seq" | "idx">;   // seq/idx are stamped by EventLog per event
 const J = (s: string | null) => (s ? JSON.parse(s) : null);
+/** `meta` keys owned by the runtime, not by settings: their own events (or the migrator) are the only writers. */
+const PROTECTED_META = new Set(["schema_version", "kill_switch", "recovering", "relay_instance_id"]);
 
 export function rowToTask(r: any): Task {
   const { question_json, summary_json, ...rest } = r;
@@ -76,7 +78,14 @@ export function applyProjection(db: Database, ev: EventEnvelope, cfg: Config): F
       taskFrame(ev.task_uuid!); break;
     }
     case ev.type === "process.ended": {
-      db.run("update process_instances set ended_at=?, end_reason=? where task_uuid=? and ended_at is null", [at, p.reason ?? null, ev.task_uuid]);
+      // Scoped by generation like process.started: the supervisor restarts `--bg` sessions (roadmap C1), so a SessionEnd
+      // from a superseded process arrives after the next one is already alive. Applying it would close the live instance
+      // and mark the task stopped (breaks I4 and I7).
+      const gen = (p.generation ?? ev.process_generation) as number | null;
+      const cur = (db.query("select process_generation from tasks where uuid=?").get(ev.task_uuid) as any)?.process_generation ?? 0;
+      if (gen != null && gen < cur) break;                                 // recorded in events, no projection
+      db.run(`update process_instances set ended_at=?, end_reason=? where task_uuid=? and ended_at is null${gen != null ? " and generation=?" : ""}`,
+        gen != null ? [at, p.reason ?? null, ev.task_uuid, gen] : [at, p.reason ?? null, ev.task_uuid]);
       patchTask(db, ev.task_uuid!, { process_state: p.crashed ? "crashed" : "stopped", turn_state: "idle", ...(p.patch ?? {}) }, at);
       taskFrame(ev.task_uuid!); break;
     }
@@ -99,7 +108,9 @@ export function applyProjection(db: Database, ev: EventEnvelope, cfg: Config): F
     case ev.type === "retention.swept": if (ev.task_uuid) db.run("update tasks set summary_json=?, updated_at=? where uuid=?", [JSON.stringify(p.summary), at, ev.task_uuid]); break;
     case ev.type === "system.paused": db.run("insert into meta(key,value) values('kill_switch','1') on conflict(key) do update set value='1'"); state(); break;
     case ev.type === "system.resumed": db.run("insert into meta(key,value) values('kill_switch','0') on conflict(key) do update set value='0'"); state(); break;
-    case ev.type === "settings.changed": for (const [k, v] of Object.entries(p)) db.run("insert into meta(key,value) values(?,?) on conflict(key) do update set value=excluded.value", [k, String(v)]); state(); break;
+    case ev.type === "settings.changed":                                    // never let a settings payload reach the keys that carry invariants — `schema_version` alone would silently disable every future migration
+      for (const [k, v] of Object.entries(p)) { if (PROTECTED_META.has(k)) continue; db.run("insert into meta(key,value) values(?,?) on conflict(key) do update set value=excluded.value", [k, String(v)]); }
+      state(); break;
     case ev.type === "project.registered": {
       const pr = p as Project;
       db.run("insert into projects(id,name,path,description,keywords_json,base_ref,is_git,created_at) values(?,?,?,?,?,?,?,?) on conflict(id) do update set name=excluded.name,path=excluded.path,description=excluded.description,keywords_json=excluded.keywords_json,base_ref=excluded.base_ref,is_git=excluded.is_git",

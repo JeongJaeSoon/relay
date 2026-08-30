@@ -1,8 +1,10 @@
 const PATTERNS: [RegExp, string][] = [
   [/sk-ant-[A-Za-z0-9_-]{20,}/g, "anthropic"], [/gh[pous]_[A-Za-z0-9]{36}/g, "github"], [/AKIA[0-9A-Z]{16}/g, "aws"],
-  [/Bearer [A-Za-z0-9._-]{20,}/g, "bearer"], [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "privatekey"],
-  [/CLAUDE_CODE_OAUTH_TOKEN=\S+/g, "oauth"],
+  [/Bearer [A-Za-z0-9._-]{20,}/g, "bearer"], [/-----BEGIN [A-Z ]*PRIVATE KEY-----[^"]*?-----END [A-Z ]*PRIVATE KEY-----/g, "privatekey"],
+  [/CLAUDE_CODE_OAUTH_TOKEN=[^\s"\\]+/g, "oauth"],
 ];
+// Patterns run over a serialized JSON document, so each must stay inside a single string value: `"` and `\` end one, and
+// eating them splices neighbouring keys together (or leaves the document unparseable) instead of hiding a secret.
 export function redact(s: string): string { return PATTERNS.reduce((acc, [re, kind]) => acc.replace(re, `[redacted:${kind}]`), s); }
 export const PAYLOAD_CAP = 65_536;
 /** Redact then cap. Oversized payloads are shrunk (strings, arrays and key counts) and flagged; the original is returned as `blob` for the blobs table. */

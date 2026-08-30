@@ -26,7 +26,7 @@ export class EventLog {
       for (const input of inputs) {
         const recorded_at = now(); const { json, truncated, blob } = capPayload(input.payload);
         const event_id = ulid();
-        const dup = input.source_session_id && input.source_event_id
+        const dup = input.source_session_id != null && input.source_event_id != null   // `!= null`, not truthy: an empty id still hits the UNIQUE index, so it must go through dedupe
           ? db.query("select seq from events where source_session_id=? and process_generation is ? and source_event_id=?").get(input.source_session_id, input.process_generation ?? null, input.source_event_id) : null;
         if (dup) { results.push(null); continue; }
         const r = db.run(`insert into events(event_id,type,task_uuid,source_session_id,source_event_id,process_generation,turn_id,tool_use_id,causation_id,occurred_at,recorded_at,payload_json,truncated,blob_id,v) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
