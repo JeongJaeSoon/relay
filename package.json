@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "spike": "bun run"
+    "spike": "bun run",
+    "build:web": "bun scripts/build-web.ts",
+    "test:web": "bun test web/test"
   },
   "devDependencies": {
     "@types/bun": "^1.4.0"
