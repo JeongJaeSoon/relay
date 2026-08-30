@@ -119,7 +119,7 @@ function renderLedger(){
 function setLedgerFilter(f){ledgerFilter=f;renderLedger()}
 
 /* ================= server actions (window.relay, installed by web/src/adapter.ts) ================= */
-function send(text){text=text.trim();if(!text)return;relay.send(text)}                     /* the server echoes the message as chat.message — no optimistic row */
+function send(text){text=text.trim();if(!text)return;relay.send(text,askActive())}         /* the server echoes the message as chat.message — no optimistic row */
 function answerQuestion(t,choice){if(t.status!=="wait")return;relay.answer(t,choice)}
 function stopTask(t){relay.stop(t)}
 function restartTask(t){relay.restart(t)}
@@ -1022,12 +1022,23 @@ kedEl.addEventListener("click",e=>{if(e.target===kedEl)closeKeysEd()});
 
 /* ================= input ================= */
 const input=$("#input"),chatForm=$("#chatForm"),DRAFT="relay-draft";
+const askBtn=$("#askBtn");
+const PH={msg:"Type a message — Enter to send, Shift+Enter for a new line",ask:"Ask a question — answered here, never turned into a task"};
+/* The toggle and a typed `?` are the same declaration; the canonical marker lives in shared/ask.ts, the server decides. */
+const ASK_RE=/^\?+\s*/;
+let askOn=false;
+const askActive=()=>askOn||ASK_RE.test(input.value);
+function renderAsk(){const a=askActive();askBtn.setAttribute("aria-pressed",a?"true":"false");input.placeholder=a?PH.ask:PH.msg}
+askBtn.addEventListener("click",()=>{
+  if(askActive()){askOn=false;input.value=input.value.replace(ASK_RE,"");autogrow()}else askOn=true;
+  renderAsk();input.focus();
+});
 function autogrow(){input.style.height="auto";input.style.height=input.scrollHeight+(input.offsetHeight-input.clientHeight)+"px"} /* +border: box-sizing is border-box but scrollHeight is not. CSS max-height caps it, then it scrolls */
 chatForm.addEventListener("submit",e=>{
   e.preventDefault(); /* IME 조합 중 Enter 가드는 아래 keydown이 담당 */
-  send(input.value);input.value="";localStorage.removeItem(DRAFT);autogrow();
+  send(input.value);input.value="";localStorage.removeItem(DRAFT);autogrow();renderAsk();  /* the Ask toggle is a mode: it stays on until it is turned off */
 });
-input.addEventListener("input",()=>{autogrow();localStorage.setItem(DRAFT,input.value)});
+input.addEventListener("input",()=>{autogrow();renderAsk();localStorage.setItem(DRAFT,input.value)});
 input.addEventListener("keydown",e=>{
   if(e.key!=="Enter")return;
   if(e.isComposing||e.keyCode===229)return; /* an Enter mid-composition commits the candidate: never send it, never swallow it either */
@@ -1042,4 +1053,4 @@ input.value=localStorage.getItem(DRAFT)||"";autogrow(); /* a long message surviv
 Object.assign(window,{S,N,LEDGER,msgs,gwEl});
 
 /* ================= boot ================= */
-layout();refresh();fit();renderNotif();renderSettings();renderBanner(); /* the empty screen anchors top-left the same way a populated one does */
+layout();refresh();fit();renderNotif();renderSettings();renderBanner();renderAsk(); /* the empty screen anchors top-left the same way a populated one does */

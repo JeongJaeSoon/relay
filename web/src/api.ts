@@ -1,10 +1,15 @@
+import { isAsk, stripAsk } from "@shared/ask.ts";
 import { readToken } from "./consts.ts";
 const h = () => ({ authorization: `Bearer ${readToken()}`, "content-type": "application/json" });
 export const api = {
   async get<T>(path: string): Promise<T> { const r = await fetch(`/api${path}`, { headers: h() }); if (!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); },
   async post<T = unknown>(path: string, body: unknown = {}, method = "POST"): Promise<T> { const r = await fetch(`/api${path}`, { method, headers: h(), body: JSON.stringify(body) }); if (!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); },
 };
-export const sendMessage = (text: string, replyTo?: string) => api.post<{ message_id: string }>("/messages", { text, client_message_id: crypto.randomUUID(), ...(replyTo ? { reply_to_task_id: replyTo } : {}) });
+/** Ask mode: the toggle and a typed `?` collapse into one request — the marker is stripped, the intent is declared. */
+export const sendMessage = (text: string, ask = false, replyTo?: string) => {
+  const q = !replyTo && (ask || isAsk(text));
+  return api.post<{ message_id: string }>("/messages", { text: q ? stripAsk(text) : text, client_message_id: crypto.randomUUID(), ...(q ? { ask: true } : {}), ...(replyTo ? { reply_to_task_id: replyTo } : {}) });
+};
 export const answer = (uuid: string, text: string) => api.post(`/tasks/${uuid}/answer`, { text });
 export const interrupt = (uuid: string) => api.post(`/tasks/${uuid}/interrupt`); export const close = (uuid: string) => api.post(`/tasks/${uuid}/close`); export const retry = (uuid: string) => api.post(`/tasks/${uuid}/retry`);
 export const attachLease = (uuid: string) => api.post<{ command: string }>(`/tasks/${uuid}/attach-lease`, { by: "dashboard" }); export const releaseAttach = (uuid: string) => api.post(`/tasks/${uuid}/attach-lease`, {}, "DELETE");

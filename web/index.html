@@ -375,6 +375,12 @@ header{
   background:var(--accent);color:var(--accent-ink);font-size:var(--fs-body);
 }
 #sendBtn:hover{filter:brightness(1.07)}
+#askBtn{
+  flex:none;white-space:nowrap;height:38px;padding:0 14px;border-radius:9px;cursor:pointer;font-weight:600;
+  background:var(--surface);color:var(--muted);border:1px solid var(--line-strong);font-size:var(--fs-body);
+}
+#askBtn:hover{border-color:var(--accent);color:var(--accent)}
+#askBtn[aria-pressed="true"]{background:var(--surface2);color:var(--accent);border-color:var(--accent);box-shadow:0 0 0 3px var(--ring)}
 
 /* ---------- notifications ---------- */
 .conn{display:flex;align-items:center;gap:5px;margin-left:auto;font-size:var(--fs-micro);color:var(--muted)}
@@ -662,6 +668,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
         <!-- Enter routes through requestSubmit() and #sendBtn is the submit button: any other button added here needs type="button" -->
         <form class="chat-in" id="chatForm">
           <textarea id="input" rows="1" autocomplete="off" aria-label="Message" placeholder="Type a message — Enter to send, Shift+Enter for a new line"></textarea>
+          <button id="askBtn" type="button" aria-pressed="false" title="Ask a question — or start your message with ?">Ask</button>
           <button id="sendBtn" type="submit">Send</button>
         </form>
       </div>
