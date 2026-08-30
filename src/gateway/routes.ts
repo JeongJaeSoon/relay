@@ -48,7 +48,17 @@ export function apiRoutes(ctx: AppContext) {
     if (reply) S.tasks.answer(reply, b.data.text, id); else S.dispatcher.enqueue(id);
     return c.json({ message_id: id }, 202);
   });
-  api.post("/messages/:id/redispatch", (c) => { const m = ctx.db.query("select * from messages where id=?").get(c.req.param("id")); if (!m) return bad(c, "not found", 404); ctx.log.emit({ type: "dispatch.requeued", payload: { message_id: c.req.param("id"), patch: { dispatch_state: "pending", dispatch_error: null } } }); S.dispatcher.enqueue(c.req.param("id")); return c.json({ ok: true }); });
+  // Redispatch re-runs the decision, and a decision always mints FRESH task uuids — so it is only ever offered for the
+  // states where no decision landed. `dispatched`/`fastpath` already produced their task or answer (re-deciding would
+  // duplicate them), `direct` never went through the dispatcher, and `deciding` is still in flight.
+  const REDISPATCHABLE = ["pending", "failed", "needs_confirm"];
+  const notRedispatchable: Record<string, string> = { dispatched: "it already produced a task — send a new message instead", fastpath: "it was already answered", direct: "it is a direct reply to a task, never dispatched", deciding: "it is still being decided" };
+  api.post("/messages/:id/redispatch", (c) => {
+    const id = c.req.param("id"); const m = ctx.db.query("select dispatch_state from messages where id=?").get(id) as any;
+    if (!m) return bad(c, "not found", 404);
+    if (!REDISPATCHABLE.includes(m.dispatch_state)) return bad(c, `cannot redispatch in ${m.dispatch_state} — ${notRedispatchable[m.dispatch_state] ?? "the decision already landed"}`, 409);
+    ctx.log.emit({ type: "dispatch.requeued", payload: { message_id: id, patch: { dispatch_state: "pending", dispatch_error: null } } }); S.dispatcher.enqueue(id); return c.json({ ok: true });
+  });
   api.post("/tasks/:id/answer", async (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (t.status !== "waiting_input") return bad(c, `not waiting for input (${t.status}) — use POST /api/messages`, 409); const b = z.object({ text: z.string().min(1) }).safeParse(await c.req.json()); if (!b.success) return bad(c, "text required"); if (!S.tasks.answer(t.uuid, b.data.text, null)) return bad(c, "the permission request already expired (auto-denied) — the worker moved on", 409); return c.json({ ok: true }); });
   api.post("/tasks/:id/interrupt", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (["closed", "cancelled"].includes(t.status)) return bad(c, `cannot interrupt in ${t.status}`, 409); const a = attached(c, t); if (a) return a; S.tasks.interrupt(t.uuid); return c.json({ ok: true }); });
   api.post("/tasks/:id/close", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); const a = attached(c, t); if (a) return a; S.tasks.close(t.uuid); return c.json({ ok: true }); });

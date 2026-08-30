@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildTestApp } from "../../helpers/app.ts";
+import { buildTestApp, decide } from "../../helpers/app.ts";
 import { FOREIGN_GRACE_MS } from "../../../src/lifecycle/foreign.ts";
 import { setNow } from "../../../src/core/clock.ts";
 describe("write routes", () => {
@@ -38,6 +38,29 @@ describe("write routes", () => {
     expect(gone.status).toBe(400); expect(await gone.text()).toContain("no such path");
 
     expect((await req("DELETE", `/api/projects/${id}`)).status).toBe(200);
+  });
+  test("redispatch refuses a message whose dispatch already landed — a second decision would mint a second task", async () => {
+    const s = await buildTestApp(decide({ action: "new_task", project: "myapp", title: "t", size: "small", prompt: "p", confidence: "high" }));
+    const r = await s.req("POST", "/api/messages", { text: "auth 리팩토링 해줘", client_message_id: "c1" }); const { message_id } = (await r.json()) as any;
+    await s.settle(120);
+    expect((s.db.query("select dispatch_state from messages where id=?").get(message_id) as any).dispatch_state).toBe("dispatched");
+    expect(s.db.query("select count(*) c from tasks").get()).toEqual({ c: 1 });
+    const again = await s.req("POST", `/api/messages/${message_id}/redispatch`);
+    expect(again.status).toBe(409); expect(await again.text()).toContain("dispatched");
+    await s.settle(120);
+    expect(s.db.query("select count(*) c from tasks").get()).toEqual({ c: 1 });                              // no second task
+    expect((s.db.query("select dispatch_state from messages where id=?").get(message_id) as any).dispatch_state).toBe("dispatched");
+  });
+  test("redispatch accepts only the states where no decision landed (pending/failed/needs_confirm)", async () => {
+    const s = await buildTestApp();
+    const seed = (id: string, dispatch_state: string) => s.log.emit({ type: "message.received", payload: { id, role: "user", source: "user", client_message_id: id, dispatch_state, text: "x", task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: 1 } });
+    for (const st of ["pending", "failed", "needs_confirm"]) { seed(`ok-${st}`, st); expect((await s.req("POST", `/api/messages/ok-${st}/redispatch`)).status).toBe(200); }
+    for (const st of ["deciding", "dispatched", "fastpath", "direct"]) {
+      seed(`no-${st}`, st); const res = await s.req("POST", `/api/messages/no-${st}/redispatch`);
+      expect(res.status).toBe(409); expect(await res.text()).toContain(st);
+      expect((s.db.query("select dispatch_state from messages where id=?").get(`no-${st}`) as any).dispatch_state).toBe(st);   // untouched
+    }
+    expect((await s.req("POST", "/api/messages/nope/redispatch")).status).toBe(404);
   });
   test("attached tasks refuse interrupt/close/retry (409); a late permission answer is 409; writes are 503 while recovering, reads stay open", async () => {
     const { req, db, seedTask } = await buildTestApp();
