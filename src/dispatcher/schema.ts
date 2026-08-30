@@ -43,6 +43,10 @@ export function splitGuard(d: DispatchDecision, maxSplit: number): string | null
   return null;
 }
 
+/** Ask mode's whole output: there is no `action` to return, so no routing decision can come back from the model. */
+export const AnswerSchema = z.object({ answer: z.string().min(1) });
+export const ANSWER_JSON_SCHEMA = { type: "object", additionalProperties: false, properties: { answer: { type: "string" } }, required: ["answer"] };
+
 const ACTIONS = ["new_task", "route_to_task", "answer_directly", "close_task"];
 const ITEM = {
   type: "object", additionalProperties: false,
