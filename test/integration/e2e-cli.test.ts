@@ -2,7 +2,7 @@
 // The dispatcher is scripted so the run costs one worker session and nothing else; everything after that — spawn,
 // worktree, hooks, verdict, close — is the real CLI. The session is always stopped and removed, including on failure.
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serve } from "../../src/serve.ts";
@@ -39,12 +39,13 @@ describe("e2e with real claude", () => {
       // never touch a session that is not ours: only our recorded short id, and only rows named for this smoke run in our temp project
       const ours = new Set<string>([task?.short_id].filter(Boolean));
       const list = sh([claudeBin, "agents", "--json", "--all"], proj);
-      if (list.code === 0) { try { for (const r of JSON.parse(list.out) as any[]) if (String(r.name ?? "").includes(TITLE) && String(r.cwd ?? "").startsWith(proj) && r.id) ours.add(r.id); } catch {} }
+      if (list.code === 0) { try { for (const r of JSON.parse(list.out) as any[]) if (String(r.name ?? "").includes(TITLE) && realpathSync(String(r.cwd ?? "/")).startsWith(realpathSync(proj)) && r.id) ours.add(r.id); } catch {} }
       for (const id of ours) {
         sh([claudeBin, "stop", id], proj); let rm = sh([claudeBin, "rm", id], proj);
         if (rm.code !== 0) {   // `claude rm` keeps a worktree holding unpushed commits (measured) — this is a throwaway temp repo, so drop it and retry
+          const real = realpathSync(proj);                                    // macOS puts the temp dir under /var, a symlink to /private/var — compare resolved paths or nothing matches
           for (const wt of sh(["git", "worktree", "list", "--porcelain"], proj).out.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9)))
-            if (wt.startsWith(proj) && wt !== proj) { sh(["git", "worktree", "unlock", wt], proj); sh(["git", "worktree", "remove", "-f", "-f", wt], proj); }
+            if (realpathSync(wt).startsWith(real) && realpathSync(wt) !== real) { sh(["git", "worktree", "unlock", wt], proj); sh(["git", "worktree", "remove", "-f", "-f", wt], proj); }
           rm = sh([claudeBin, "rm", id], proj);
         }
         console.log("cleanup", id, rm.code, (rm.out + rm.err).trim().slice(0, 200));
