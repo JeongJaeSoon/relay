@@ -90,8 +90,8 @@ export async function setup(rest: string[]) {
         if (!picks.length) say("  Skipped (descriptions and keywords can be filled in from the dashboard settings panel)");
         continue;
       }
-      say("  ⚠ Not a git repository, and none underneath. Registered as is, work happens directly in this directory with no worktree isolation, and the guard boundary widens to the whole directory.");
-      if (ask("  Register it anyway? (y/N)", "N").toLowerCase() !== "y") continue;
+      say("  ✖ Not a git repository, and none underneath. A project root must be a git repository — that is what gives each task its own worktree and bounds the guard.");
+      continue;
     }
     const name = ask("  Name", basename(path)); const description = ask("  Description", ""); const keywords = ask("  Keywords (comma-separated)", "").split(",").map((s) => s.trim()).filter(Boolean);
     await register({ name, path, description, keywords, is_git: isGit }); }

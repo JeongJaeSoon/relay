@@ -42,7 +42,15 @@ export async function runChecks(opts: { service?: boolean; probe?: boolean } = {
   r.push({ name: "git", ok: (await run(["git", "--version"])).code === 0, detail: "" });
   const up = await fetch(`http://127.0.0.1:${cfg.port}/api/usage`, { headers: { authorization: `Bearer ${existsSync(paths.apiToken) ? readFileSync(paths.apiToken, "utf8").trim() : ""}` } }).then((x) => x.ok).catch(() => false); r.push({ name: `server :${cfg.port}`, ok: true, detail: up ? "running" : "down", fix: up ? undefined : "brew services start relay" });
   if (existsSync(paths.serviceFailed)) r.push({ name: "service start-failure flag", ok: false, detail: `asleep after version ${readFileSync(paths.serviceFailed, "utf8").trim()} failed to start`, fix: `check the cause (~/Library/Logs/relay/stderr.log), then: rm ${paths.serviceFailed} && brew services restart relay` });
-  if (existsSync(paths.db)) { const db = openDb(paths.db); const ic = (db.query("pragma integrity_check").get() as any)?.integrity_check; db.close(); r.push({ name: "DB integrity", ok: ic === "ok", detail: String(ic), fix: "relay db restore <backup>" }); }
+  if (existsSync(paths.db)) { const db = openDb(paths.db); const ic = (db.query("pragma integrity_check").get() as any)?.integrity_check;
+    // Registration refuses a non-git root now, but a project registered before that rule still runs tasks in a shared
+    // tree with no worktree and a guard boundary the size of the directory.
+    const legacy = db.query("select name, path from projects where is_git = 0").all() as { name: string; path: string }[];
+    db.close();
+    r.push({ name: "DB integrity", ok: ic === "ok", detail: String(ic), fix: "relay db restore <backup>" });
+    if (legacy.length) r.push({ name: "project roots are git repositories", ok: false, detail: legacy.map((p) => `${p.name} (${p.path})`).join(", "),
+      fix: `these were registered before the rule and get no worktree isolation — remove and re-add them: ${legacy.map((p) => `relay open → settings → remove "${p.name}"`).join("; ")}` });
+  }
   for (const f of [paths.apiToken, paths.hookToken]) if (existsSync(f)) r.push({ ...checkPerms(f, 0o600), name: `token permissions ${f}` });
   if (existsSync(paths.spool)) { const q = existsSync(join(paths.spool, "quarantine")) ? readdirSync(join(paths.spool, "quarantine")).length : 0; r.push({ name: "hook spool", ok: q === 0, detail: `${q} quarantined`, fix: `ls ${join(paths.spool, "quarantine")}` }); }
   for (const n of ["relay-worker.md", "relay-explore.md", "relay-verify.md"]) r.push({ name: `agent ${n}`, ok: existsSync(join(paths.agentsDir, n)), detail: "", fix: "relay setup" });

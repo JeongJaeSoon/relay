@@ -57,8 +57,12 @@ export function apiRoutes(ctx: AppContext) {
   api.delete("/tasks/:id/attach-lease", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); S.tasks.releaseAttach(t.uuid); return c.json({ ok: true }); });
   api.post("/projects", async (c) => {
     const b = z.object({ name: z.string().min(1), path: z.string().min(1), description: z.string().default(""), keywords: z.array(z.string()).default([]), base_ref: z.enum(["fresh", "head"]).default("fresh") }).safeParse(await c.req.json()); if (!b.success) return bad(c, "invalid project");
-    const id = ulid(); const is_git = existsSync(join(b.data.path, ".git"));   // directory (repo) or file (worktree checkout); Bun.file().exists() is false for directories
-    ctx.log.emit({ type: "project.registered", payload: { id, ...b.data, is_git, created_at: now() } }); return c.json({ id, is_git }, 201);
+    // A project root must be a git repository: that is what gives every task its own worktree, and what bounds the
+    // PreToolUse guard. A plain directory would put every task in one shared tree with the boundary widened to all of it.
+    if (!existsSync(b.data.path)) return bad(c, "no such path");
+    if (!existsSync(join(b.data.path, ".git"))) return bad(c, "not a git repository — a project root must be one, so each task gets its own worktree");
+    const id = ulid();                                                        // `.git` is a directory in a clone and a file in a worktree checkout; existence is the test
+    ctx.log.emit({ type: "project.registered", payload: { id, ...b.data, is_git: true, created_at: now() } }); return c.json({ id, is_git: true }, 201);
   });
   api.delete("/projects/:id", (c) => { ctx.log.emit({ type: "project.removed", payload: { id: c.req.param("id") } }); return c.json({ ok: true }); });
   api.patch("/settings", async (c) => { const b = z.object({ max_concurrent_agents: z.number().int().min(1).optional() }).safeParse(await c.req.json()); if (!b.success) return bad(c, "invalid settings"); ctx.log.emit({ type: "settings.changed", payload: b.data }); void S.scheduler.pump(); return c.json(snapshot(ctx.db, ctx.cfg).state); });

@@ -23,10 +23,18 @@ describe("write routes", () => {
     const u2 = seedTask("running"); const lease = await req("POST", `/api/tasks/${u2}/attach-lease`, { by: "test" }); expect(((await lease.json()) as any).command).toMatch(/^claude attach fake02$/);
     expect((await req("DELETE", `/api/tasks/${u2}/attach-lease`)).status).toBe(200);
   });
-  test("projects register with git detection (directory .git) and remove", async () => {
+  test("a project root must be a git repository", async () => {
+    // A worktree checkout has `.git` as a file, a clone as a directory; both are repositories.
     const { req } = await buildTestApp(); const dir = mkdtempSync(join(tmpdir(), "relay-proj-")); mkdirSync(join(dir, ".git"));
-    const p = await req("POST", "/api/projects", { name: "x", path: dir, description: "d", keywords: ["a"] }); expect(p.status).toBe(201); const { id, is_git } = (await p.json()) as any; expect(is_git).toBe(true);
-    const q = await req("POST", "/api/projects", { name: "y", path: tmpdir(), description: "", keywords: [] }); expect(((await q.json()) as any).is_git).toBe(false);
+    const p = await req("POST", "/api/projects", { name: "x", path: dir, description: "d", keywords: ["a"] }); expect(p.status).toBe(201);
+    const { id, is_git } = (await p.json()) as any; expect(is_git).toBe(true);
+
+    const plain = mkdtempSync(join(tmpdir(), "relay-plain-"));                 // a directory of repositories is not itself one
+    const q = await req("POST", "/api/projects", { name: "y", path: plain, description: "", keywords: [] });
+    expect(q.status).toBe(400); expect(await q.text()).toContain("not a git repository");
+    const gone = await req("POST", "/api/projects", { name: "z", path: join(plain, "nope"), description: "", keywords: [] });
+    expect(gone.status).toBe(400); expect(await gone.text()).toContain("no such path");
+
     expect((await req("DELETE", `/api/projects/${id}`)).status).toBe(200);
   });
   test("attached tasks refuse interrupt/close/retry (409); a late permission answer is 409; writes are 503 while recovering, reads stay open", async () => {
