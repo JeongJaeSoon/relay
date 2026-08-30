@@ -13,12 +13,15 @@ import { log as slog } from "../log.ts";
 export type CommandPayload =
   | { kind: "spawn"; spec: SpawnSpec }
   | { kind: "send"; text: string; marker: string; message_id?: string }
-  // `short_id` on stop/rm targets a SUPERSEDED generation's session instead of the task's own (a reap): `--bg --resume`
+  // `target` on stop/rm names a SUPERSEDED generation's session instead of the task's own (a reap): `--bg --resume`
   // forks, so `tasks.session_id` names only the LAST session a task has run while the earlier ones stay registered with
   // the CLI. A reap never touches the task's process state — the process it names is already dead.
-  | { kind: "stop"; reason: string; short_id?: string }
+  | { kind: "stop"; reason: string; target?: ReapTarget }
   | { kind: "resume"; prompt: string; marker: string }
-  | { kind: "rm"; short_id?: string };
+  | { kind: "rm"; target?: ReapTarget };
+/** A superseded session. `short_id` is what `claude stop`/`claude rm` take, but the hook path does not learn it until
+ *  after the fork's SessionStart is projected, so it is often null and resolved from the roster at reap time. */
+export interface ReapTarget { session_id: string; short_id: string | null }
 export interface OutboxDeps { delivery: () => DeliveryMethod; isPaused: () => boolean; settingsJson: (t: Task, gen: number) => string; env: (t: Task, gen: number) => Record<string, string>; socketPathFor: (row: AgentRow) => string; instanceId: () => string }
 /** Thrown by apply() when the command must stay pending and the task queue must stop for now (inbox held, turn busy). */
 class HeldError extends Error {}
@@ -54,18 +57,24 @@ export class Outbox {
   kick(taskUuid: string) { queueMicrotask(() => this.run(taskUuid).catch((e) => slog.error("outbox run failed", { taskUuid, e: String(e) }))); }
   /** Every session this task has ever run except the one it is bound to NOW. `process_instances` is the only record of
    *  the fork chain — `tasks.session_id` is overwritten on every `--bg --resume` — and it is the same table
-   *  `resolveTask` reads to place a superseded session's late hooks, so reaping leaves it alone. Identity is the short
-   *  id and the session id, never the name: Phase 0 ⑦ measured two live sessions sharing one name. */
-  supersededShortIds(t: Task): string[] {
-    return (this.db.query("select distinct short_id s from process_instances where task_uuid=? and short_id is not null and short_id is not ? and (session_id is null or session_id is not ?) order by generation").all(t.uuid, t.short_id, t.session_id) as any[]).map((r) => r.s);
+   *  `resolveTask` reads to place a superseded session's late hooks, so reaping leaves it alone. Keyed by SESSION id,
+   *  never by short id: the hook path learns a session's short id only after the outbox patches it, which happens
+   *  AFTER the fork's SessionStart is projected, so `process_instances.short_id` is null for nearly every generation
+   *  (9 of 11 rows in the incident database) and a short-id key finds nothing at all. The name is never identity —
+   *  Phase 0 ⑦ measured two live sessions sharing one. */
+  supersededSessions(t: Task): ReapTarget[] {
+    return (this.db.query("select session_id, max(short_id) short_id from process_instances where task_uuid=? and session_id is not null and session_id is not ? and (short_id is null or short_id is not ?) group by session_id order by max(generation)").all(t.uuid, t.session_id, t.short_id) as any[])
+      .map((r) => ({ session_id: r.session_id as string, short_id: (r.short_id ?? null) as string | null }));
   }
   /** Dispose of the generations the task no longer runs. Stops them all before removing any: they share one worktree,
-   *  and `claude rm` keeps a session whose worktree still holds uncommitted work (Phase 0 ④). Idempotent by short id. */
-  reap(t: Task, reason: string) {
-    const olds = this.supersededShortIds(t);
-    for (const s of olds) this.enqueue(t.uuid, `reap-stop:${s}`, { kind: "stop", reason, short_id: s });
-    for (const s of olds) this.enqueue(t.uuid, `reap-rm:${s}`, { kind: "rm", short_id: s });
-    return olds;
+   *  and `claude rm` keeps a session whose worktree still holds uncommitted work (Phase 0 ④). `remove` follows the
+   *  caller's own disposal rule — an interrupted task keeps its worktree on purpose, so only a real disposal rm's.
+   *  Idempotent by session id. */
+  reap(t: Task, reason: string, remove: boolean): string[] {
+    const olds = this.supersededSessions(t);
+    for (const target of olds) this.enqueue(t.uuid, `reap-stop:${target.session_id}`, { kind: "stop", reason, target });
+    if (remove) for (const target of olds) this.enqueue(t.uuid, `reap-rm:${target.session_id}`, { kind: "rm", target });
+    return olds.map((o) => o.session_id);
   }
   async runAll() { for (const r of this.db.query("select distinct task_uuid from commands where state='pending'").all() as any[]) await this.run(r.task_uuid); }
   confirm(id: string) { const c = rowToCommand(this.db.query("select * from commands where id=?").get(id)); this.log.emit({ type: "command.applied", task_uuid: c.task_uuid, payload: { id } }); this.kick(c.task_uuid); }
@@ -120,12 +129,12 @@ export class Outbox {
   private async loop(taskUuid: string): Promise<"empty" | "blocked" | "held" | "error"> {
     for (;;) {
       this.again.delete(taskUuid);
-      const row = this.db.query("select * from commands where task_uuid=? and state in ('pending','unknown') order by (case when kind in ('stop','rm') and state='pending' and json_extract(payload_json,'$.short_id') is null then 0 else 1 end), rowid limit 1").get(taskUuid) as any;   // stop/rm jump the queue — a reap does not, so a blocked one can never sit in front of a real stop
+      const row = this.db.query("select * from commands where task_uuid=? and state in ('pending','unknown') order by (case when kind in ('stop','rm') and state='pending' and json_extract(payload_json,'$.target') is null then 0 else 1 end), rowid limit 1").get(taskUuid) as any;   // stop/rm jump the queue — a reap does not, so a blocked one can never sit in front of a real stop
       if (!row) return "empty";
       if (row.state === "unknown") return "blocked";                          // I8: an unknown head blocks the queue until the user confirms/retries
       const cmd = rowToCommand(row); const task = loadTask(this.db, taskUuid)!;
       if (!this.canRun(cmd, task)) return "blocked";                          // stays pending (I3, B1)
-      this.log.emit({ type: "command.running", task_uuid: taskUuid, causation_id: cmd.id, payload: { id: cmd.id } });
+      this.log.emit({ type: "command.running", task_uuid: taskUuid, causation_id: cmd.id, process_generation: task.process_generation, payload: { id: cmd.id } });   // the generation this command acts on: a resume names the one it is about to interrupt
       try { await this.apply(cmd, task); }
       catch (e) {
         if (e instanceof HeldError) { this.log.emit({ type: "command.requeued", task_uuid: taskUuid, payload: { id: cmd.id } }); return "held"; }
@@ -144,7 +153,7 @@ export class Outbox {
   private canRun(cmd: Command, t: Task): boolean {
     const k = cmd.kind;
     // A reap has no urgency and may take the shared worktree with it, so unlike a real stop/rm it waits for detach.
-    if ((k === "stop" || k === "rm") && (cmd.payload as CommandPayload & { short_id?: string }).short_id) return t.attach_state === "none";
+    if ((k === "stop" || k === "rm") && (cmd.payload as CommandPayload & { target?: ReapTarget }).target) return t.attach_state === "none";
     if (k === "stop" || k === "rm") return true;
     if (t.attach_state !== "none") return false;
     if (this.deps.isPaused()) return false;
@@ -164,11 +173,17 @@ export class Outbox {
    *  a refusal is the expected outcome, not an error — `claude rm` keeps a session whose worktree still holds
    *  uncommitted work, and that work is the point. The task's live session is re-checked here because the rebind that
    *  queued this reap may have been overtaken by another fork. */
-  private async reapOne(cmd: Command, t: Task, shortId: string, kind: "stop" | "rm") {
+  private async reapOne(cmd: Command, t: Task, target: ReapTarget, kind: "stop" | "rm") {
     const live = loadTask(this.db, t.uuid);
-    if (live && (live.short_id === shortId || this.db.query("select 1 from process_instances where task_uuid=? and short_id=? and session_id is ?").get(t.uuid, shortId, live.session_id))) {
-      slog.info("reap skipped — the task is bound to this session now", { task: t.uuid, short_id: shortId }); this.applied(cmd, t, { reaped: null }); return;
+    if (live && (live.session_id === target.session_id || (target.short_id && live.short_id === target.short_id))) {
+      slog.info("reap skipped — the task is bound to this session now", { task: t.uuid, session: target.session_id }); this.applied(cmd, t, { reaped: null }); return;
     }
+    // `claude stop`/`claude rm` take a short id, and the hook path never recorded one for this generation. The roster
+    // (`agents --json`, all rows including stopped ones) is where the session id maps to it; absent from the roster
+    // means the CLI has already forgotten the session, which is the state a reap is trying to reach anyway.
+    let shortId = target.short_id;
+    if (!shortId) { try { shortId = (await this.runner.list(true)).find((r) => r.session_id === target.session_id)?.short_id ?? null; } catch (e) { slog.warn("reap could not read the roster", { task: t.uuid, e: String(e) }); } }
+    if (!shortId || (live && shortId === live.short_id)) { this.applied(cmd, t, { reaped: null }); return; }
     try {
       if (kind === "stop") await this.runner.stop(shortId);
       else {
@@ -239,11 +254,11 @@ export class Outbox {
         const fresh = await this.waitRow(r.short_id);
         this.patch(t, { short_id: r.short_id, process_state: "starting", paused: false, ...(fresh?.session_id ? { session_id: fresh.session_id } : {}) }, cmd);
         outcome("accepted", "resume");                                       // B3: applied at `backgrounded ·` parse time; SessionStart(gen) confirms, watchdog fills a gap
-        this.reap(loadTask(this.db, t.uuid)!, "superseded by resume");        // the fork left the old session registered — reap it against the task as it is NOW, after the rebind
+        this.reap(loadTask(this.db, t.uuid)!, "superseded by resume", true);  // the fork left the old session registered — reap it against the task as it is NOW, after the rebind
         this.applied(cmd, t, { short_id: r.short_id }); return;
       }
       case "stop": {
-        if (p.short_id) { await this.reapOne(cmd, t, p.short_id, "stop"); return; }
+        if (p.target) { await this.reapOne(cmd, t, p.target, "stop"); return; }
         if (t.short_id) { await this.runner.stop(t.short_id); if (!(await this.waitGone(t.short_id))) throw new Error("stop not confirmed"); }
         // Stamped with the generation we stopped, not with whatever is current after the wait: if a newer one came up
         // meanwhile, this end is about a superseded process and the projection must ignore it.
@@ -251,7 +266,7 @@ export class Outbox {
         this.applied(cmd, t); return;
       }
       case "rm": {
-        if (p.short_id) { await this.reapOne(cmd, t, p.short_id, "rm"); return; }
+        if (p.target) { await this.reapOne(cmd, t, p.target, "rm"); return; }
         // Drop our own stamp first: `claude rm` keeps a worktree that has uncommitted changes, and an untracked
         // `.relay-owner` would be exactly that (measured 2026-08-31). Reconcile no longer needs it once we are removing.
         if (t.worktree_path) { try { unlinkSync(join(t.worktree_path, OWNER_FILE)); } catch {} }

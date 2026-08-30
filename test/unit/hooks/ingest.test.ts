@@ -102,8 +102,8 @@ describe("ingestHook", () => {
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
     // The measured crash loop (task a50d62e0, 2026-08-31): `--bg --resume` stops the live session before forking, so the
     // superseded process's SessionEnd lands while relay's own resume command is still running.
-    s.log.emit({ type: "command.queued", task_uuid: "u1", payload: { id: "resume:1", kind: "resume", payload: { kind: "resume", prompt: "continue", marker: "0000aaaa" } } });
-    s.log.emit({ type: "command.running", task_uuid: "u1", payload: { id: "resume:1" } });
+    s.log.emit({ type: "command.queued", task_uuid: "u1", causation_id: "resume:1", payload: { id: "resume:1", kind: "resume", payload: { kind: "resume", prompt: "continue", marker: "0000aaaa" } } });
+    s.log.emit({ type: "command.running", task_uuid: "u1", causation_id: "resume:1", process_generation: 1, payload: { id: "resume:1" } });   // the outbox stamps the generation the resume is interrupting
     s.post({ hook_event_name: "SessionEnd", reason: "other" });
     expect(s.crashes).toEqual([]); expect(loadTask(s.db, "u1")!.status).toBe("running"); expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
     const first = s.db.query("select process_generation g, payload_json p from events where type='process.ended' order by seq limit 1").get() as any;
@@ -115,6 +115,19 @@ describe("ingestHook", () => {
     expect(s.crashes).toEqual(["SessionEnd(other) while running"]); expect(loadTask(s.db, "u1")!.process_state).toBe("crashed");
     const last = s.db.query("select process_generation g, payload_json p from events where type='process.ended' order by seq desc limit 1").get() as any;
     expect(last.g).toBe(2); expect(JSON.parse(last.p)).toMatchObject({ generation: 2, crashed: true });
+  });
+  test("a real crash of the fork a resume just started still reports, even with that resume still in flight", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    s.log.emit({ type: "command.queued", task_uuid: "u1", causation_id: "resume:2", payload: { id: "resume:2", kind: "resume", payload: { kind: "resume", prompt: "continue", marker: "0000bbbb" } } });
+    s.log.emit({ type: "command.running", task_uuid: "u1", causation_id: "resume:2", process_generation: 1, payload: { id: "resume:2" } });
+    // the fork comes up while the command is still `running` — `waitRow` polls for up to 10s before it applies
+    s.post({ hook_event_name: "SessionStart", source: "fork" }); expect(loadTask(s.db, "u1")!.process_generation).toBe(2);
+    // …and a reap of the superseded session, applied seconds ago, says nothing about the live one: it must not exempt either
+    s.log.emit({ type: "command.queued", task_uuid: "u1", causation_id: "stop:reap", payload: { id: "stop:reap", kind: "stop", payload: { kind: "stop", reason: "superseded by resume", target: { session_id: "sess-old", short_id: null } } } });
+    s.log.emit({ type: "command.applied", task_uuid: "u1", causation_id: "stop:reap", payload: { id: "stop:reap" } });
+    s.post({ hook_event_name: "SessionEnd", reason: "other" });                          // the FORK dies: a newer generation than the one the resume interrupted
+    expect(s.crashes).toEqual(["SessionEnd(other) while running"]); expect(loadTask(s.db, "u1")!.process_state).toBe("crashed");
+    expect(s.db.query("select process_generation g from events where type='process.ended' order by seq desc limit 1").get()).toEqual({ g: 2 });
   });
   test("SessionEnd after a task is done is a plain stop, not a crash", () => {
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });

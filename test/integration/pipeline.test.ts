@@ -19,7 +19,9 @@ describe("pipeline: message → dispatch → task → hooks → ws", () => {
     expect(loadTask(s.db, t.uuid)!.last_step).toBe("Edit src/auth.ts");
     await hookReq({ ...(stopQuestion as any), prompt_id: "turn-1" }); expect(loadTask(s.db, t.uuid)!.status).toBe("waiting_input"); expect(s.permits.active()).toBe(0);
     const ans = await s.req("POST", "/api/messages", { text: "a.txt", client_message_id: "c2", reply_to_task_id: t.uuid }); expect(ans.status).toBe(202);
-    await new Promise((x) => setTimeout(x, 80)); expect(s.runner.calls.map((c) => c.kind)).toEqual(["spawn", "stop", "resume"]);
+    await new Promise((x) => setTimeout(x, 80)); expect(s.runner.calls.map((c) => `${c.kind}`)).toEqual(["spawn", "stop", "resume", "stop", "rm"]);   // the trailing pair reaps the session the fork superseded — through the real hook path, where process_instances has no short id
+    expect(s.runner.rows.has(String((s.runner.calls[1] as any).args))).toBe(false);                       // the superseded session is deregistered
+    expect(s.runner.rows.has(loadTask(s.db, t.uuid)!.short_id!)).toBe(true);                              // the live one is untouched
     await hookReq({ hook_event_name: "SessionStart", source: "resume" }); await hookReq({ ...(stopDone as any), prompt_id: "turn-2" });   // a new turn after --resume has a new prompt_id
     expect(loadTask(s.db, t.uuid)!.status).toBe("done");
     const types = frames.map((f) => f.type); for (const k of ["hello", "chat.message", "dispatch.updated", "task.created", "task.updated", "task.event", "system.state"]) expect(types).toContain(k);

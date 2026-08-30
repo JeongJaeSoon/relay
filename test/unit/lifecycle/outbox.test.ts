@@ -154,7 +154,9 @@ describe("Outbox", () => {
   test("a fork-resume reaps the session it superseded and never the one it just bound to", async () => {
     const s = setup("resume"); s.mk("u1", "starting", { process_generation: 0 });
     s.runner.rows.set("gen1", { short_id: "gen1", session_id: "sid-1", name: "relay:T-01 t", cwd: "/p", pid: 5, alive: true, busy: false, waiting_for: null, raw: {} });
-    s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: 1, payload: { generation: 1, session_id: "sid-1", short_id: "gen1" } });
+    // exactly what ingest.ts emits for a SessionStart: a session id and no short id, which is why the reap set is keyed by session
+    s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: 1, payload: { generation: 1, session_id: "sid-1" } });
+    expect(s.db.query("select short_id from process_instances where task_uuid='u1'").get()).toEqual({ short_id: null });
     s.ob.enqueue("u1", "r1", { kind: "resume", prompt: "continue", marker: "0000cafe" }); await s.ob.run("u1");
     expect(loadTask(s.db, "u1")!.short_id).toBe("fake1");                                             // `--bg --resume` forked to a new session
     expect(s.runner.calls.filter((c) => c.kind === "stop" || c.kind === "rm").map((c) => `${c.kind} ${c.args}`)).toEqual(["stop gen1", "stop gen1", "rm gen1"]);
@@ -165,10 +167,14 @@ describe("Outbox", () => {
     const s = setup(); s.mk("u1", "running", { process_generation: 0, worktree_path: "/p/wt" });
     for (const [g, short] of [[1, "gen1"], [2, "gen2"]] as [number, string][]) {
       s.runner.rows.set(short, { short_id: short, session_id: `sid-${short}`, name: "relay:T-01 t", cwd: "/p", pid: g, alive: true, busy: false, waiting_for: null, raw: {} });
-      s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: g, payload: { generation: g, session_id: `sid-${short}`, short_id: short } });
+      s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: g, payload: { generation: g, session_id: `sid-${short}` } });
+      s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { short_id: short } } });                     // the outbox stamps the short id after the fork's SessionStart
     }
     s.runner.rm = async (short: string) => { s.runner.calls.push({ kind: "rm", args: short }); return { worktreeKept: true }; };   // the generations share one worktree and gen2's work is still in it
-    expect(s.ob.reap(loadTask(s.db, "u1")!, "test")).toEqual(["gen1"]); await s.ob.run("u1");
+    // remove=false is the interrupt/cancel rule: stop the superseded session but keep its worktree, like the surrounding code
+    expect(s.ob.reap(loadTask(s.db, "u1")!, "test", false)).toEqual(["sid-gen1"]); await s.ob.run("u1");
+    expect(s.db.query("select kind from commands").all().map((r: any) => r.kind)).toEqual(["stop"]);
+    expect(s.ob.reap(loadTask(s.db, "u1")!, "test", true)).toEqual(["sid-gen1"]); await s.ob.run("u1");
     expect(s.states()).toEqual(["applied", "applied"]);                                               // refused is an outcome, not a failure
     expect(s.runner.rows.has("gen1")).toBe(true);
     expect(s.db.query("select count(*) c from events where type='worktree.kept'").get()).toEqual({ c: 1 });
