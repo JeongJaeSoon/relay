@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T14:45:08.108Z",
+  "updated_at": "2026-08-30T14:47:18.763Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -446,5 +446,476 @@
     ]
   },
   "rmRefusesUnpushedWorktree": "`claude rm <id>` KEEPS the session when its worktree has commits that are not pushed anywhere: stdout `kept <id> — worktree has commits that are not pushed anywhere` + `worktree kept at <path>`, and the row stays in `agents --json --all`. B3's rm row must treat this as NOT applied (or force-remove the worktree first), otherwise close/cleanup silently leaks sessions and worktrees.",
-  "recovery": "BLOCKED: not run — the checklist needs an interactive `claude attach` for the attached row and keeps five live sessions up for minutes. Procedure in spikes/scripts/08-recovery.md."
+  "recovery": "BLOCKED: not run — the checklist needs an interactive `claude attach` for the attached row and keeps five live sessions up for minutes. Procedure in spikes/scripts/08-recovery.md.",
+  "dispatcher": {
+    "n": 10,
+    "p50_ms": 7368,
+    "p95_ms": 10106,
+    "accuracy": 1,
+    "tokens_per_call": 98952.4,
+    "cost_per_call": 0.6745620999999999,
+    "errors": 0
+  },
+  "dispatcherRuns": [
+    {
+      "text": "auth에 테스트도 추가해줘",
+      "expect": "route_to_task",
+      "got": "route_to_task",
+      "ok": true,
+      "wall_ms": 6771,
+      "code": 0,
+      "duration_ms": 3305,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 61810,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 139,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 61810,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 139,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 61810,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 61810
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 1.2431699999999999,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "prod 네임스페이스로 해",
+      "expect": "route_to_task",
+      "got": "route_to_task",
+      "ok": true,
+      "wall_ms": 7489,
+      "code": 0,
+      "duration_ms": 3950,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 104722,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 137,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 104722,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 137,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 104722,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 104722
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 2.1013100000000002,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "myapp 로그인 페이지 다크모드 지원",
+      "expect": "new_task",
+      "got": "new_task",
+      "ok": true,
+      "wall_ms": 7165,
+      "code": 0,
+      "duration_ms": 3582,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6210,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 197,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6210,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 197,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6210,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6210
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.232553,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "terraform state 잠금 풀어줘",
+      "expect": "new_task",
+      "got": "new_task",
+      "ok": true,
+      "wall_ms": 7408,
+      "code": 0,
+      "duration_ms": 3823,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6205,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 186,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6205,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 186,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6205,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6205
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.23190299999999997,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "T-01 마무리하고 닫아",
+      "expect": "close_task",
+      "got": "close_task",
+      "ok": true,
+      "wall_ms": 7368,
+      "code": 0,
+      "duration_ms": 3830,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 88356,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 159,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 88356,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 159,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 88356,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 88356
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 1.77509,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "React 19에서 useEffect 두 번 도는 이유가 뭐야",
+      "expect": "answer_directly",
+      "got": "answer_directly",
+      "ok": true,
+      "wall_ms": 10106,
+      "code": 0,
+      "duration_ms": 6639,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6217,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 358,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6217,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 358,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6217,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6217
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.240743,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "그거 어떻게 됐어",
+      "expect": "route_to_task",
+      "got": "route_to_task",
+      "ok": true,
+      "wall_ms": 7848,
+      "code": 0,
+      "duration_ms": 4192,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6202,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 187,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6202,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 187,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6202,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6202
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.23189300000000002,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "README 오타 고쳐줘 myapp",
+      "expect": "new_task",
+      "got": "new_task",
+      "ok": true,
+      "wall_ms": 6916,
+      "code": 0,
+      "duration_ms": 3446,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6206,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 180,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6206,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 180,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6206,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6206
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.231623,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "k8s 작업 취소해",
+      "expect": "close_task",
+      "got": "close_task",
+      "ok": true,
+      "wall_ms": 6133,
+      "code": 0,
+      "duration_ms": 2585,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6201,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 101,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6201,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 101,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6201,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6201
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.227573,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "auth 리팩토링 결과 요약해줘",
+      "expect": "route_to_task",
+      "got": "route_to_task",
+      "ok": true,
+      "wall_ms": 6474,
+      "code": 0,
+      "duration_ms": 2944,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6208,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 142,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6208,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 142,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6208,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6208
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.229763,
+      "is_error": false,
+      "stderr": ""
+    }
+  ],
+  "dispatcherTimeoutKill": {
+    "code": 143,
+    "wall_ms": 1709
+  },
+  "killSwitch": {
+    "stoppedAllMs": 899,
+    "resumedWithContext": 3,
+    "resumeSpawned": 3
+  },
+  "dispatcherBurnEstimate": "~99k tokens and ~$0.67 of list-price usage per dispatched message (p50 7.4s, p95 10.1s). At 100 messages/day that is ~10M tokens/day — almost all of it the CLI own system prompt, not relay context. The B6 fast-path and the daily ceiling are load-bearing, not optional."
 }
