@@ -1,4 +1,5 @@
 node_modules/
+dist/
 spikes/results/*.jsonl
 spikes/results/*.txt
 spikes/sandbox/

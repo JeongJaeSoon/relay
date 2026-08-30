@@ -1,12 +1,14 @@
 {
   "name": "relay",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "test": "bun test",
     "spike": "bun run",
     "build:web": "bun scripts/build-web.ts",
+    "compile": "sh scripts/compile.sh",
     "test:web": "bun test web/test",
     "dev:fake": "bun scripts/dev-fake.ts"
   },
@@ -14,6 +16,7 @@
     "@types/bun": "^1.4.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "hono": "4.13.5",
     "ulid": "3.0.2",
     "zod": "4.5.2"
