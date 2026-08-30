@@ -6,7 +6,7 @@ import type { EventLog } from "../core/events.ts";
 import { authMiddleware } from "./auth.ts";
 import { apiRoutes } from "./routes.ts";
 import { WsHub } from "./ws.ts";
-type Services = Record<string, unknown>;   // replaced by the real `Services` from ../core/tasks.ts in Task 13
+import type { Services } from "../core/tasks.ts";
 
 export interface AppContext { db: Database; cfg: Config; log: EventLog; hub: WsHub; tokens: { api: string; hook: string }; services: Services; dashboardHtml: () => Promise<string> }
 
