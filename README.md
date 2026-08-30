@@ -40,6 +40,7 @@ The event log is the source of truth; `tasks`/`messages`/`commands` are projecti
 | Command | What it does |
 |---|---|
 | `relay serve` | HTTP + WS server (what the launchd service runs) |
+| `relay "<msg>" [--to T-08]` | Oneline dispatch — same as `relay send`, no subcommand needed |
 | `relay send "<msg>" [--to T-08]` | Queue a message; `--to` delivers straight to a task |
 | `relay ls [--all] [--json]` | Task table (ID, status, project, title, elapsed, session) |
 | `relay tail <T-08>` | Live event stream for one task, from now on |
@@ -51,6 +52,9 @@ The event log is the source of truth; `tasks`/`messages`/`commands` are projecti
 | `relay db backup [file] \| restore <file> \| sweep \| rebuild` | Snapshot, restore, retention sweep, projection replay |
 | `relay mcp` | MCP stdio bridge (`relay_send` / `relay_list` / `relay_status`) |
 | `relay hook <event>` / `relay hook guard` | Worker session hook entry points |
+
+Quote the message. The shell eats `?` and `!` before relay sees them, and a bare single word (`relay lst`) is read as a mistyped
+subcommand — it prints usage and exits 2 rather than spending a dispatch on it. For a genuine one-word message use `relay send "<word>"`.
 
 Human-readable Korean output by default; `--json` prints JSON only, for scripts.
 
