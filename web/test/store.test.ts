@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { store } from "../src/store.ts";
+import { createStore, store } from "../src/store.ts";
 const task = (uuid: string, status: any, extra: Record<string, unknown> = {}) => ({ uuid, num: 1, display_id: "T-01", project_id: "p", title: "t", status, size: "normal", effort: "xhigh", model: "m", session_id: null, short_id: null, worktree_path: null, branch: null, base_sha: null, process_state: "none", process_generation: 0, turn_state: "idle", attach_state: "none", attached_by: null, paused: false, last_summary: null, last_step: null, question: null, parent_uuid: null, agent_id: null, agent_type: null, queued_at: null, qhead: false, started_at: null, ended_at: null, created_at: 1, updated_at: 1, closed_at: null, usage_tokens: 0, summary_json: null, ...extra }) as any;
 describe("store.applyFrame", () => {
   beforeEach(() => store.reset());
@@ -29,5 +29,15 @@ describe("store.applyFrame", () => {
     let n = 0; const off = store.subscribe(() => n++);
     store.applyFrame({ seq: 1, idx: 0, type: "system.state", state: { paused: true } as any }); store.applyFrame({ seq: 1, idx: 0, type: "system.state", state: { paused: true } as any });
     expect(n).toBe(1); expect(store.state.sys?.paused).toBe(true); off();
+  });
+});
+
+describe("store.setConn", () => {
+  test("a connection that never opens still reports disconnected: the repeated state emits", () => {
+    const s = createStore(); let n = 0; s.subscribe(() => n++);
+    expect(s.state.conn).toBe("reconnecting");                                  // nothing has connected yet
+    s.setConn("reconnecting");                                                  // ws.onclose before any successful connect — same value, but the renderer has never heard it
+    expect(n).toBe(1); expect(s.state.conn).toBe("reconnecting"); expect(s.state.dirty.sys).toBe(true);
+    s.setConn("ok"); expect(n).toBe(2); expect(s.state.conn).toBe("ok");
   });
 });

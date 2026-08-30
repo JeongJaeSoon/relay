@@ -25,40 +25,20 @@ Theme.init();
 
 /* ================= state ================= */
 const ROW_H=128, SUB_ROW=102, COL_TASK=312, COL_SUB=596, ROW_Y0=40;
-const S={tasks:new Map(),seq:0,sel:null,maxw:10, /* 기본 10, 상한 없음(초과 시 소프트 경고) */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
+const S={tasks:new Map(),sel:null,maxw:10, /* 기본 10, 상한 없음(초과 시 소프트 경고) */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
 const STATUS_LABEL={run:"실행 중",wait:"응답 대기",queue:"대기열",done:"완료",err:"오류",cancelled:"중단됨",closed:"보관됨"};
 
-function makeTask(o){
-  S.seq++;
-  const t=Object.assign({
-    id:"T-"+pad(S.seq),num:S.seq,title:"",project:"workspace",size:"normal",
-    status:"queue",step:"",events:[],timers:[],startedAt:null,endedAt:null,
-    pending:null,question:null,sub:false,parent:null,children:[],tags:[],
-    answered:false,scenario:null,onAnswer:null,x:0,y:0,
-    sid:Math.random().toString(16).slice(2,10),pendingAnswer:null,ms:0,msgUntil:0,bornAt:Date.now(),
-  },o);
-  S.tasks.set(t.id,t);
-  return t;
-}
 const tasksArr=()=>[...S.tasks.values()];
-function ev(t,txt,payload){t.events.push({id:(t.evSeq=(t.evSeq||0)+1),at:new Date(),txt,payload});if(t.events.length>60)t.events.shift()}
 
 /* ================= chat ================= */
 const msgs=$("#msgs");
 function scrollChat(){msgs.scrollTop=msgs.scrollHeight}
 function chatUser(text){msgs.append(el("div","m-user",text));scrollChat()}
 function chatNote(text){msgs.append(el("div","m-note",text));scrollChat()}
-function chatAck(){chatNote("✓ 접수 · "+clock(new Date()))}
 function ttagBtn(t){
   const b=el("button","ttag st-"+t.status,t.id);
   b.addEventListener("click",()=>{select(t.id);centerOn(t)});
   return b;
-}
-function chatBadges(parts,kind){
-  const row=el("div","m-badges");
-  row.append(el("span","badge k",kind||"dispatcher"));
-  parts.forEach(p=>row.append(el("span","badge",p)));
-  const wrap=el("div","m-row");wrap.append(row);msgs.append(wrap);scrollChat();
 }
 function chatMsg(t,text){
   const wrap=el("div","m-row");
@@ -81,13 +61,7 @@ function chatQuestion(t){
 }
 
 /* ================= dispatch log (채팅 우측 레일) ================= */
-const DLOG=[];let dlogSeq=0;
-function dlogAdd(text){
-  const e={id:++dlogSeq,text,status:"judging",result:null};
-  DLOG.unshift(e);if(DLOG.length>20)DLOG.pop();
-  renderDlog();return e;
-}
-function dlogDone(e,result){e.status="done";e.result=result;renderDlog()}
+const DLOG=[];
 function renderDlog(){
   const list=$("#dlList");if(!list)return;
   list.textContent="";
@@ -225,7 +199,7 @@ function renderNodes(){
       :t.id+" · "+t.project+" · "+t.size;
     n.querySelector(".n-step").textContent=t.step;
     n.querySelector(".n-elapsed").textContent=elapsedText(t);
-    n.querySelector(".br").textContent=t.sub?"":"relay-"+t.id.toLowerCase();
+    n.querySelector(".br").textContent=t.sub?"":t.branch||"";
     n.setAttribute("aria-label",t.title+" — "+(t.statusLabel||STATUS_LABEL[t.status]));
   });
   $("#emptyHint").style.display=tasksArr().some(t=>t.status!=="closed")?"none":"flex";

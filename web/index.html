@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>relay — 대시보드 데모</title>
+<title>relay</title>
 <style>
 /* ============================================================
    relay demo — design tokens
@@ -104,10 +104,6 @@ header{
 }
 .brand{display:flex;align-items:center;gap:8px;font-size:var(--fs-brand);font-weight:700;letter-spacing:-.01em}
 .brand .mark{width:10px;height:10px;border-radius:3px;background:var(--accent);flex:none}
-.sim{
-  font-size:var(--fs-micro);font-weight:700;letter-spacing:.08em;
-  color:var(--muted);border:1px solid var(--line-strong);border-radius:4px;padding:1px 6px;
-}
 .hdr-actions{display:flex;align-items:center;gap:6px}
 .icon-btn{
   width:30px;height:30px;border-radius:7px;cursor:pointer;position:relative;
@@ -575,7 +571,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
 
 <div id="app">
   <header>
-    <div class="brand"><span class="mark"></span>relay <span class="sim">SIMULATION</span></div>
+    <div class="brand"><span class="mark"></span>relay</div>
     <span class="conn" id="conn"><i></i><span id="connTxt">연결됨</span></span>
     <div class="hdr-actions">
       <button id="palBtn" class="icon-btn" aria-label="명령 팔레트" title="명령 팔레트 (⌘⇧P)">

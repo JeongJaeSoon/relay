@@ -30,7 +30,7 @@ export function createStore(): Store {
       state.sys = s.state; state.projects = s.projects; state.tasks = Object.fromEntries(s.tasks.map((t) => [t.uuid, t])); state.messages = [...s.messages].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
       state.dirty.all = true; emit();
     },
-    setConn(c) { if (state.conn === c) return; state.conn = c; state.dirty.sys = true; emit(); },
+    setConn(c) { state.conn = c; state.dirty.sys = true; emit(); },                              // always emits: the first ws.onclose repeats the initial "reconnecting", and the dashboard must still be told it is not connected
     drain() { const d = state.dirty; state.dirty = freshDirty(); return d; },
     reset() { Object.assign(state, initial()); },
   };
