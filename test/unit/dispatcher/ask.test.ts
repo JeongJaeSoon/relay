@@ -38,22 +38,39 @@ describe("Ask mode", () => {
     expect(m.dispatch_state).toBe("failed"); expect(m.dispatch_error).toContain("answer");
     expect(s.decisions.length).toBe(0); expect(s.confirms.length).toBe(0);
   });
-  test("the ask prompt carries no routing context and no routing actions, and the marker never reaches the model", async () => {
+  test("the ask prompt drops the routing apparatus but keeps what answering needs, and the marker never reaches the model", async () => {
     let seen: string[] = []; const s = setup(async (args) => { seen = args; return ok({ answer: "42" })(args, { cwd: "", timeoutMs: 0 }); });
     const id = s.msg(markAsk("why did T-02 fail")); s.d.enqueue(id); await settle();
     const prompt = seen.at(-1)!; const system = seen[seen.indexOf("--append-system-prompt") + 1]; const schema = seen[seen.indexOf("--json-schema") + 1];
-    expect(prompt).toBe("[user message]\nwhy did T-02 fail");
-    expect(prompt).not.toContain("[projects]"); expect(prompt).not.toContain("[active tasks]"); expect(prompt).not.toContain("[recent chat]");
-    expect(prompt).not.toContain("?");
+    expect(prompt).toContain("[projects]"); expect(prompt).toContain("[active tasks]");                 // answering needs these
+    expect(prompt).toContain('T-02 "auth"');
+    expect(prompt).not.toContain("keywords:"); expect(prompt).not.toContain("/tmp/myapp");               // routing-only: match a message to a worktree
+    expect(prompt.endsWith("[user message]\nwhy did T-02 fail")).toBe(true);                            // the marker never reaches the model
     expect(schema).not.toContain("new_task"); expect(schema).not.toContain("route_to_task"); expect(schema).not.toContain("close_task");
     expect(system).not.toContain("new_task");
     expect(loadMessage(s.db, id)!.dispatch_state).toBe("dispatched");
   });
-  test("the ask prompt is a fraction of a routing prompt", async () => {
+  test("the reviewer's repro: a question the fast path cannot answer still reaches the model with the failing task in it", async () => {
+    let seen: string[] = []; const s = setup(async (args) => { seen = args; return ok({ answer: "테스트가 깨졌습니다." })(args, { cwd: "", timeoutMs: 0 }); });
+    s.db.run("update tasks set status='error', last_summary='bun test failed: 2 failing in auth' where uuid='u1'");
+    const id = s.msg(markAsk("T-02가 왜 실패했어")); s.d.enqueue(id); await settle();
+    expect(seen.at(-1)!).toContain("bun test failed: 2 failing in auth");
+    expect(loadMessage(s.db, id)!.dispatch_state).toBe("dispatched");
+  });
+  test("a secret a worker printed never reaches the argv of the one-shot", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "relay-ask-")); const path = join(dir, "leak.jsonl"); const key = "sk-ant-" + "a".repeat(40);
+    writeFileSync(path, JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", content: `ANTHROPIC_API_KEY=${key}` }] } }) + "\n");
+    let seen: string[] = []; const s = setup(async (args) => { seen = args; return ok({ answer: "ok" })(args, { cwd: "", timeoutMs: 0 }); });
+    s.db.run("insert into events(event_id,type,task_uuid,occurred_at,recorded_at,payload_json) values('e2','hook.PostToolUse','u1',1,1,?)", [JSON.stringify({ tool_name: "Bash", transcript_path: path })]);
+    const id = s.msg(markAsk("what did it print"), "u1"); s.d.enqueue(id); await settle();
+    expect(seen.join("\u0000")).not.toContain(key);
+    expect(seen.at(-1)!).toContain("[redacted:anthropic]");
+  });
+  test("an ask call is smaller than the routing call for the same words", async () => {
     const sizes: number[] = []; const s = setup(async (args) => { sizes.push(args.at(-1)!.length + args[args.indexOf("--append-system-prompt") + 1].length + args[args.indexOf("--json-schema") + 1].length); return ok({ action: "answer_directly", answer: "x", confidence: "high" })(args, { cwd: "", timeoutMs: 0 }); });
     s.d.enqueue(s.msg("why did T-02 fail")); await settle();
     s.d.enqueue(s.msg(markAsk("why did T-02 fail"))); await settle();
-    expect(sizes.length).toBe(2); expect(sizes[1]).toBeLessThan(sizes[0] / 2);
+    expect(sizes.length).toBe(2); expect(sizes[1]).toBeLessThan(sizes[0]);   // the routing schema, its rules and the routing-only context fields are all gone
   });
   test("a status question in Ask mode still takes the fast path — no LLM call", async () => {
     let calls = 0; const s = setup(async () => { calls++; return { code: 0, stdout: "", stderr: "" }; });

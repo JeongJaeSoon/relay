@@ -79,7 +79,10 @@ export class Dispatcher {
    *  plain question, the target task's state and transcript tail for a task-scoped one. The worker is never touched:
    *  this spawns its own one-shot `claude -p`, exactly as the dispatcher does, and sends nothing to the session. */
   private async answerQuestion(id: string, question: string, taskUuid: string | null, prevId: string | null) {
-    const ctx = taskUuid ? buildAskContext(this.db, taskUuid) : "";
+    // Two contexts, one path: the target task's state and transcript tail, or — for a plain question — the same
+    // projects/tasks/chat summary routing gets, minus the routing apparatus. A declared question needs less context
+    // than routing, not none: without it the model cannot answer "why did T-02 fail" at all.
+    const ctx = taskUuid ? buildAskContext(this.db, taskUuid) : buildContext(this.db, "ask");
     let last: { answer: string | null; error: string } = { answer: null, error: "" };
     for (const effort of [this.cfg.dispatcher.effort, this.cfg.dispatcher.retry_effort]) {
       last = await this.answer(question, ctx, effort, last.error);
