@@ -26,6 +26,7 @@ async function dispatch(cmd: string, rest: string[]) {
   const s = await import("./simple.ts");
   switch (cmd) {
     case "send": return s.send(rest); case "ls": return s.ls(rest); case "tail": return s.tail(rest); case "open": return s.open(); case "pause": return s.pause(); case "resume-all": return s.resumeAll();
+    case "attach": return (await import("./attach.ts")).attach(rest);
     case "--version": case "-v": process.stdout.write(`relay ${process.env.RELAY_VERSION ?? "dev"}\n`); return;   // stamped by `bun build --define process.env.RELAY_VERSION=…`
     default: process.stdout.write(USAGE); if (cmd !== "help" && cmd !== "--help") throw new CliError("", 2);
   }
