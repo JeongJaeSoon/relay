@@ -1,0 +1,23 @@
+{
+  "session_id": "5d98bb09-0819-4718-90da-65df434279c2",
+  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-note-task/5d98bb09-0819-4718-90da-65df434279c2.jsonl",
+  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/note-task",
+  "prompt_id": "47908235-d641-4f4d-98d0-dcd76e03508d",
+  "permission_mode": "default",
+  "effort": {
+    "level": "low"
+  },
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/note-task/note.txt",
+    "content": "hi"
+  },
+  "permission_suggestions": [
+    {
+      "type": "setMode",
+      "mode": "acceptEdits",
+      "destination": "session"
+    }
+  ]
+}

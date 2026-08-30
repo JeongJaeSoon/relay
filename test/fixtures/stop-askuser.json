@@ -1,0 +1,16 @@
+{
+  "session_id": "1e3b7d27-dc57-4953-b452-768015378bfd",
+  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-v-askuser/1e3b7d27-dc57-4953-b452-768015378bfd.jsonl",
+  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-v-askuser",
+  "prompt_id": "cb3f58ff-c8e9-4d9c-82c8-cc370d12d513",
+  "permission_mode": "auto",
+  "agent_type": "relay-worker",
+  "effort": {
+    "level": "low"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "TOOL-UNAVAILABLE\n\nRELAY: done\nAskUserQuestion 도구를 사용할 수 없어 색상 선호도를 물어보지 못함. 변경된 파일 없음. 도구 목록에 해당 도구가 없는 것을 확인함.",
+  "background_tasks": [],
+  "session_crons": []
+}

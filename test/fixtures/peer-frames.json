@@ -1,0 +1,74 @@
+{
+  "inbound": [
+    {
+      "raw": "{\"msgV\":1,\"msg_id\":\"af114e29-c7a2-44d0-83b7-bece27e49032\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"uds:/tmp/cc-socks/96208.sock\\\" from-name=\\\"sandbox-ce\\\" from-mode=\\\"prompting\\\">\\nping 1\\n</cross-session-message>\"},\"priority\":\"next\",\"from\":\"uds:/tmp/cc-socks/96208.sock\"}\n",
+      "lines": [
+        {
+          "msgV": 1,
+          "msg_id": "af114e29-c7a2-44d0-83b7-bece27e49032",
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": "<cross-session-message from=\"uds:/tmp/cc-socks/96208.sock\" from-name=\"sandbox-ce\" from-mode=\"prompting\">\nping 1\n</cross-session-message>"
+          },
+          "priority": "next",
+          "from": "uds:/tmp/cc-socks/96208.sock"
+        }
+      ]
+    },
+    {
+      "raw": "{\"msgV\":1,\"msg_id\":\"9c4336b4-1613-4f0e-8efa-8beba948c000\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"uds:/tmp/cc-socks/96669.sock\\\" hop-chain=\\\"055d9520e03b4803b7f555ff\\\" from-name=\\\"relay-spike:recv\\\" from-mode=\\\"prompting\\\">\\nPONG\\n</cross-session-message>\"},\"priority\":\"next\",\"from\":\"uds:/tmp/cc-socks/96669.sock\"}\n",
+      "lines": [
+        {
+          "msgV": 1,
+          "msg_id": "9c4336b4-1613-4f0e-8efa-8beba948c000",
+          "type": "user",
+          "message": {
+            "role": "user",
+            "content": "<cross-session-message from=\"uds:/tmp/cc-socks/96669.sock\" hop-chain=\"055d9520e03b4803b7f555ff\" from-name=\"relay-spike:recv\" from-mode=\"prompting\">\nPONG\n</cross-session-message>"
+          },
+          "priority": "next",
+          "from": "uds:/tmp/cc-socks/96669.sock"
+        }
+      ]
+    }
+  ],
+  "ack": [
+    {
+      "sent": {
+        "msgV": 1,
+        "msg_id": "1b247bfb-3b70-46e9-8dde-34c84ea5cf43",
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": "<cross-session-message from=\"uds:/tmp/cc-socks/96568.sock\" from-name=\"relay-spike\" from-mode=\"prompting\">\n[relay #test0001] say PONG\n</cross-session-message>"
+        },
+        "priority": "next",
+        "from": "uds:/tmp/cc-socks/96568.sock"
+      },
+      "replies": []
+    }
+  ],
+  "registry": {
+    "pid": 96568,
+    "sessionId": "0f5c4b09-3ddd-4f5e-8181-f73c219b9c92",
+    "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike",
+    "startedAt": 1788098969595,
+    "procStart": "Sun Aug 30 23:09:29 2026",
+    "version": "2.1.251",
+    "peerProtocol": 1,
+    "peerFeatures": [
+      "notify_idle"
+    ],
+    "kind": "bg",
+    "entrypoint": "cli",
+    "pidDomain": "darwin",
+    "messagingSocketPath": "/tmp/cc-socks/96568.sock",
+    "name": "relay-spike",
+    "nameSince": 1788098969595,
+    "nameSource": "user",
+    "status": "idle",
+    "updatedAt": 1788098969595,
+    "statusUpdatedAt": 1788098969595
+  }
+}

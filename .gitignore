@@ -3,7 +3,8 @@ spikes/results/*.jsonl
 spikes/results/*.txt
 spikes/sandbox/
 spikes/scripts/10-bun-mcp/bun-app/dist/
-web/dist/
+web/dist/*
+!web/dist/index.html
 *.db
 *.db-wal
 *.db-shm

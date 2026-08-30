@@ -1,0 +1,16 @@
+{
+  "session_id": "cfdede96-8543-43ba-b9f2-6d0f36f70190",
+  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-v-blocked/cfdede96-8543-43ba-b9f2-6d0f36f70190.jsonl",
+  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-v-blocked",
+  "prompt_id": "dd7e2b08-0eed-484d-92cc-be846efed5fb",
+  "permission_mode": "auto",
+  "agent_type": "relay-worker",
+  "effort": {
+    "level": "low"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "RELAY: blocked\n필요한 자격 증명(예: 배포/외부 서비스 API 키)이 현재 환경에 없어 이 작업을 진행할 수 없습니다. relay 또는 사용자가 해당 크리덴셜을 제공하거나 안전한 저장소 경로를 알려주세요.",
+  "background_tasks": [],
+  "session_crons": []
+}
