@@ -14,7 +14,7 @@ import { Dispatcher, type RunClaude } from "./dispatcher/dispatcher.ts";
 import { NativeSessionRunner } from "./runner/native.ts";
 import type { AgentRunner } from "./runner/runner.ts";
 import { buildSettingsJson, relayBin, workerEnv } from "./runner/settings.ts";
-import { currentCliVersion, driftWarns, loadCapabilities, showVersion, versionDrift } from "./runner/capabilities.ts";
+import { currentCliVersion, driftWarns, loadCapabilities, showVersion, versionDrift, versionOk } from "./runner/capabilities.ts";
 import { frameText, loadPeerFixture, markersIn, PeerServer, sessionIdForSocket, socketPathForSession } from "./runner/peer.ts";
 import { PermissionPolicy } from "./guard/permission.ts";
 import { Spool } from "./hooks/spool.ts";
@@ -55,6 +55,11 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   const cliVersion = await currentCliVersion(cfg.claude_bin); const drift = versionDrift(caps.cli_version, cliVersion);
   setMeta(db, "cli_drift", driftWarns(drift) ? `${showVersion(caps.cli_version)} → ${showVersion(cliVersion)}` : "");
   if (driftWarns(drift)) log.warn("claude CLI version drift — capabilities.json may no longer describe this CLI; run `relay doctor --probe` to re-measure", { probed: caps.cli_version, current: cliVersion, drift });
+  // Independent of the drift check above: that one asks whether this is the CLI we measured, this one whether the CLI
+  // is supported at all. A downgrade below the floor is a `patch` drift the check above deliberately stays quiet
+  // about. Warn only — refusing to start under launchd means exit 0 into the service-failed path, which is
+  // indistinguishable from a crashed service; `relay doctor` and `relay setup` already refuse where a human is watching.
+  if (!versionOk(cliVersion)) log.warn(`claude CLI ${cliVersion || "version unreadable"} — relay requires 2.1.251 or newer; workers can fail at spawn on flags this build may not have (--bg, --agent, --settings, --json-schema). Run \`claude update\`.`, { current: cliVersion, floor: "2.1.251" });
   if (!getMeta(db, "relay_instance_id")) setMeta(db, "relay_instance_id", crypto.randomUUID()); const instanceId = () => getMeta(db, "relay_instance_id")!;
   const maxAgents = () => Number(getMeta(db, "max_concurrent_agents") ?? cfg.max_concurrent_agents);
   const baseEnv = () => workerEnv({ taskUuid: "", port: cfg.port, hookToken: "", oauthToken: oauth, maxAgents: maxAgents() });

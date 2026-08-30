@@ -2,7 +2,8 @@
 // is measured once and cached in capabilities.json. These tests pin the rule that decides when that cache is
 // old enough to be worth telling the user about.
 import { expect, test } from "bun:test";
-import { driftWarns, versionDrift } from "../../../src/runner/capabilities.ts";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
+import { currentCliVersion, driftWarns, versionDrift, versionOk } from "../../../src/runner/capabilities.ts";
 
 test("an identical version is not drift", () => {
   expect(versionDrift("2.1.251", "2.1.251")).toBe("same");
@@ -32,4 +33,16 @@ test("a version that does not parse on either side is unknown, and never warns",
   for (const [a, b] of [["unknown", "2.1.251"], ["2.1.251", ""], ["", ""], ["2.1", "2.1.251"], ["2.1.251", "not a version"]])
     expect(versionDrift(a!, b!)).toBe("unknown");                               // "unknown" is the never-probed default in capabilities.ts
   expect(driftWarns("unknown")).toBe(false);
+});
+
+// The boot-time floor warning is `!versionOk(await currentCliVersion(claude_bin))`. versionOk is covered in
+// setup.test.ts; this covers the other half without spawning a session — `--version` is a print, not a run.
+test("currentCliVersion reads the version line, and yields \"\" when the binary is not there", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "relay-ver-"));
+  const bin = join(dir, "fake-claude"); writeFileSync(bin, "#!/bin/sh\necho '2.1.240 (Claude Code)'\n"); chmodSync(bin, 0o755);
+  const v = await currentCliVersion(bin);
+  expect(v).toBe("2.1.240 (Claude Code)");
+  expect(versionOk(v)).toBe(false);                                             // below the 2.1.251 floor → boot warns
+  expect(versionDrift("2.1.251", v)).toBe("patch");                             // ...while the drift check stays quiet: the two are independent
+  expect(await currentCliVersion(join(dir, "no-such-binary"))).toBe("");
 });
