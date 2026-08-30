@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T15:36:33.963Z",
+  "updated_at": "2026-08-30T16:45:41.753Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -213,7 +213,7 @@
     "firstTerminalAt"
   ],
   "jobStateHasRespawnFlags": true,
-  "launchdAuth": "BLOCKED: not measured — `launchctl bootstrap` was refused by the permission system in this agent session. Run: sh spikes/scripts/01-launchd-auth.sh",
+  "launchdAuth": "keychain",
   "delivery": "socket",
   "peerRegistration": true,
   "socketInboundKeys": [

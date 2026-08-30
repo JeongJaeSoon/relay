@@ -1,5 +1,5 @@
 // src/cli/setup.ts — first-run wizard (§18): claude CLI, service auth, config, projects, agent definitions, MCP, capabilities.
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync, type Dirent } from "node:fs";
 import { join, basename, dirname, resolve } from "node:path";
 import { ConfigSchema, loadConfig, paths, ensureDirs, type Config } from "../config.ts";
 import { client, relayArgv, has } from "./client.ts";
@@ -16,6 +16,36 @@ export function tomlStringify(c: Config): string {
   return lines.join("\n");
 }
 export function planAgentInstall(existing: Record<string, string | null>, bundled: Record<string, string>) { const out = { copy: [] as string[], same: [] as string[], differ: [] as string[] }; for (const [n, b] of Object.entries(bundled)) { const e = existing[n]; if (e == null) out.copy.push(n); else if (e === b) out.same.push(n); else out.differ.push(n); } return out; }
+/** git repos under `root`, nearest first. Depth 2 covers both `~/workspace/repo` and `~/workspace/project/repo`.
+ *  `.git` is a file in a worktree and a directory in a clone, so existence is the test. */
+export function discoverRepos(root: string, maxDepth = 2): string[] {
+  const skip = (n: string) => n.startsWith(".") || n === "node_modules" || n === "dist" || n === "target";
+  const out: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    let entries: Dirent[]; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory() || skip(e.name)) continue;
+      const child = join(dir, e.name);
+      if (existsSync(join(child, ".git"))) out.push(child);             // a repo is a leaf: never descend into one
+      else if (depth < maxDepth) walk(child, depth + 1);
+    }
+  };
+  walk(root, 1);
+  return out.sort();                                                       // discovery order is filesystem order; the list is read by a human
+}
+/** "all" | "1,3" | "2-5" | "" → zero-based indices, deduped, in order, out-of-range dropped. */
+export function parseSelection(input: string, count: number): number[] {
+  const t = input.trim().toLowerCase();
+  if (!t) return [];
+  if (t === "all" || t === "전부") return [...Array(count).keys()];
+  const picked = new Set<number>();
+  for (const part of t.split(",")) {
+    const m = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/); if (!m) continue;
+    const a = Number(m[1]), b = m[2] ? Number(m[2]) : a;
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) if (i >= 1 && i <= count) picked.add(i - 1);
+  }
+  return [...picked].sort((x, y) => x - y);
+}
 const ask = (q: string, d = "") => { if (process.env.RELAY_SETUP_YES) return d; const a = prompt(`${q}${d ? ` [${d}]` : ""}: `); return (a ?? "").trim() || d; };
 const run = async (cmd: string[], env: Record<string, string> = {}) => { const p = Bun.spawn(cmd, { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env, ANTHROPIC_API_KEY: undefined } as any }); const [o, e] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]); return { code: await p.exited, out: o, err: e }; };
 const uniq = (xs: (string | null)[]) => [...new Set(xs.filter((x): x is string => !!x))];
@@ -41,9 +71,30 @@ export async function setup(rest: string[]) {
   writeFileSync(paths.config, tomlStringify(ConfigSchema.parse(cfg)), { mode: 0o600 }); say(`✔ ${paths.config}`);
   // ⑤ projects — through the API when the server is up (one writer, WS projects.updated), straight into the DB otherwise
   const { registerProjectOffline } = await import("./db.ts"); const up = await client().up();
+  const register = async (proj: { name: string; path: string; description: string; keywords: string[]; is_git: boolean }) => {
+    if (up) await client().post("/projects", proj); else await registerProjectOffline(proj);
+    say(`  ✔ ${proj.name} (${proj.is_git ? "git" : "non-git · 동시성 1"})`);
+  };
   for (;;) { const p = ask("등록할 프로젝트 경로 (빈 값이면 종료)"); if (!p) break; const path = resolve(p.replace(/^~/, process.env.HOME!)); if (!existsSync(path)) { say("  ✖ 경로 없음"); continue; }
-    const isGit = (await run(["git", "-C", path, "rev-parse", "--is-inside-work-tree"])).code === 0; const name = ask("  이름", basename(path)); const description = ask("  설명", ""); const keywords = ask("  키워드(쉼표)", "").split(",").map((s) => s.trim()).filter(Boolean);
-    const proj = { name, path, description, keywords, is_git: isGit }; if (up) await client().post("/projects", proj); else await registerProjectOffline(proj); say(`  ✔ ${name} (${isGit ? "git" : "non-git · 동시성 1"})`); }
+    const isGit = (await run(["git", "-C", path, "rev-parse", "--is-inside-work-tree"])).code === 0;
+    if (!isGit) {
+      // A parent directory is the natural thing to type. Registering it as one project would put every repo under it
+      // inside a single non-git project — no worktree isolation, and the guard boundary widened to the whole tree.
+      const repos = discoverRepos(path);
+      if (repos.length) {
+        say(`  이 경로는 git 저장소가 아닙니다. 아래에서 저장소 ${repos.length}개를 찾았습니다:`);
+        repos.forEach((r, i) => say(`    ${String(i + 1).padStart(2)}) ${basename(r).padEnd(24)} ${r.replace(process.env.HOME!, "~")}`));
+        say("  등록한 프로젝트는 디스패처의 라우팅 후보가 됩니다 — relay에 맡길 것만 고르세요.");
+        const picks = parseSelection(ask("  등록할 번호 (쉼표/범위, all=전부, 빈 값이면 건너뜀)"), repos.length);
+        for (const i of picks) await register({ name: basename(repos[i]), path: repos[i], description: "", keywords: [], is_git: true });
+        if (!picks.length) say("  건너뜀 (설명·키워드는 대시보드 설정 패널에서 채울 수 있습니다)");
+        continue;
+      }
+      say("  ⚠ git 저장소가 아니고 하위에도 없습니다. 이대로 등록하면 worktree 격리 없이 이 디렉터리에서 직접 작업하고, 가드 경계도 이 디렉터리 전체가 됩니다.");
+      if (ask("  그래도 등록할까요? (y/N)", "N").toLowerCase() !== "y") continue;
+    }
+    const name = ask("  이름", basename(path)); const description = ask("  설명", ""); const keywords = ask("  키워드(쉼표)", "").split(",").map((s) => s.trim()).filter(Boolean);
+    await register({ name, path, description, keywords, is_git: isGit }); }
   // ⑥ agents
   mkdirSync(paths.agentsDir, { recursive: true }); const bundled: Record<string, string> = { "relay-worker.md": await Bun.file(worker).text(), "relay-explore.md": await Bun.file(explore).text(), "relay-verify.md": await Bun.file(verify).text() };
   const existing = Object.fromEntries(Object.keys(bundled).map((n) => [n, existsSync(join(paths.agentsDir, n)) ? readFileSync(join(paths.agentsDir, n), "utf8") : null]));
