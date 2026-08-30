@@ -25,3 +25,25 @@ describe("ws client", () => {
     expect(store.state.messages.map((m) => m.id)).toEqual(["new", "n2", "n3"]); expect(store.state.conn).toBe("ok");
   });
 });
+
+// --- QA (2026-08-31): a restart emits system.recovered, an event that carries no frame at all ---
+describe("ws resync completion", () => {
+  test("resync ends when the replay burst stops, even if no frame ever reaches as_of_seq", async () => {
+    store.reset();
+    connect({ url: "ws://y/ws", WebSocketImpl: FakeWS as any, fetchImpl: (async () => ({ ok: true, json: async () => snapshot })) as any, resyncIdleMs: 120 });
+    await new Promise((r) => setTimeout(r, 5));
+    FakeWS.last.emit({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} });                  // first load: snapshot
+    await new Promise((r) => setTimeout(r, 5));
+    FakeWS.last.close(); await new Promise((r) => setTimeout(r, 1100));                            // reconnect
+    FakeWS.last.emit({ seq: 8, idx: 0, type: "hello", as_of_seq: 8, state: {} });
+    FakeWS.last.emit({ seq: 7, idx: 0, type: "chat.message", message: { id: "r1", created_at: 9 } });
+    expect(store.state.conn).toBe("resync");                                                       // seq 7 < as_of_seq 8, and seq 8 (system.recovered) will never arrive as a frame
+    await new Promise((r) => setTimeout(r, 200));
+    expect(store.state.conn).toBe("ok"); expect(store.state.seq).toBe(7);                          // the cursor did not move — the banner cleared anyway
+  });
+  test("a hello whose as_of_seq the cursor already covers goes straight to ok", async () => {
+    FakeWS.last.close(); await new Promise((r) => setTimeout(r, 1100));
+    FakeWS.last.emit({ seq: 7, idx: 0, type: "hello", as_of_seq: 7, state: {} });
+    expect(store.state.conn).toBe("ok");
+  });
+});
