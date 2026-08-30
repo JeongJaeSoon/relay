@@ -136,6 +136,21 @@ describe("Outbox", () => {
     expect(s.runner.calls.map((c) => c.kind)).toEqual(["stop", "rm"]); expect(s.states()).toEqual(["applied", "applied"]);
     expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
   });
+  test("a stop whose process.ended lands after a newer generation is alive leaves the live process alone; a stop of the current generation still ends it", async () => {
+    const s = setup(); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive", process_generation: 1 }); s.live("u1");
+    const stop = s.runner.stop.bind(s.runner);
+    // The fork's SessionStart lands while `claude stop` is still being awaited: generation 2 is alive before the stop
+    // gets to emit its process.ended for generation 1.
+    s.runner.stop = async (short: string) => { await stop(short); s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: 2, payload: { generation: 2, session_id: "sid2", short_id: "fake2" } }); };
+    s.ob.enqueue("u1", "s", { kind: "stop", reason: "interrupt" }); await s.ob.run("u1");
+    const t = loadTask(s.db, "u1")!;
+    expect(t.process_state).toBe("alive"); expect(t.process_generation).toBe(2); expect(t.status).toBe("running");
+    expect(s.db.query("select count(*) c from process_instances where task_uuid='u1' and ended_at is null").get()).toEqual({ c: 1 });   // I4
+    s.runner.stop = stop;
+    s.ob.enqueue("u1", "s2", { kind: "stop", reason: "interrupt" }); await s.ob.run("u1");
+    expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
+    expect(s.db.query("select count(*) c from process_instances where task_uuid='u1' and ended_at is null").get()).toEqual({ c: 0 });
+  });
   test("cancelPending fails the listed kinds so a closed task never keeps a pending spawn/send", async () => {
     const s = setup(); s.mk("u1", "queued", { queued_at: 1 });
     s.ob.enqueue("u1", "sp", { kind: "spawn", spec: spec("u1") }); s.ob.enqueue("u1", "se", { kind: "send", text: "x", marker: "00000009" });

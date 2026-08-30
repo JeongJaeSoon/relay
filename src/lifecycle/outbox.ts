@@ -205,7 +205,9 @@ export class Outbox {
       }
       case "stop": {
         if (t.short_id) { await this.runner.stop(t.short_id); if (!(await this.waitGone(t.short_id))) throw new Error("stop not confirmed"); }
-        if (t.process_state === "alive" || t.process_state === "starting") this.log.emit({ type: "process.ended", task_uuid: t.uuid, causation_id: cmd.id, payload: { reason: p.reason, crashed: false } });
+        // Stamped with the generation we stopped, not with whatever is current after the wait: if a newer one came up
+        // meanwhile, this end is about a superseded process and the projection must ignore it.
+        if (t.process_state === "alive" || t.process_state === "starting") this.log.emit({ type: "process.ended", task_uuid: t.uuid, causation_id: cmd.id, process_generation: t.process_generation, payload: { generation: t.process_generation, reason: p.reason, crashed: false } });
         this.applied(cmd, t); return;
       }
       case "rm": {

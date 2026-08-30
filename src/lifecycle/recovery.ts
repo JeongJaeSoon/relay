@@ -39,7 +39,7 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
     else if (pendingSpawn && t.status === "starting") { patch.status = "queued"; patch.process_state = "none"; patch.queued_at = t.queued_at ?? now(); patch.qhead = true; report.requeued.push(t.uuid); }   // never ran: let the scheduler grant the slot again
     else if (["starting", "alive"].includes(t.process_state)) {
       const crashed = ["starting", "running"].includes(t.status) && !t.paused;
-      d.log.emit({ type: "process.ended", task_uuid: t.uuid, payload: { reason: "recovery: not in agents list", crashed } });
+      d.log.emit({ type: "process.ended", task_uuid: t.uuid, process_generation: t.process_generation, payload: { generation: t.process_generation, reason: "recovery: not in agents list", crashed } });
       if (crashed) { patch.status = "error"; patch.ended_at = now(); report.crashed.push(t.uuid); d.log.emit({ type: "message.received", task_uuid: t.uuid, payload: chatFor("error", t, "The session vanished while relay restarted — use Restart to --resume") }); }
     }
     if (patch.status) d.log.emit({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: patch.status, patch } });

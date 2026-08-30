@@ -24,7 +24,7 @@ export class Watchdog {
         // Follow the fork chain instead of declaring the task lost — but never steal a session id another task already owns.
         if (row.session_id && row.session_id !== task.session_id && !this.db.query("select 1 from tasks where session_id=? and uuid<>?").get(row.session_id, task.uuid))
           this.log.emit({ type: "task.patched", task_uuid: task.uuid, payload: { patch: { session_id: row.session_id }, reason: "fork chain" } });
-        if (task.process_state === "starting" && t - task.updated_at > GRACE_MS) this.log.emit({ type: "process.started", task_uuid: task.uuid, payload: { generation: task.process_generation + 1, session_id: row.session_id, short_id: row.short_id, pid: row.pid, source: "watchdog", patch: task.status === "starting" ? { status: "running", started_at: task.started_at ?? t } : {} } });
+        if (task.process_state === "starting" && t - task.updated_at > GRACE_MS) this.log.emit({ type: "process.started", task_uuid: task.uuid, process_generation: task.process_generation + 1, payload: { generation: task.process_generation + 1, session_id: row.session_id, short_id: row.short_id, pid: row.pid, source: "watchdog", patch: task.status === "starting" ? { status: "running", started_at: task.started_at ?? t } : {} } });
         if (row.waiting_for && task.last_step !== `waiting: ${row.waiting_for}`) this.log.emit({ type: "task.patched", task_uuid: task.uuid, payload: { patch: { last_step: `waiting: ${row.waiting_for}` } } });
         continue;
       }
@@ -32,7 +32,9 @@ export class Watchdog {
       if (t - since < GRACE_MS) continue;
       this.missingSince.delete(task.uuid);
       const wasRunning = ["starting", "running"].includes(task.status) && !task.paused;
-      this.log.emit({ type: "process.ended", task_uuid: task.uuid, payload: { reason: "watchdog: process gone", crashed: wasRunning } });
+      // The roster row that is gone is the CURRENT generation's — `tasks` was re-read this tick, so stamping it is what
+      // lets the projection tell this apart from a superseded process's late end.
+      this.log.emit({ type: "process.ended", task_uuid: task.uuid, process_generation: task.process_generation, payload: { generation: task.process_generation, reason: "watchdog: process gone", crashed: wasRunning } });
       if (wasRunning) { this.log.emit({ type: "task.status_changed", task_uuid: task.uuid, payload: { status: "error", patch: { status: "error", ended_at: t } } }); this.permits.releaseTask(task.uuid, "crashed"); this.log.emit({ type: "message.received", task_uuid: task.uuid, payload: chatFor("error", loadTask(this.db, task.uuid)!, "Session ended (no SessionEnd) — use Restart to --resume") }); }
     }
     for (const task of this.db.query("select * from tasks where attach_state<>'none'").all().map(rowToTask)) {

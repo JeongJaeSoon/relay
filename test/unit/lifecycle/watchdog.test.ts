@@ -17,6 +17,9 @@ test("a vanished process becomes crashed/error after the grace period; a listing
     s.runner.list = list; await w.tick();
     expect(loadTask(s.db, gone)!.status).toBe("error"); expect(loadTask(s.db, gone)!.process_state).toBe("crashed"); expect(s.permits.active()).toBe(0);
     expect(s.db.query("select count(*) c from messages where role='error'").get()).toEqual({ c: 1 });
+    // "the process relay was watching is gone" is a claim about the CURRENT generation: stamped with it, so the
+    // projection's generation guard (gen < cur) lets it through instead of swallowing a real crash.
+    expect(s.db.query("select process_generation g from events where type='process.ended' and task_uuid=?").get(gone)).toEqual({ g: 1 });
     expect(s.db.query("select count(*) c from process_instances where task_uuid=? and ended_at is null").get(fresh)).toEqual({ c: 1 });
   } finally { setNow(null); }
 });

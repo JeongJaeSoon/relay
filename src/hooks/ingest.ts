@@ -189,9 +189,13 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
       cancelPermissions(d.permissions, body.session_id);
       for (const c of d.db.query("select uuid, agent_id from tasks where parent_uuid=? and status='running'").all(task.uuid) as any[]) { d.log.emit({ type: "task.status_changed", task_uuid: c.uuid, payload: { status: "done", patch: { status: "done", ended_at: now() } } }); d.permits.release(`agent:${c.agent_id}`); }
       for (const l of d.db.query("select holder_id from permit_leases where task_uuid=? and holder_kind='subagent' and released_at is null").all(task.uuid) as any[]) d.permits.release(l.holder_id);   // provisional Agent leases die with the process
-      const ours = !!d.db.query("select 1 from commands where task_uuid=? and kind='stop' and (state='running' or (state='applied' and applied_at>=?))").get(task.uuid, now() - 60_000);
+      // Relay's own doing covers `resume` as well as `stop`: the outbox stops the live session before `--bg --resume`
+      // forks a new one (Phase 0 ④), so the SessionEnd that follows is expected, not a crash. A resume stays `running`
+      // from before that stop until the forked session is on the roster — exactly the window it dies in.
+      const ours = !!d.db.query("select 1 from commands where task_uuid=? and ((kind='stop' and (state='running' or (state='applied' and applied_at>=?))) or (kind='resume' and state='running'))").get(task.uuid, now() - 60_000);
       const unexpected = ["starting", "running"].includes(task.status) && !task.paused && !ours;
-      d.log.emit({ type: "process.ended", task_uuid: task.uuid, payload: { reason: body.reason ?? "other", crashed: unexpected } });
+      const endGen = headerGen ?? gen;                                       // which generation ended: the projection is generation-scoped (I7)
+      d.log.emit({ type: "process.ended", task_uuid: task.uuid, process_generation: endGen, payload: { generation: endGen, reason: body.reason ?? "other", crashed: unexpected } });
       if (unexpected) d.onCrash(loadTask(d.db, task.uuid)!, `SessionEnd(${body.reason ?? "other"}) while running`);
       return { status: 200, json: {} };
     }
