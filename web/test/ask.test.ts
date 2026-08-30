@@ -20,12 +20,23 @@ test("the marker round-trips and is idempotent", () => {
 test("the ? prefix and the Ask toggle send the same request", async () => {
   const bodies = capture();
   await sendMessage("? why did T-02 fail");                                      // typed prefix, toggle off
-  await sendMessage("why did T-02 fail", true);                                  // toggle on
+  await sendMessage("why did T-02 fail", { ask: true });                         // toggle on
   await sendMessage("why did T-02 fail");                                        // neither → an ordinary message
-  const shape = (b: any) => ({ text: b.text, ask: b.ask });
-  expect(shape(bodies[0])).toEqual({ text: "why did T-02 fail", ask: true });
+  const shape = (b: any) => ({ text: b.text, ask: b.ask, ask_task_id: b.ask_task_id });
+  expect(shape(bodies[0])).toEqual({ text: "why did T-02 fail", ask: true, ask_task_id: undefined });
   expect(shape(bodies[1])).toEqual(shape(bodies[0]));
-  expect(shape(bodies[2])).toEqual({ text: "why did T-02 fail", ask: undefined });
+  expect(shape(bodies[2])).toEqual({ text: "why did T-02 fail", ask: undefined, ask_task_id: undefined });
+});
+
+test("the task panel's button scopes the question; a reply is never turned into one", async () => {
+  const bodies = capture();
+  await sendMessage("why is it stuck", { askTask: "uuid-2" });                   // "Ask about this task"
+  await sendMessage("? why is it stuck", { askTask: "uuid-2" });                 // same, with the prefix typed too
+  await sendMessage("a", { replyTo: "uuid-2", ask: true });                      // answering a worker's question stays a reply
+  expect(bodies[0]).toMatchObject({ text: "why is it stuck", ask: true, ask_task_id: "uuid-2" });
+  expect({ ...bodies[1], client_message_id: null }).toEqual({ ...bodies[0], client_message_id: null });
+  expect(bodies[2]).toMatchObject({ text: "a", reply_to_task_id: "uuid-2" });
+  expect(bodies[2].ask).toBeUndefined(); expect(bodies[2].ask_task_id).toBeUndefined();
 });
 
 test("a question is shown as its question text with an ask chip", () => {

@@ -93,7 +93,7 @@ export function installAdapter() {
   const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0; let loadedDetail: string | null = null;
   const ctx = (): Ctx => ({ projects: store.state.projects, tasks: store.state.tasks });
   const relay = {
-    send: (text: string, ask = false) => run("send", api.sendMessage(text, ask)),
+    send: (text: string, ask = false, askTask?: string) => run("send", api.sendMessage(text, { ask, askTask })),
     answer: (t: DemoTask, choice: string) => run("answer", api.answer(t.uuid, choice)),
     stop: (t: DemoTask) => run("stop", api.interrupt(t.uuid)), restart: (t: DemoTask) => run("restart", api.retry(t.uuid)), archive: (t: DemoTask) => run("archive", api.close(t.uuid)),
     attach: async (t: DemoTask) => { try { const { command } = await api.attachLease(t.uuid); await navigator.clipboard?.writeText(command).catch(() => {}); note(`Copied to clipboard: ${command} (run it in a terminal — relay attach releases the lease when it ends)`); } catch (e) { note(`attach failed: ${(e as Error).message}`); } },

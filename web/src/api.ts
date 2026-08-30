@@ -5,10 +5,12 @@ export const api = {
   async get<T>(path: string): Promise<T> { const r = await fetch(`/api${path}`, { headers: h() }); if (!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); },
   async post<T = unknown>(path: string, body: unknown = {}, method = "POST"): Promise<T> { const r = await fetch(`/api${path}`, { method, headers: h(), body: JSON.stringify(body) }); if (!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); },
 };
-/** Ask mode: the toggle and a typed `?` collapse into one request — the marker is stripped, the intent is declared. */
-export const sendMessage = (text: string, ask = false, replyTo?: string) => {
-  const q = !replyTo && (ask || isAsk(text));
-  return api.post<{ message_id: string }>("/messages", { text: q ? stripAsk(text) : text, client_message_id: crypto.randomUUID(), ...(q ? { ask: true } : {}), ...(replyTo ? { reply_to_task_id: replyTo } : {}) });
+/** Ask mode: the toggle, a typed `?` and the task panel's button collapse into one request — the marker is stripped,
+ *  the intent is declared, and `askTask` (a task uuid) scopes the question to that task without messaging it. */
+export const sendMessage = (text: string, opts: { ask?: boolean; askTask?: string; replyTo?: string } = {}) => {
+  const q = !opts.replyTo && (opts.ask || !!opts.askTask || isAsk(text));
+  return api.post<{ message_id: string }>("/messages", { text: q ? stripAsk(text) : text, client_message_id: crypto.randomUUID(),
+    ...(q ? { ask: true } : {}), ...(q && opts.askTask ? { ask_task_id: opts.askTask } : {}), ...(opts.replyTo ? { reply_to_task_id: opts.replyTo } : {}) });
 };
 export const answer = (uuid: string, text: string) => api.post(`/tasks/${uuid}/answer`, { text });
 export const interrupt = (uuid: string) => api.post(`/tasks/${uuid}/interrupt`); export const close = (uuid: string) => api.post(`/tasks/${uuid}/close`); export const retry = (uuid: string) => api.post(`/tasks/${uuid}/retry`);
