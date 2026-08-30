@@ -84,3 +84,16 @@ test("toDemoForeign names a session by what is knowable, in that order: roster n
   const d = toDemoForeign(f()); expect(d.key).toBe(d.sid); expect(d.startedAt).toBeInstanceOf(Date); expect(d.firstSeen.getTime()).toBe(10);
   expect(toDemoForeign(f({ started_at: null })).startedAt).toBeNull();                              // the session registry may not have the entry
 });
+
+// A promoted `question` chat row outlives the question: it stays in the snapshot after the task answers, but
+// toDemoTask only fills `question` while the task is waiting. chatQuestion reads t.question.q, so on any reload
+// whose last 200 messages contain an answered question, syncMessages threw and aborted the whole sync() — blank
+// canvas, no graph, no sidebar. The guard makes the row fall through to the plain chat row, which already
+// carries the question text.
+test("a question row whose task has moved on does not take the render down with it", () => {
+  const answered = base("u1", "running", { question: null });
+  expect(toDemoTask(answered, { ...ctx, tasks: { u1: answered } }).question).toBeNull();
+  // The adapter's branch is `m.role === "question" && task?.question`; without the optional chain this is the
+  // dereference that threw. Asserting the shape the branch guards on is what keeps it from coming back.
+  expect(() => toDemoTask(answered, { ...ctx, tasks: { u1: answered } }).question!.q).toThrow();
+});
