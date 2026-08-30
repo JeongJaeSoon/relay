@@ -40,6 +40,7 @@ The event log is the source of truth; `tasks`/`messages`/`commands` are projecti
 | Command | What it does |
 |---|---|
 | `relay serve` | HTTP + WS server (what the launchd service runs) |
+| `relay "<msg>" [--to T-08]` | Oneline dispatch — same as `relay send`, no subcommand needed. Quote it |
 | `relay send "<msg>" [--to T-08]` | Queue a message; `--to` delivers straight to a task |
 | `relay ls [--all] [--json]` | Task table (ID, status, project, title, elapsed, session) |
 | `relay tail <T-08>` | Live event stream for one task, from now on |
@@ -51,6 +52,11 @@ The event log is the source of truth; `tasks`/`messages`/`commands` are projecti
 | `relay db backup [file] \| restore <file> \| sweep \| rebuild` | Snapshot, restore, retention sweep, projection replay |
 | `relay mcp` | MCP stdio bridge (`relay_send` / `relay_list` / `relay_status`) |
 | `relay hook <event>` / `relay hook guard` | Worker session hook entry points |
+
+Quote the message. An unquoted ASCII word is read as a subcommand or a typo of one — `relay resume all`, `relay tial T-08` exit 2 and
+print the quoted form to paste, rather than spending a dispatch on it — and a command followed by prose it cannot take
+(`relay pause the login task`) is refused the same way instead of running. Text no subcommand could be (CJK, punctuation, digits) is sent
+as written, quoted or not. The shell eats `?` and `!` before relay sees them, which is one more reason to quote.
 
 Human-readable Korean output by default; `--json` prints JSON only, for scripts.
 

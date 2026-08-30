@@ -69,7 +69,7 @@ body{
   font-family:var(--font-ui); font-size:var(--fs-body); line-height:1.5;
   overflow:hidden;
 }
-button,input{font-family:inherit;font-size:inherit;color:inherit}
+button,input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--c-run);outline-offset:2px}
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 
@@ -351,9 +351,10 @@ header{
   cursor:pointer;border:0;
 }
 .m-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
-.chat-in{display:flex;gap:8px;padding:10px 20px 12px;border-top:1px solid var(--line);justify-content:center}
+.chat-in{display:flex;align-items:flex-end;gap:8px;padding:10px 20px 12px;border-top:1px solid var(--line);justify-content:center} /* flex-end: the input grows upward, Send stays on the baseline */
 #input{
-  flex:0 1 820px;height:38px;padding:0 14px;border-radius:9px;
+  flex:0 1 820px;min-height:38px;padding:7px 14px;border-radius:9px;line-height:1.5;resize:none;overflow-y:auto;
+  max-height:clamp(38px,calc(var(--chh,232px) - 115px),186px); /* 8 lines at most, minus the dock chrome (33px header + 22px row padding) and 60px kept for the message list */
   background:var(--surface);border:1px solid var(--line-strong);
 }
 #input::placeholder{color:var(--muted)}
@@ -646,8 +647,9 @@ input[type="checkbox"]{accent-color:var(--accent)}
     <div class="chat-body">
       <div class="chat-main">
         <div id="msgs" aria-live="polite"></div>
+        <!-- Enter routes through requestSubmit() and #sendBtn is the submit button: any other button added here needs type="button" -->
         <form class="chat-in" id="chatForm">
-          <input id="input" autocomplete="off" aria-label="Message" placeholder="Type a message — e.g. refactor the auth module">
+          <textarea id="input" rows="1" autocomplete="off" aria-label="Message" placeholder="Type a message — Enter to send, Shift+Enter for a new line"></textarea>
           <button id="sendBtn" type="submit">Send</button>
         </form>
       </div>
