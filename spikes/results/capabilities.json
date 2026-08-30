@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T14:36:44.526Z",
+  "updated_at": "2026-08-30T14:43:20.077Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -343,5 +343,66 @@
     "agentTypes": [
       "relay-explore"
     ]
-  }
+  },
+  "permissionHold": {
+    "held": {
+      "holdMs": 8000,
+      "hookTimeoutS": 60,
+      "toolUseId": "toolu_019CQLe1ihMCu3QRB92ArQ91",
+      "workerWaitedMs": 8039,
+      "statusDuringHold": {
+        "state": "blocked",
+        "status": "waiting",
+        "waitingFor": "permission prompt"
+      },
+      "wroteFile": true,
+      "stopSeen": true,
+      "finished": true,
+      "afterState": {
+        "state": "done",
+        "status": "idle",
+        "waitingFor": null
+      },
+      "note": "re-derived from spikes/results/06-permhold.jsonl after fixing the tool_use_id correlation (a PermissionRequest payload has none)"
+    },
+    "timedOut": {
+      "holdMs": 40000,
+      "hookTimeoutS": 10,
+      "toolUseId": "toolu_01GysT7yqucUcwgQ8diYfdzE",
+      "workerWaitedMs": 17391,
+      "statusDuringHold": {
+        "state": "blocked",
+        "status": "waiting",
+        "waitingFor": "permission prompt"
+      },
+      "wroteFile": true,
+      "stopSeen": true,
+      "finished": true,
+      "afterState": {
+        "state": "done",
+        "status": "idle",
+        "waitingFor": null
+      },
+      "note": "re-derived from spikes/results/06-permhold.jsonl after fixing the tool_use_id correlation (a PermissionRequest payload has none)"
+    },
+    "payloadKeys": [
+      "session_id",
+      "transcript_path",
+      "cwd",
+      "prompt_id",
+      "permission_mode",
+      "effort",
+      "hook_event_name",
+      "tool_name",
+      "tool_input",
+      "permission_suggestions"
+    ],
+    "hookTimeoutOutcome": "ALLOW — with the hook timing out at 10s and relay never answering, the Write still completed ~7s later. A hook timeout is not fail-closed, so relay’s auto-deny must fire well before the hook timeout."
+  },
+  "agentsJsonWaitingVocab": {
+    "state": "blocked",
+    "status": "waiting",
+    "waitingFor": "permission prompt"
+  },
+  "guard": "BLOCKED: not measured — Task 6 Step 3 needs a worker told to `git push` and to write outside its worktree; the auto-mode classifier refuses to issue that instruction from this session"
 }

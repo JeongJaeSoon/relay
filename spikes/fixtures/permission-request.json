@@ -1,0 +1,23 @@
+{
+  "session_id": "a0cdc352-969d-4fad-a855-6830799ffd37",
+  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-squishy-jingling-hickey/a0cdc352-969d-4fad-a855-6830799ffd37.jsonl",
+  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/squishy-jingling-hickey",
+  "prompt_id": "faadca24-92cb-4256-bf53-7e228e04f6a0",
+  "permission_mode": "default",
+  "effort": {
+    "level": "low"
+  },
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/squishy-jingling-hickey/note.txt",
+    "content": "hi"
+  },
+  "permission_suggestions": [
+    {
+      "type": "setMode",
+      "mode": "acceptEdits",
+      "destination": "session"
+    }
+  ]
+}
