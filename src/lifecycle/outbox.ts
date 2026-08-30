@@ -1,6 +1,6 @@
 // src/lifecycle/outbox.ts — commands table + per-task serial executor (roadmap B3).
 import type { Database } from "bun:sqlite";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Command, CommandKind, DeliveryMethod, SendOutcome, Task } from "@shared/types.ts";
@@ -16,7 +16,7 @@ export type CommandPayload =
   | { kind: "stop"; reason: string }
   | { kind: "resume"; prompt: string; marker: string }
   | { kind: "rm" };
-export interface OutboxDeps { delivery: () => DeliveryMethod; isPaused: () => boolean; settingsJson: (t: Task) => string; env: (t: Task, gen: number) => Record<string, string>; socketPathFor: (row: AgentRow) => string; instanceId: () => string }
+export interface OutboxDeps { delivery: () => DeliveryMethod; isPaused: () => boolean; settingsJson: (t: Task, gen: number) => string; env: (t: Task, gen: number) => Record<string, string>; socketPathFor: (row: AgentRow) => string; instanceId: () => string }
 /** Thrown by apply() when the command must stay pending and the task queue must stop for now (inbox held, turn busy). */
 class HeldError extends Error {}
 const rowToCommand = (r: any): Command => ({ ...r, payload: JSON.parse(r.payload_json) });
@@ -140,7 +140,7 @@ export class Outbox {
         const worktreeExpected = p.spec.worktree != null;
         // adopt only a session that is provably ours: same name AND our owner stamp in its WORKTREE (a crash between exec and record)
         const existing = (await this.runner.list()).find((r) => r.name === p.spec.name && r.alive && readOwner(this.ownerDir(r, worktreeExpected, t.worktree_path))?.task_uuid === t.uuid);
-        const res = existing ? { short_id: existing.short_id!, name: existing.name! } : await this.runner.spawn({ ...p.spec, settingsJson: this.deps.settingsJson(t), env: this.deps.env(t, gen) });
+        const res = existing ? { short_id: existing.short_id!, name: existing.name! } : await this.runner.spawn({ ...p.spec, settingsJson: this.deps.settingsJson(t, gen), env: this.deps.env(t, gen) });
         const row = existing ?? (await this.waitRow(res.short_id));
         this.patch(t, { short_id: res.short_id, process_state: "starting", ...(row ? this.stampWorktree(t, row, worktreeExpected) : {}) }, cmd);
         this.applied(cmd, t, { short_id: res.short_id, adopted: !!existing }); return;
@@ -166,7 +166,7 @@ export class Outbox {
         if (!t.session_id) throw new Error("no session_id to resume");
         if (live?.alive && live.short_id) { await this.runner.stop(live.short_id); if (!(await this.waitGone(live.short_id))) throw new Error("stop not confirmed"); }
         const gen = t.process_generation + 1;
-        const r = await this.runner.resume({ sessionId: t.session_id, cwd: live?.cwd ?? t.worktree_path ?? process.cwd(), name: `relay:${t.display_id} ${t.title}`, settingsJson: this.deps.settingsJson(t), prompt: text, env: this.deps.env(t, gen) });
+        const r = await this.runner.resume({ sessionId: t.session_id, cwd: live?.cwd ?? t.worktree_path ?? process.cwd(), name: `relay:${t.display_id} ${t.title}`, settingsJson: this.deps.settingsJson(t, gen), prompt: text, env: this.deps.env(t, gen) });
         // `--bg --resume` FORKS to a NEW session id (Phase 0 ④). Bind the task to it now so the fork's SessionStart is
         // the ordinary path; if the row is not there yet, ingest rebinds when that SessionStart arrives.
         const fresh = await this.waitRow(r.short_id);
@@ -180,6 +180,9 @@ export class Outbox {
         this.applied(cmd, t); return;
       }
       case "rm": {
+        // Drop our own stamp first: `claude rm` keeps a worktree that has uncommitted changes, and an untracked
+        // `.relay-owner` would be exactly that (measured 2026-08-31). Reconcile no longer needs it once we are removing.
+        if (t.worktree_path) { try { unlinkSync(join(t.worktree_path, OWNER_FILE)); } catch {} }
         const r = t.short_id ? await this.runner.rm(t.short_id) : { worktreeKept: false };
         // `claude rm` keeps the session when its worktree has uncommitted or unpushed work (Phase 0 ④). B3: still
         // applied, but the user has to be told the worktree is still on disk.

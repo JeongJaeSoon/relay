@@ -9,24 +9,35 @@ export const relayBin = () => {
   const m = exe.match(/^(.*)\/Cellar\/relay\/[^/]+\/bin\/relay$/); return q(m ? `${m[1]}/bin/relay` : exe);
 };
 
-export function buildSettingsJson(p: { port: number; allowPush: boolean; maxAgents: number; bin?: string }): string {
+/** Per-spawn settings. The task uuid, its hook token and the generation nonce are baked in as LITERAL values, not as
+ *  `$RELAY_*` env references: measured 2026-08-31, a `claude --bg` session is started by the supervisor daemon and does
+ *  NOT inherit the environment of the `claude --bg` invocation, so every env-interpolated header arrived empty and every
+ *  hook was rejected with 401. The command hooks take the same values as arguments for the same reason. */
+export function buildSettingsJson(p: { port: number; allowPush: boolean; maxAgents: number; bin?: string; taskUuid?: string; hookToken?: string; gen?: number; home?: string }): string {
   const bin = p.bin ?? relayBin();
-  const http = { type: "http", url: `http://127.0.0.1:${p.port}/api/hooks`, headers: { Authorization: "Bearer $RELAY_HOOK_TOKEN", "X-Relay-Task": "$RELAY_TASK_UUID", "X-Relay-Gen": "$RELAY_GEN" }, allowedEnvVars: ["RELAY_HOOK_TOKEN", "RELAY_TASK_UUID", "RELAY_GEN"], timeout: 3 };
+  const api = `http://127.0.0.1:${p.port}`;
+  const task = p.taskUuid ?? ""; const gen = String(p.gen ?? 0);
+  const http = { type: "http", url: `${api}/api/hooks`, headers: { Authorization: `Bearer ${p.hookToken ?? ""}`, "X-Relay-Task": task, "X-Relay-Gen": gen }, timeout: 3 };
+  const cmdArgs = ` --task ${q(task)} --gen ${gen} --url ${q(api)}${p.home ? ` --home ${q(p.home)}` : ""}`;
   const hooks: Record<string, unknown> = {};
-  for (const e of INJECTED_HOOK_EVENTS) hooks[e] = e === "SessionStart" ? [{ hooks: [{ type: "command", command: `${bin} hook SessionStart`, timeout: 3 }] }] : [{ hooks: [http] }];
+  for (const e of INJECTED_HOOK_EVENTS) hooks[e] = e === "SessionStart" ? [{ hooks: [{ type: "command", command: `${bin} hook SessionStart${cmdArgs}`, timeout: 3 }] }] : [{ hooks: [http] }];
   hooks.PermissionRequest = [{ hooks: [{ ...http, timeout: 900 }] }];   // relay answers when the user clicks 허용/거부 (auto-deny after 14 min)
   hooks.PreToolUse = [
     { matcher: "Agent", hooks: [http] },
-    { matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: `${bin} hook guard`, timeout: 5 }] },
+    { matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: `${bin} hook guard${cmdArgs}${p.allowPush ? " --allow-push" : ""}`, timeout: 5 }] },
     { hooks: [http] },
   ];
-  const deny = ["Bash(sudo *)", "Bash(rm -rf /*)", "Write(~/.claude/**)", "Edit(~/.claude/**)", "Write(~/.config/relay/**)", "Edit(~/.config/relay/**)", "Read(~/.config/relay/**)"];
+  // Edit(...) rules cover every file-editing tool; a Write(path) rule is not matched by file permission checks at all
+  // (the CLI warns about it on stderr), so the path guards are expressed as Edit/Read.
+  const deny = ["Bash(sudo *)", "Bash(rm -rf /*)", "Edit(~/.claude/**)", "Edit(~/.config/relay/**)", "Read(~/.config/relay/**)"];
   if (!p.allowPush) deny.unshift("Bash(git push*)");
   return JSON.stringify({ crossSessionInbound: "accept", env: { CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: "1", CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: String(p.maxAgents) }, permissions: { deny }, hooks });
 }
 
 const PASS = ["PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TERM"];
-/** hookToken = per-task HMAC (auth.ts hookTokenFor); gen = the process generation relay assigned to this spawn/resume (hooks echo it as X-Relay-Gen). */
+/** Environment for the `claude` process relay launches. NOTE: a `--bg` session does not inherit this (the supervisor
+ *  daemon owns it), so the RELAY_* values here only reach non-bg invocations — the worker's hooks get them from
+ *  buildSettingsJson instead. `claude` itself still needs PATH/HOME and the OAuth fallback token. */
 export function workerEnv(p: { taskUuid: string; port: number; hookToken: string; oauthToken: string | null; maxAgents: number; gen?: number }): Record<string, string> {
   const env: Record<string, string> = {};
   for (const k of PASS) if (process.env[k]) env[k] = process.env[k]!;

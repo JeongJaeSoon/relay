@@ -27,10 +27,11 @@ export function guardDecision(body: any, env: { cwd: string; RELAY_ALLOW_PUSH?: 
   return { block: false, reason: "" };
 }
 /** Entry point for `relay hook guard`: stdin JSON → exit 2 (block) / 0 (allow). Any failure blocks (fail-closed). */
-export async function runGuard(): Promise<never> {
+export async function runGuard(argv: string[] = []): Promise<never> {
   try {
     const body = JSON.parse(await new Response(Bun.stdin.stream()).text());
-    const d = guardDecision(body, { cwd: String(body.cwd ?? process.cwd()), RELAY_ALLOW_PUSH: process.env.RELAY_ALLOW_PUSH });
+    // `--allow-push` comes from the settings the spawning relay wrote: a `--bg` worker inherits no relay environment
+    const d = guardDecision(body, { cwd: String(body.cwd ?? process.cwd()), RELAY_ALLOW_PUSH: argv.includes("--allow-push") ? "1" : process.env.RELAY_ALLOW_PUSH });
     if (d.block) { process.stderr.write(d.reason + "\n"); process.exit(2); }
     process.exit(0);
   } catch (e) { process.stderr.write(`relay guard error (blocking): ${String(e)}\n`); process.exit(2); }
