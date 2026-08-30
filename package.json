@@ -7,6 +7,12 @@
     "test": "bun test",
     "spike": "bun run"
   },
-  "devDependencies": { "@types/bun": "latest" },
-  "dependencies": {}
+  "devDependencies": {
+    "@types/bun": "^1.4.0"
+  },
+  "dependencies": {
+    "hono": "4.13.5",
+    "ulid": "3.0.2",
+    "zod": "4.5.2"
+  }
 }
