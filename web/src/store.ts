@@ -3,12 +3,12 @@ import type { EventEnvelope, Message, Project, SystemState, Task, TasksSnapshot,
 export type Conn = "ok" | "reconnecting" | "resync";
 export interface State { seq: number; idx: number; conn: Conn; sys: SystemState | null; projects: Project[]; tasks: Record<string, Task>; messages: Message[]; events: Record<string, EventEnvelope[]>; dirty: Dirty }
 export interface Dirty { tasks: Set<string>; messages: Set<string>; events: Set<string>; sys: boolean; projects: boolean; all: boolean }
-export interface Store { state: State; subscribe(fn: () => void): () => void; applyFrame(f: WsFrame): void; applySnapshot(s: TasksSnapshot): void; setConn(c: Conn): void; drain(): Dirty; reset(): void }
+export interface Store { state: State; subscribe(fn: (f?: WsFrame) => void): () => void; applyFrame(f: WsFrame): void; applySnapshot(s: TasksSnapshot): void; setConn(c: Conn): void; drain(): Dirty; reset(): void }
 const EVENTS_CAP = 200;
 const freshDirty = (): Dirty => ({ tasks: new Set(), messages: new Set(), events: new Set(), sys: false, projects: false, all: false });
 const initial = (): State => ({ seq: 0, idx: 0, conn: "reconnecting", sys: null, projects: [], tasks: {}, messages: [], events: {}, dirty: freshDirty() });
 export function createStore(): Store {
-  const state = initial(); const subs = new Set<() => void>(); const emit = () => { for (const f of subs) f(); };
+  const state = initial(); const subs = new Set<(f?: WsFrame) => void>(); const emit = (frame?: WsFrame) => { for (const f of subs) f(frame); };   // the applied frame reaches subscribers so notification diffing can happen per frame, not per render
   const upsertMessage = (m: Message) => { const i = state.messages.findIndex((x) => x.id === m.id); if (i >= 0) state.messages[i] = m; else { state.messages.push(m); state.messages.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)); } state.dirty.messages.add(m.id); };
   return {
     state,
@@ -23,7 +23,7 @@ export function createStore(): Store {
         case "task.created": case "task.updated": state.tasks[f.task.uuid] = f.task; state.dirty.tasks.add(f.task.uuid); break;
         case "task.event": { const list = state.events[f.task_uuid] ?? []; list.push(f.event); if (list.length > EVENTS_CAP) list.splice(0, list.length - EVENTS_CAP); state.events[f.task_uuid] = list; state.dirty.events.add(f.task_uuid); break; }
       }
-      emit();
+      emit(f);
     },
     applySnapshot(s) {
       state.seq = s.as_of_seq; state.idx = Number.MAX_SAFE_INTEGER;                                      // every frame of as_of_seq is inside the snapshot

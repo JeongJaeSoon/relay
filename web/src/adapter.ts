@@ -2,7 +2,7 @@
 import type { EventEnvelope, Message, Project, Task } from "@shared/types.ts";
 import * as api from "./api.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
-import { diffNotifs } from "./notify.ts";
+import { diffNotifs, type NotifKind } from "./notify.ts";
 import { store } from "./store.ts";
 export interface DemoTaskCore { id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
 export interface DemoEvent { id: number; at: Date; txt: string; payload: string | null }
@@ -44,12 +44,31 @@ export function eventLine(e: EventEnvelope): DemoEvent {
   const p: any = e.payload ?? {}; const txt = e.type.startsWith("hook.") ? `${e.type.slice(5)}${p.tool_name ? " · " + p.tool_name : ""}${p.notification_type ? " · " + p.notification_type : ""}` : e.type === "send.outcome" ? `전달 ${p.outcome} (${p.via})` : e.type === "message.sent" ? `${p.direction === "in" ? "← " : "→ "}${p.to ?? p.from ?? ""}` : e.type;
   return { id: e.seq, at: new Date(e.occurred_at), txt, payload: e.payload && typeof e.payload === "object" ? JSON.stringify(e.payload, null, 1).slice(0, 4000) : null };
 }
+export interface NotifOp { op: "add" | "withdraw"; taskUuid: string; kind?: NotifKind; title?: string; body?: string }
+export interface NotifQueue { observe(t: Task): void; drain(): { ops: NotifOp[]; chips: string[] } }
+/** Notifications are decided as each frame lands, not when the renderer next runs: Chrome pauses rAF in a hidden
+ *  tab, so a coalesced render would only ever see the newest task state and every transition in between — exactly
+ *  the ones the notification centre exists for — would be lost. The DOM work still happens in the rAF flush. */
+export function createNotifQueue(): NotifQueue {
+  const last = new Map<string, Task>(); const ops: NotifOp[] = []; const chips = new Set<string>();
+  return {
+    observe(t) {
+      const prev = last.get(t.uuid); last.set(t.uuid, t);
+      if (!prev) return;                                                       // first sighting (snapshot or task.created) never notifies
+      const { add, withdraw } = diffNotifs(prev, t);
+      for (const w of withdraw) ops.push({ op: "withdraw", taskUuid: w.taskUuid, kind: w.kind });
+      for (const a of add) ops.push({ op: "add", taskUuid: a.taskUuid, kind: a.kind, title: a.title, body: a.body });
+      if (prev.question && !t.question) chips.add(t.uuid);                     // the question was answered elsewhere — grey its chat chips out
+    },
+    drain() { const c = [...chips]; chips.clear(); return { ops: ops.splice(0), chips: c }; },
+  };
+}
 export const closeConfirmUuid = (text: string) => text.match(/\[종료 확인: POST \/api\/tasks\/([^/\]]+)\/close\]/)?.[1] ?? null;
 // ---- browser ----------------------------------------------------------------------------------------
 const note = (s: string) => D.chatNote?.(s);
 const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label} 실패: ${String((e as Error).message ?? e)}`));
 export function installAdapter() {
-  const S = D.S; const last = new Map<string, Task>(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0; let loadedDetail: string | null = null;
+  const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0; let loadedDetail: string | null = null;
   const ctx = (): Ctx => ({ projects: store.state.projects, tasks: store.state.tasks });
   const relay = {
     send: (text: string) => run("전송", api.sendMessage(text)),
@@ -66,11 +85,9 @@ export function installAdapter() {
   const syncTasks = (uuids: Iterable<string>) => {
     let changed = false;
     for (const uuid of uuids) {
-      const t = store.state.tasks[uuid]; if (!t) continue; const next = toDemoTask(t, ctx()); const prev = last.get(uuid); const cur: DemoTask | undefined = S.tasks.get(next.id);
+      const t = store.state.tasks[uuid]; if (!t) continue; const next = toDemoTask(t, ctx()); const cur: DemoTask | undefined = S.tasks.get(next.id);
       if (cur) Object.assign(cur, next); else S.tasks.set(next.id, { ...next, events: [], timers: [], x: 0, y: 0 } satisfies DemoTask);   // keep x/y/events on update → the .node element and its transition survive
-      const d: DemoTask = S.tasks.get(next.id);
-      if (prev) { const { add, withdraw } = diffNotifs(prev, t); for (const w of withdraw) D.withdrawNotif(d.id, w.kind); for (const a of add) D.notify(a.kind, d, a.body); if (prev.question && !t.question) document.querySelectorAll(`.m-chips[data-task="${d.id}"] .chip`).forEach((b) => ((b as HTMLButtonElement).disabled = true)); }
-      last.set(uuid, t); changed = true;
+      changed = true;
     }
     return changed;
   };
@@ -101,14 +118,24 @@ export function installAdapter() {
     const users = store.state.messages.filter((m) => m.role === "user").slice(-20).reverse(); D.DLOG.length = 0; for (const m of users) D.DLOG.push(dlogEntry(m, ctx())); D.renderDlog();
   };
   const syncEvents = (uuids: Iterable<string>) => { for (const uuid of uuids) { const t = demoOf(uuid); if (!t) continue; const list = store.state.events[uuid] ?? []; const have = new Set(t.events.map((e) => e.id)); for (const e of list) if (!have.has(e.seq)) t.events.push(eventLine(e)); if (t.events.length > 200) t.events.splice(0, t.events.length - 200); if (S.sel === t.id) D.refresh(); } };
+  const flushNotifs = () => {                                                  // decisions were made at frame time; the DOM work happens here, once per render
+    const { ops, chips } = notifs.drain();
+    for (const o of ops) { const d = demoOf(o.taskUuid); if (!d) continue; if (o.op === "withdraw") D.withdrawNotif(d.id, o.kind); else D.notify(o.kind, d, o.body); }
+    for (const uuid of chips) { const d = demoOf(uuid); if (d) document.querySelectorAll(`.m-chips[data-task="${d.id}"] .chip`).forEach((b) => ((b as HTMLButtonElement).disabled = true)); }
+  };
   const sync = () => {
     raf = 0; const d = store.drain(); const all = d.all;
     const tasksChanged = syncTasks(all ? Object.keys(store.state.tasks) : d.tasks);
+    flushNotifs();                                                             // after syncTasks so S.tasks holds the demo task the notification points at
     if (all || d.sys || d.projects) syncSystem();
     if (all || d.messages.size) syncMessages(all ? store.state.messages.map((m) => m.id) : d.messages);
     if (d.events.size) syncEvents(d.events);
     if (tasksChanged || all) D.relayout();                                     // one layout+render per animation frame, whatever arrived
   };
-  store.subscribe(() => { if (!raf) raf = requestAnimationFrame(sync); });
+  store.subscribe((f) => {
+    if (f) { if (f.type === "task.created" || f.type === "task.updated") notifs.observe(f.task); }
+    else for (const t of Object.values(store.state.tasks)) notifs.observe(t);  // snapshot or connection change: re-baseline, and notify for whatever moved while we were disconnected
+    if (!raf) raf = requestAnimationFrame(sync);
+  });
   const origSelect = D.select; D.select = (id: string | null) => { origSelect(id); const t = id ? S.tasks.get(id) : null; if (t) relay.loadDetail(t); };   // first selection pulls the 200-event history
 }
