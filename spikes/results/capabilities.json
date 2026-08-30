@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T14:29:51.908Z",
+  "updated_at": "2026-08-30T14:35:55.075Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -311,5 +311,25 @@
       "transcriptLagMs": 155
     }
   },
-  "agentFilesLoaded": true
+  "agentFilesLoaded": true,
+  "daemon": {
+    "restartsKilledWorker": true,
+    "restartDelayMs": 12066,
+    "hooksAfterKill": [
+      "SessionStart:resume"
+    ],
+    "rosterAttempt": 2
+  },
+  "races": {
+    "stopVsSend": "resume-spawned/arrived",
+    "idleStopVsReply": "ok (re-read from the log) — the reply completed with RELAY: done, but under a NEW session id: the script keyed on the old one and reported no-done",
+    "interruptVsSubagentStop": "SubagentStop:false SessionEnd:true",
+    "restartVsHookPost": "postToolUseSeen:4/5 (gap ≈6s) — worker not blocked: true",
+    "kill9": "restarted:true after 12066ms newPid:29684 hooks:[SessionStart:resume] rosterAttempt:2",
+    "stopVsSendNote": "the racing resume spawned and the message arrived, but the fork landed in the LAUNCH cwd (sandbox), not the worktree — relay must pass the worktree cwd it learned from the hook payload",
+    "attachVsSend": "BLOCKED: not measured — `claude attach` needs an interactive terminal. Run it manually (Task 4 Step 2)."
+  },
+  "resumeForksSessionId": "`claude --bg --resume <uuid>` starts a NEW session id and reports SessionStart source=fork; the daemon respawn after kill -9 keeps the SAME session id and reports source=resume. Task identity must follow the fork chain, not one session id (roadmap B4 dedupe key and the \"a foreign session_id cannot hijack a bound task\" rule both need this)",
+  "subagentStopOnParentInterrupt": "absent — stopping the parent while a subagent runs emits SessionEnd but no SubagentStop, so subagent permits must be reclaimed on SessionEnd (B5 recovery step 1)",
+  "attachDetectable": "unknown — agents --json exposed no attach field in this run"
 }
