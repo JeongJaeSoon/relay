@@ -121,11 +121,32 @@ describe("ingestHook", () => {
     s.post({ hook_event_name: "SessionEnd", reason: "other" });
     expect((await (a as any).wait).hookSpecificOutput.decision.behavior).toBe("deny"); expect(s.deps.permissions.size).toBe(0);
   });
-  test("an Agent call that returns without SubagentStart drops its provisional lease; rate-limit text in a tool result trips onRateLimit", () => {
+  test("an Agent call that returns without SubagentStart drops its provisional lease", () => {
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
     s.post({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_use_id: "tuA", tool_input: {} }); expect(s.acquired).toEqual(["sub:u1:tuA"]);
     s.post({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: "tuA", tool_input: {}, error: "denied" }); expect(s.acquired).toEqual([]);
-    s.post({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "tuB", tool_input: {}, tool_response: "Error: 429 rate limit exceeded, resets 3:00pm" }); expect(s.limits.length).toBe(1);
+  });
+  // The kill switch onRateLimit trips is GLOBAL, so what may trip it is narrow: only where the model or the API itself
+  // reports a limit (a failed tool call's error, the assistant's own last message), never the stdout of a command the
+  // worker ran. `bun install` printing `+ express-rate-limit@8.5.2` once stopped every task in the fleet.
+  test("tool output never trips the kill switch, whatever words it happens to contain", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    const out = (id: string, tool_response: unknown) => s.post({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: id, tool_input: {}, tool_response });
+    out("tu1", "bun install v1.4.0\n+ express-rate-limit@8.5.2\n+ hono@4.13.5\n103 packages installed");   // the incident
+    out("tu2", "+ http-errors@429.0.0 downloaded from https://registry.example.com/429/too-many-requests.tgz");
+    out("tu3", "src/api/client.ts:42:  if (res.status === 429) throw new Error('rate limit exceeded, retry later');");   // a grep hit
+    out("tu4", { stdout: "Disk quota exceeded: /dev/sda1 is at 100% of its quota", exit_code: 1 });
+    out("tu5", "Claude usage limit reached — the phrase quoted inside a log file the worker just read");
+    expect(s.limits).toEqual([]);
+  });
+  test("a limit the model or the API reports does trip the kill switch, with its reset time intact", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    s.post({ hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_use_id: "tuF", tool_input: {}, error: 'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of requests has exceeded your rate limit"}}' });
+    expect(s.limits.length).toBe(1);
+    s.post({ ...(stopFx as any), session_id: "sess-1", prompt_id: "turn-limit", last_assistant_message: "Claude usage limit reached. Your limit will reset at 3:00pm." });
+    expect(s.limits.length).toBe(2); expect(s.limits[1]).toContain("3:00pm");
+    s.post({ ...(stopFx as any), session_id: "sess-1", prompt_id: "turn-ok", last_assistant_message: "Done — I added express-rate-limit@8.5.2 and a 429 handler, and the quota docs are in README." });
+    expect(s.limits.length).toBe(2);                                                                   // merely talking about limits is not hitting one
   });
   test("a --bg --resume fork rebinds the session chain: the new id takes over, the old one stays resolvable, and its late hooks are stale rather than foreign", () => {
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });

@@ -29,7 +29,7 @@ export interface IngestDeps {
   onQuestion: (task: Task, q: TaskQuestion) => void;                        // chat promotion for permission questions (marker questions come via onStop)
   onToolUse: (task: Task, promptId: string | null) => void;                  // per-turn tool-call cap (usage guard)
   onNudge: (task: Task) => void;                                             // Notification that suggests the CLI is waiting → watchdog tick
-  onRateLimit: (task: Task, text: string) => void;                           // subscription/rate limit detected in worker output → kill switch (§11)
+  onRateLimit: (task: Task, text: string) => void;                           // the model or the API reported a subscription/rate limit → kill switch (§11)
   onSendMarker: (taskUuid: string, markerId: string) => void;
   permissions: Map<PermissionKey, PendingPermission>;                        // held PermissionRequest responses, answered via TaskService.answer()
 }
@@ -71,7 +71,17 @@ const startInFlight = (db: Database, taskUuid: string): boolean =>
   !!db.query("select 1 from commands where task_uuid=? and kind in ('spawn','resume') and (state='running' or (state='applied' and applied_at>=?))").get(taskUuid, now() - START_WINDOW_MS);
 const stepOf = (b: any) => { const i = b.tool_input ?? {}; const d = i.file_path ?? i.path ?? i.pattern ?? (typeof i.command === "string" ? i.command.slice(0, 40) : i.description); return d ? `${b.tool_name} ${String(d).split("/").slice(-2).join("/")}`.slice(0, 60) : String(b.tool_name); };
 const PERMISSION_AUTO_DENY_MS = 14 * 60_000;   // must stay below the hook timeout (900s) so the CLI never sees a dangling request
-const RATE_LIMIT = /(rate.?limit|usage limit|quota|too many requests|429)/i;
+/** A subscription/API limit **as the model or the API words it**. Deliberately narrow, and read only on the paths where
+ *  one of them speaks (a failed tool call's error, the assistant's own last message) — never over a tool's output, which
+ *  is arbitrary text the worker's command happened to print. The switch this feeds is GLOBAL: missing a real limit costs
+ *  one retry the user can trigger, a false positive stops every task, so a bare `429`, a bare `quota` or a bare mention
+ *  of "rate limit" are not enough (`bun install` printing `+ express-rate-limit@8.5.2` once stopped the whole fleet). */
+const RATE_LIMIT = new RegExp([
+  String.raw`\b(?:usage|rate|request)[ _-]?limits?\b[^.\n]{0,30}?\b(?:reached|exceeded|hit)\b`,          // "usage limit reached", "rate limit exceeded"
+  String.raw`\b(?:reach(?:ed|es)?|exceed(?:ed|s)?|hit)\b[^.\n]{0,40}?\byour\b[^.\n]{0,25}?\blimits?\b`,  // "you've hit your limit", "has exceeded your rate limit"
+  String.raw`\brate_limit_error\b`,                                                                       // the Anthropic API error type
+  String.raw`\btoo many requests\b`,                                                                      // the 429 status text
+].join("|"), "i");
 /** Deny every held PermissionRequest of a session (SessionEnd, crash, relay shutdown). */
 export function cancelPermissions(perms: Map<PermissionKey, PendingPermission>, sessionId: string) { for (const [k, p] of perms) if (p.session_id === sessionId) { p.resolve("deny"); perms.delete(k); } }
 
@@ -137,7 +147,6 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
       patch({ last_step: stepOf(body) }); d.onToolUse(task, body.prompt_id ?? null);
       if (body.tool_name === "Agent") releaseProvisional();                  // the Agent call returned without a SubagentStart (denied/failed/foreground finished): drop the provisional lease
       if (body.tool_name === "SendMessage" || body.tool_name === "ListAgents") d.log.emit({ type: "message.sent", task_uuid: task.uuid, payload: { direction: "out", tool: body.tool_name, to: body.tool_input?.to ?? null, text: String(body.tool_input?.message ?? "").slice(0, 500), outcome: body.tool_response?.success === false ? "refused" : "accepted" } });
-      if (RATE_LIMIT.test(JSON.stringify(body.tool_response ?? "").slice(0, 2000))) d.onRateLimit(task, String(body.tool_response).slice(0, 200));
       return { status: 200, json: {} };
     }
     case "PostToolUseFailure": { patch({ last_step: `failed: ${body.tool_name}` }); d.onToolUse(task, body.prompt_id ?? null); if (body.tool_name === "Agent") releaseProvisional(); if (RATE_LIMIT.test(String(body.error ?? ""))) d.onRateLimit(task, String(body.error).slice(0, 200)); return { status: 200, json: {} }; }
