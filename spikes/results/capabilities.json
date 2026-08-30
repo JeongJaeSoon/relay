@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T14:35:55.075Z",
+  "updated_at": "2026-08-30T14:36:44.526Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -331,5 +331,17 @@
   },
   "resumeForksSessionId": "`claude --bg --resume <uuid>` starts a NEW session id and reports SessionStart source=fork; the daemon respawn after kill -9 keeps the SAME session id and reports source=resume. Task identity must follow the fork chain, not one session id (roadmap B4 dedupe key and the \"a foreign session_id cannot hijack a bound task\" rule both need this)",
   "subagentStopOnParentInterrupt": "absent — stopping the parent while a subagent runs emits SessionEnd but no SubagentStop, so subagent permits must be reclaimed on SessionEnd (B5 recovery step 1)",
-  "attachDetectable": "unknown — agents --json exposed no attach field in this run"
+  "attachDetectable": "unknown — agents --json exposed no attach field in this run",
+  "permit": {
+    "agentPreToolUse": 3,
+    "subagentStarts": 1,
+    "subagentStops": 1,
+    "denied": 2,
+    "preToolUseDenyWorks": true,
+    "parallelObserved": false,
+    "denyReasonSeenByWorker": true,
+    "agentTypes": [
+      "relay-explore"
+    ]
+  }
 }
