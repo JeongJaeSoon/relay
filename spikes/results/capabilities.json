@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T15:15:59.684Z",
+  "updated_at": "2026-08-30T15:36:33.963Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -230,13 +230,13 @@
   "peerSocketResolution": "~/.claude/sessions/<pid>.json matched on sessionId → messagingSocketPath (agents --json has no pid for background rows)",
   "sendMessageToolReportedFailure": "SendMessage from a claude session to the fake peer reported {success:false} even though the frame arrived — the sender expects an ack the spike peer did not produce",
   "deliveryMatrix": {
-    "busy": "no-ack/hook:no/ack:no",
-    "idle": "no-ack/hook:yes/ack:no",
-    "burst": "no-ack,no-ack,no-ack,no-ack,no-ack,no-ack,no-ack,no-ack,no-ack,no-ack hook:2/10 ack:0/10",
-    "stopped": "accepted/hook:yes/ack:no"
+    "busy": "delivered/ack:yes/hook:no — mid-turn send, acked 22.8s in with the turn's Stop at 86.6s (2 valid runs)",
+    "idle": "delivered/ack:yes/hook:yes (3 runs)",
+    "burst": "10 frames to an idle worker: ack 10/10 in both runs that reached this stage; hook 8/10 and 2/10",
+    "stopped": "delivered/hook:yes via `claude --bg --resume <uuid> \"<msg>\"` (2 runs). No ack is possible here: a resume prompt is not a peer frame, so the worker has no sender to answer"
   },
   "deliveryMethodTested": "socket",
-  "socketAck": "none — receiver never answers on the connection it received the frame on",
+  "socketAck": "The receiver never answers on the connection it received the frame on. It replies by opening a NEW connection to the sender's own inbox socket, so relay MUST listen on the socket path it advertises as `from`.",
   "bun": {
     "compileOk": true,
     "sizeBytes": 61003280,
@@ -254,8 +254,8 @@
     "sigkillPartial": false,
     "malformedQuarantined": true
   },
-  "deliveryRule": "UNSETTLED for a busy target. Mid-turn delivery acked once (run A: BUSY-ACK back at 12.9s, 2.7s before the turn ended) and was not reproduced afterwards; the runs that showed failure were invalid (an ack matcher using \\b against JSON-escaped text, and a worker that backgrounded its sleep so there was no busy window). No valid run has shown a busy target failing to receive. relay therefore treats a busy target conservatively: hold the socket send until the turn boundary. That is safe either way — a delay if delivery works, required if it does not. Idle and stopped targets are settled: idle takes the socket, stopped takes `claude --bg --resume <uuid> \"<msg>\"`.",
-  "deliveryBusyOverSocket": "unsettled — observed working once, never observed failing under a valid busy window, not reproduced",
+  "deliveryRule": "socket for ANY live worker, busy or idle — a frame sent mid-turn is read between tool calls exactly as C12 describes. Use the resume path only for a stopped worker.",
+  "deliveryBusyOverSocket": "delivered — WITHDRAWN earlier claim of 'dropped'. The first measurement scored delivery by the UserPromptSubmit hook, which a mid-turn message never fires, and a second run's busy case was invalid because the Bash tool auto-backgrounded a long `sleep` and ended the turn. With many short sequential Bash calls holding the turn open, the ack came back 64s before the turn ended.",
   "deliveryBurst": "10/10 arrived, each exactly once, to an idle session — no dedupe needed and no loss",
   "socketOutcomeSignal": "There is no status frame, so a send is `unknown` until a marker is seen. `UserPromptSubmit` is NOT sufficient: it fires only for a message that STARTS a turn, so a frame merged into a running turn is delivered and acted on while firing no hook at all (burst: 10 replies returned, 2 and 8 hooks across two runs). Evidence ladder: the `[relay #<id>]` marker in `UserPromptSubmit`, else the marker in the worker's reply frame on relay's own inbox socket, else the marker in the transcript tail. Without the last rung a delivered mid-turn send stays `unknown` and blocks its task queue.",
   "verdict": {
@@ -1041,6 +1041,10 @@
       "from": "uds:/tmp/cc-socks/65626.sock"
     }
   ],
-  "strayReplyRouting": "A worker replying to a `from` socket that nobody listens on does not fail silently — the CLI delivers the reply to another registered peer. Measured by accident: the probe advertised a socket it never bound, and every reply landed in the one other registered peer on the machine. relay registers as a peer, so it WILL receive replies addressed to nobody. Two consequences: relay must listen on the socket it advertises as `from`, and ingest must drop inbound frames that do not resolve to one of its own tasks.",
-  "replyFrameShape": "{msgV:1, msg_id:<fresh>, type, message:{role,content}, priority:'next', from:'uds:/tmp/cc-socks/<sender pid>.sock'} with the text wrapped as <cross-session-message from=… hop-chain=… from-name=… from-mode=…>. No session id and no in-reply-to: resolve the sender via from → ~/.claude/sessions/<pid>.json → sessionId (from-name is not an identity — spike ⑦ measured two live sessions sharing a name). hop-chain is stable across a chain and absent on the first reply — a loop-detection id, never a message key."
+  "strayReplyRouting": "When a worker replies to a `from` socket that nothing is listening on, the CLI does NOT drop the reply: it delivers it to another registered peer. Measured — with only the orchestrator's session registered besides the spike, every orphaned reply (BUSY-ACK, IDLE-ACK, B0..B7) landed in that unrelated session. relay registers itself as a peer (B8, name `relay`), so in production relay's own inbox WILL receive text no task asked for. ingest must discriminate and drop orphans.",
+  "replyFrameShape": "{msgV:1, msg_id:<fresh>, type, message:{role,content}, priority:'next', from:'uds:/tmp/cc-socks/<sender pid>.sock'} with the text wrapped as <cross-session-message from=… hop-chain=… from-name=… from-mode=…>. No session id and no in-reply-to: resolve the sender via from → ~/.claude/sessions/<pid>.json → sessionId (from-name is not an identity — spike ⑦ measured two live sessions sharing a name). hop-chain is stable across a chain and absent on the first reply — a loop-detection id, never a message key.",
+  "deliverySignal": "The worker's REPLY FRAME on relay's own inbox socket is the delivery proof. `UserPromptSubmit` fires only when the message STARTS a turn: a frame merged into a running turn produces no hook at all (burst: 10/10 acked but only 8/10 and 2/10 hooked). Roadmap B3's send(socket) row must not promote on the UserPromptSubmit marker alone or mid-turn sends stay `unknown` forever.",
+  "deliveryBusyWindowGotcha": "A single long `sleep` is useless for making a worker busy: the Bash tool auto-backgrounds it and the turn ends within ~10s. Use many short sequential calls.",
+  "strayReplyDiscriminator": "A reply frame carries NO session id. Identity is only: top-level `from: \"uds:/tmp/cc-socks/<pid>.sock\"` and `from-name` inside the <cross-session-message> element. relay must resolve `from` -> ~/.claude/sessions/<pid>.json -> sessionId and accept only sessions bound to its own tasks; `from-name` alone is unsafe because two live sessions can share a name (see identity.sameNameTwice). The reply's `msg_id` is fresh and there is no in-reply-to field, so a reply cannot be correlated to a specific outbound send by id — only attributed to a sender session. Per-send correlation needs the worker to echo the `[relay #<id>]` marker.",
+  "socketReplyFrameShape": "Same envelope as inbound plus a hop-chain attribute: {msgV:1, msg_id:<new uuid>, type:'user', message:{role:'user', content:'<cross-session-message from=\"uds:/tmp/cc-socks/<pid>.sock\" hop-chain=\"<24 hex>\" from-name=\"<peer name>\" from-mode=\"prompting\">\\n<text>\\n</cross-session-message>'}, priority:'next', from:'uds:/tmp/cc-socks/<pid>.sock'}. hop-chain is stable across every reply in one chain (identical across all ten burst replies) and was absent on the very first reply, so it is a chain id, not a message key."
 }

@@ -71,7 +71,7 @@ Full data in `spikes/results/capabilities.json` (also copied to
 | # | verdict | evidence |
 |---|---|---|
 | ① gate | **PASS** | `GATE PASSED`; `bgResume: context-kept`; every required flag present; `--json-schema` → `structured_output`. launchd auth BLOCKED (see below) |
-| ② delivery | **PASS (go)** | socket delivery lands on an idle worker and every burst frame is replied to; the busy case is unsettled (see below) and relay holds those sends to the turn boundary; stopped goes through `--bg --resume` |
+| ② delivery | **PASS (go)** | socket delivery lands on a live worker whether idle **or busy** (mid-turn ack 22.8s in, 64s before the turn's `Stop`); burst 10/10 acked; a stopped worker goes through `--bg --resume` |
 | ③ verdict | **PASS** | `RELAY: done/question/blocked` all parse from `last_assistant_message`; `background_tasks` populated; `AskUserQuestion` blocked |
 | ④ races | PASS (recorded) | supervisor restarts a `kill -9`'d worker in ~12s; `--bg --resume` forks a new session id; no `SubagentStop` when the parent is stopped; hooks lost during a 6s receiver outage |
 | ⑤ permit | PASS | `PreToolUse(Agent)` deny held subagents to 1 of 3; the worker did the rest sequentially |
@@ -91,8 +91,8 @@ Full data in `spikes/results/capabilities.json` (also copied to
 - `--advisor` does not exist in 2.1.251, so the epic-task advisor in the roadmap has no flag.
 - `claude --bg --resume <uuid>` **forks** (new session id, `SessionStart source: "fork"`); the daemon's
   own respawn keeps the session id (`source: "resume"`). Task identity must follow the fork chain.
-- The cross-session socket has **no ack frame**: a send is `unknown` until the `[relay #…]` marker
-  appears in the worker's `UserPromptSubmit`.
+- The cross-session socket has **no ack frame on the sending connection**: the receiver answers by opening
+  a new connection to the sender's own inbox socket, so relay must listen on the socket it advertises.
 - A `PermissionRequest` payload has **no `tool_use_id`**; correlate with the preceding `PreToolUse`.
 - A `PermissionRequest` hook timeout **allows** the tool, so relay's auto-deny must fire first.
 - `claude rm` refuses (keeps the session) when the worktree has uncommitted or unpushed work.
@@ -121,12 +121,19 @@ advertises as `from`, and a two-signal score `hook:yes|no/ack:yes|no`).
   registered peer on the machine. relay registers as a peer, so it must listen on the socket it advertises and
   must drop inbound frames that do not resolve to one of its own tasks.
 
-**Unsettled: whether a busy worker receives.** Mid-turn delivery acked once (run A, 12.9s, 2.7s before the turn
-ended) and was not reproduced. The runs that appeared to show failure were invalid — one used `\b` against text
-sitting inside JSON escapes, another had no busy window at all because the worker backgrounded its `sleep`. No
-valid run has shown a busy target failing to receive. relay does not wait on this: it holds a socket send to a
-busy worker until the turn boundary, which is correct whichever way the answer falls (a delay if delivery works,
-required if it does not), so further measurement would not change the code.
+**Settled: a busy worker does receive.** Mid-turn delivery acked twice — run A at 12.9s (2.7s before the turn
+ended, which was too close to be conclusive) and a dedicated run at 22.8s with the turn's `Stop` not until 86.6s,
+64 seconds later. C12 is correct as written: the receiver reads its inbox between tool calls. No valid run has
+shown a busy target failing to receive.
+
+The two runs that appeared to show failure were both instrumentation defects: one matched `\bBUSY-ACK\b` against
+text sitting inside JSON escapes (the character before the needle is the `n` of an escaped `\n`, so `\b` never
+matched), and the other had no busy window at all — the Bash tool auto-backgrounds a long `sleep`, so the turn
+ended within ~10s and the probe fired at a turn boundary. **Making a worker busy needs many short sequential Bash
+calls, not one long `sleep`**; the script now asserts the turn is still open before the busy send.
+
+Consequence for 02: send over the socket to any live worker, busy or idle, and use the resume path only for a
+stopped one. Do not hold sends to a turn boundary — it costs latency for nothing.
 
 ### Still needs the user
 
