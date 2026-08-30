@@ -1,3 +1,4 @@
 { "compilerOptions": { "strict": true, "target": "ESNext", "module": "ESNext", "moduleResolution": "bundler",
   "types": ["bun-types"], "noEmit": true, "skipLibCheck": true, "allowImportingTsExtensions": true,
-  "paths": { "@shared/*": ["./shared/*"] } } }
+  "paths": { "@shared/*": ["./shared/*"] } },
+  "exclude": ["node_modules", "spikes/scripts/10-bun-mcp/bun-app"] }

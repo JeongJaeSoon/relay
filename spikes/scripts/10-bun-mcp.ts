@@ -1,0 +1,20 @@
+// spikes/scripts/10-bun-mcp.ts — ⑩ compile the sample app and verify http/ws/sqlite/embed/spawn + MCP round trip through `claude -p --mcp-config`.
+import { statSync } from "node:fs";
+import { join } from "node:path";
+import { check, record, sh } from "./lib.ts";
+const APP = join(import.meta.dir, "10-bun-mcp", "bun-app");
+const bin = join(APP, "dist", "relay-spike"), mcpBin = join(APP, "dist", "relay-spike-mcp");
+const c1 = await sh(["bun", "build", "--compile", "--target=bun-darwin-arm64", join(APP, "server.ts"), "--outfile", bin]);
+const c2 = await sh(["bun", "build", "--compile", "--target=bun-darwin-arm64", join(APP, "mcp.ts"), "--outfile", mcpBin]);
+const compileOk = c1.code === 0 && c2.code === 0;
+if (!compileOk) console.error(c1.stderr, c2.stderr);
+const srv = Bun.spawn([bin, "8801"], { stdout: "ignore", stderr: "pipe" }); await Bun.sleep(1200);
+const embedOk = (await (await fetch("http://127.0.0.1:8801/")).text()).includes("embedded ok");
+const sqliteOk = JSON.stringify(await (await fetch("http://127.0.0.1:8801/api")).json()).includes("hi");
+const spawnClaudeOk = (await (await fetch("http://127.0.0.1:8801/claude")).text()).includes("\"result\"");
+const wsOk = await new Promise<boolean>((res) => { const ws = new WebSocket("ws://127.0.0.1:8801/ws"); ws.onopen = () => ws.send("ping"); ws.onmessage = (e) => { res(e.data === "echo:ping"); ws.close(); }; setTimeout(() => res(false), 3000); });
+srv.kill();
+const mcp = await sh(["claude", "-p", "Call the relay_status tool and repeat its text exactly.", "--mcp-config", JSON.stringify({ mcpServers: { relay: { command: mcpBin } } }), "--strict-mcp-config", "--allowedTools", "mcp__relay__relay_status", "--max-turns", "3", "--effort", "low", "--model", "claude-sonnet-5", "--output-format", "json"], { timeoutMs: 120_000 });
+const mcpRoundTrip = /1 running, 0 queued/.test(mcp.stdout);
+const bun = { compileOk, sizeBytes: compileOk ? statSync(bin).size : 0, wsOk, sqliteOk, embedOk, spawnClaudeOk, mcpRoundTrip };
+record({ bun }); for (const [k, v] of Object.entries(bun)) if (typeof v === "boolean") check(`bun ${k}`, v);

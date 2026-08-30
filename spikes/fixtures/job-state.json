@@ -1,0 +1,33 @@
+{
+  "state": "working",
+  "detail": "starting…",
+  "tempo": "active",
+  "output": null,
+  "children": null,
+  "linkScanOffset": 0,
+  "template": "bg",
+  "respawnFlags": [
+    "-n",
+    "relay-spike:same",
+    "--effort",
+    "low",
+    "--permission-mode",
+    "auto",
+    "--settings",
+    "{\"crossSessionInbound\":\"accept\",\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"http\",\"url\":\"http://127.0.0.1:8798/hook\",\"timeout\":3}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"http\",\"url\":\"http://127.0.0.1:8798/hook\",\"timeout\":3}]}]}}",
+    "--model",
+    "claude-sonnet-5"
+  ],
+  "providerEnv": {},
+  "intent": "reply OK",
+  "name": "relay-spike:same",
+  "nameSource": "user",
+  "sessionId": "0e234a19-67b3-4f2d-8543-fd0c81c1077a",
+  "resumeSessionId": "0e234a19-67b3-4f2d-8543-fd0c81c1077a",
+  "daemonShort": "0e234a19",
+  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+  "createdAt": "2026-08-30T14:43:48.374Z",
+  "updatedAt": "2026-08-30T14:43:49.571Z",
+  "firstTerminalAt": null,
+  "backend": "daemon"
+}

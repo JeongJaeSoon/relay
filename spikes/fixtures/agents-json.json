@@ -1,0 +1,58 @@
+[
+  {
+    "id": "1d12fd41",
+    "cwd": "/Users/dev-soon/workspace/memo",
+    "kind": "background",
+    "startedAt": 1784955212562,
+    "sessionId": "1d12fd41-2d0d-4add-8409-ee209c88d1a5",
+    "name": "claude-model-switching-analysis",
+    "state": "blocked"
+  },
+  {
+    "id": "63f7e771",
+    "cwd": "/Users/dev-soon/workspace/project/kollegium",
+    "kind": "background",
+    "startedAt": 1785424476968,
+    "sessionId": "63f7e771-4989-47fb-a6f7-40d826dd57e1",
+    "name": "progress status review",
+    "state": "blocked"
+  },
+  {
+    "id": "94dfd830",
+    "cwd": "/Users/dev-soon/.claude/jobs/fad70000/tmp/relay-spike-202524",
+    "kind": "background",
+    "startedAt": 1788002747460,
+    "sessionId": "94dfd830-fb5c-4fe7-affb-9fcf1074fdcb",
+    "name": "relay:T-01 spike",
+    "state": "done"
+  },
+  {
+    "pid": 77817,
+    "cwd": "/Users/dev-soon/workspace/project/relay",
+    "kind": "interactive",
+    "startedAt": 1788097770965,
+    "sessionId": "b7d718c9-183a-47d9-b1dc-a91b8a5ec52f",
+    "name": "relay-fa",
+    "status": "busy"
+  },
+  {
+    "id": "e3803ff1",
+    "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+    "kind": "background",
+    "startedAt": 1788098753814,
+    "sessionId": "e3803ff1-2eee-4ed2-aa49-184efc68167f",
+    "name": "relay-spike:gate",
+    "state": "done"
+  },
+  {
+    "pid": 92570,
+    "id": "10aeb3b2",
+    "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+    "kind": "background",
+    "startedAt": 1788098772175,
+    "sessionId": "10aeb3b2-b578-445d-a110-00d0c6cff62b",
+    "name": "relay-spike:gate",
+    "status": "idle",
+    "state": "done"
+  }
+]

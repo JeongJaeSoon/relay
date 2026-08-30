@@ -1,0 +1,9 @@
+{
+  "session_id": "2465db61-b45e-4fac-9060-fc9a5905a7db",
+  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-permit/2465db61-b45e-4fac-9060-fc9a5905a7db.jsonl",
+  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-permit",
+  "prompt_id": "2ef563f4-2048-4d31-a636-871607316549",
+  "agent_id": "af4623282d57fc21e",
+  "agent_type": "relay-explore",
+  "hook_event_name": "SubagentStart"
+}

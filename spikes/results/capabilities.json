@@ -1,0 +1,1050 @@
+{
+  "cli_version": "2.1.251 (Claude Code)",
+  "flags": {
+    "--bg": true,
+    "-n, --name": true,
+    "-w, --worktree": true,
+    "--settings": true,
+    "--agent <agent>": true,
+    "--permission-mode": true,
+    "--effort": true,
+    "--json-schema": true,
+    "--tools": true,
+    "--no-session-persistence": true,
+    "--append-system-prompt": true,
+    "--output-format": true,
+    "-r, --resume": true,
+    "--model": true
+  },
+  "advisorFlag": false,
+  "restrictedFlag": true,
+  "updated_at": "2026-08-30T15:36:33.963Z",
+  "worktreeCreateHook": {
+    "role": "provider",
+    "observed": "session killed before init when the hook returns no path",
+    "error": "Error creating worktree: WorktreeCreate hook failed: hook succeeded but returned no worktree path (command: echo the path to stdout; http/callback: return hookSpecificOutput.worktreePath)"
+  },
+  "agentsJsonSample": {
+    "id": "e3803ff1",
+    "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+    "kind": "background",
+    "startedAt": 1788098753814,
+    "sessionId": "e3803ff1-2eee-4ed2-aa49-184efc68167f",
+    "name": "relay-spike:gate",
+    "state": "working"
+  },
+  "agentsJsonKeys": [
+    "id",
+    "cwd",
+    "kind",
+    "startedAt",
+    "sessionId",
+    "name",
+    "state"
+  ],
+  "agentFlagPrecedence": "cli-wins",
+  "settingsHooksMerge": "merged",
+  "sessionStartHttp": false,
+  "stopManifest": {
+    "present": true,
+    "pid": null,
+    "state": "done",
+    "status": null
+  },
+  "bgResumeSessionStartSource": "fork",
+  "bgResumeNewShortId": "10aeb3b2",
+  "bgResume": "context-kept",
+  "bgResumeStdout": "backgrounded · 10aeb3b2 · relay-spike:gate\n  claude agents             list sessions\n  claude attach 10aeb3b2    open in this terminal\n  claude logs 10aeb3b2      show recent output\n  claude stop 10aeb3b2      stop this session",
+  "bgResumeStderr": "",
+  "jsonSchema": true,
+  "dispatcherSample": {
+    "wall_ms": 10506,
+    "duration_ms": 6972,
+    "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 103958,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 107,
+      "output_tokens_details": {
+        "thinking_tokens": 30
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 103958,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 107,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 103958,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 103958
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "cost": 2.08453,
+    "structured_output": {
+      "action": "new_task",
+      "confidence": "high"
+    },
+    "keys": [
+      "duration_api_ms",
+      "stop_reason",
+      "session_id",
+      "total_cost_usd",
+      "usage",
+      "modelUsage",
+      "permission_denials",
+      "terminal_reason",
+      "fast_mode_state",
+      "fast_mode_disabled_reason",
+      "subagent_stats",
+      "is_error",
+      "num_turns",
+      "subtype",
+      "api_error_status",
+      "result",
+      "structured_output",
+      "ttft_ms",
+      "type",
+      "duration_ms",
+      "uuid",
+      "ttft_stream_ms",
+      "time_to_request_ms",
+      "queued_turn_count"
+    ]
+  },
+  "toolsEmpty": true,
+  "noSessionPersistence": true,
+  "hookEventsCaptured": [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUseFailure",
+    "Stop",
+    "SessionEnd"
+  ],
+  "agentsJsonVocab": {
+    "state": [
+      "blocked",
+      "done",
+      "working",
+      "stopped"
+    ],
+    "status": [
+      "busy",
+      "idle"
+    ],
+    "kind": [
+      "background",
+      "interactive"
+    ],
+    "waitingFor": [],
+    "keysByKind": {
+      "background": [
+        "id",
+        "cwd",
+        "kind",
+        "startedAt",
+        "sessionId",
+        "name",
+        "state",
+        "pid",
+        "status"
+      ],
+      "interactive": [
+        "pid",
+        "cwd",
+        "kind",
+        "startedAt",
+        "sessionId",
+        "name",
+        "status"
+      ]
+    }
+  },
+  "agentsJsonPidPresent": false,
+  "worktreeCwd": {
+    "agentsJson": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+    "hookPayload": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-w1",
+    "isWorktree": true
+  },
+  "jobStateKeys": [
+    "state",
+    "detail",
+    "tempo",
+    "inFlight",
+    "tokens",
+    "output",
+    "children",
+    "linkScanOffset",
+    "linkScanPath",
+    "template",
+    "respawnFlags",
+    "intent",
+    "name",
+    "nameSource",
+    "sessionId",
+    "resumeSessionId",
+    "daemonShort",
+    "cliVersion",
+    "cwd",
+    "worktreePath",
+    "worktreeBranch",
+    "bridgeSessionId",
+    "bridgeOutboundOnly",
+    "bridgeOwnerAccountUuid",
+    "bridgeOwnerOrganizationUuid",
+    "providerEnv",
+    "backend",
+    "createdAt",
+    "updatedAt",
+    "firstTerminalAt"
+  ],
+  "jobStateHasRespawnFlags": true,
+  "launchdAuth": "BLOCKED: not measured — `launchctl bootstrap` was refused by the permission system in this agent session. Run: sh spikes/scripts/01-launchd-auth.sh",
+  "delivery": "socket",
+  "peerRegistration": true,
+  "socketInboundKeys": [
+    "msgV",
+    "msg_id",
+    "type",
+    "message.role",
+    "message.content",
+    "priority",
+    "from"
+  ],
+  "socketAuthLine": "optional — no auth line was sent and the frame was delivered (macOS)",
+  "socketDeliveryProof": "worker UserPromptSubmit received <cross-session-message …>[relay #test0001] say PONG</cross-session-message>",
+  "peerSocketResolution": "~/.claude/sessions/<pid>.json matched on sessionId → messagingSocketPath (agents --json has no pid for background rows)",
+  "sendMessageToolReportedFailure": "SendMessage from a claude session to the fake peer reported {success:false} even though the frame arrived — the sender expects an ack the spike peer did not produce",
+  "deliveryMatrix": {
+    "busy": "delivered/ack:yes/hook:no — mid-turn send, acked 22.8s in with the turn's Stop at 86.6s (2 valid runs)",
+    "idle": "delivered/ack:yes/hook:yes (3 runs)",
+    "burst": "10 frames to an idle worker: ack 10/10 in both runs that reached this stage; hook 8/10 and 2/10",
+    "stopped": "delivered/hook:yes via `claude --bg --resume <uuid> \"<msg>\"` (2 runs). No ack is possible here: a resume prompt is not a peer frame, so the worker has no sender to answer"
+  },
+  "deliveryMethodTested": "socket",
+  "socketAck": "The receiver never answers on the connection it received the frame on. It replies by opening a NEW connection to the sender's own inbox socket, so relay MUST listen on the socket path it advertises as `from`.",
+  "bun": {
+    "compileOk": true,
+    "sizeBytes": 61003280,
+    "wsOk": true,
+    "sqliteOk": true,
+    "embedOk": true,
+    "spawnClaudeOk": true,
+    "mcpRoundTrip": true
+  },
+  "spool": {
+    "lossWithoutSpool": "see races.restartVsHookPost",
+    "accumulated": 5,
+    "drainAfterRestart": true,
+    "concurrent20": true,
+    "sigkillPartial": false,
+    "malformedQuarantined": true
+  },
+  "deliveryRule": "socket for ANY live worker, busy or idle — a frame sent mid-turn is read between tool calls exactly as C12 describes. Use the resume path only for a stopped worker.",
+  "deliveryBusyOverSocket": "delivered — WITHDRAWN earlier claim of 'dropped'. The first measurement scored delivery by the UserPromptSubmit hook, which a mid-turn message never fires, and a second run's busy case was invalid because the Bash tool auto-backgrounded a long `sleep` and ended the turn. With many short sequential Bash calls holding the turn open, the ack came back 64s before the turn ended.",
+  "deliveryBurst": "10/10 arrived, each exactly once, to an idle session — no dedupe needed and no loss",
+  "socketOutcomeSignal": "There is no status frame, so a send is `unknown` until a marker is seen. `UserPromptSubmit` is NOT sufficient: it fires only for a message that STARTS a turn, so a frame merged into a running turn is delivered and acted on while firing no hook at all (burst: 10 replies returned, 2 and 8 hooks across two runs). Evidence ladder: the `[relay #<id>]` marker in `UserPromptSubmit`, else the marker in the worker's reply frame on relay's own inbox socket, else the marker in the transcript tail. Without the last rung a delivered mid-turn send stays `unknown` and blocks its task queue.",
+  "verdict": {
+    "done": {
+      "marker": "done",
+      "background_tasks": [],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [
+        "Bash"
+      ],
+      "transcriptLagMs": 109
+    },
+    "question": {
+      "marker": "question",
+      "background_tasks": [],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [],
+      "transcriptLagMs": 179
+    },
+    "background": {
+      "marker": "done",
+      "background_tasks": [
+        {
+          "id": "bfi0liu4q",
+          "type": "shell",
+          "status": "running",
+          "description": "sleep 40",
+          "command": "sleep 40"
+        }
+      ],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [
+        "Bash"
+      ],
+      "transcriptLagMs": 172
+    },
+    "blocked": {
+      "marker": "blocked",
+      "background_tasks": [],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [],
+      "transcriptLagMs": 420
+    },
+    "askuser": {
+      "marker": "done",
+      "background_tasks": [],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [],
+      "transcriptLagMs": 155
+    }
+  },
+  "agentFilesLoaded": true,
+  "daemon": {
+    "restartsKilledWorker": true,
+    "restartDelayMs": 12066,
+    "hooksAfterKill": [
+      "SessionStart:resume"
+    ],
+    "rosterAttempt": 2
+  },
+  "races": {
+    "stopVsSend": "resume-spawned/arrived",
+    "idleStopVsReply": "ok (re-read from the log) — the reply completed with RELAY: done, but under a NEW session id: the script keyed on the old one and reported no-done",
+    "interruptVsSubagentStop": "SubagentStop:false SessionEnd:true",
+    "restartVsHookPost": "postToolUseSeen:4/5 (gap ≈6s) — worker not blocked: true",
+    "kill9": "restarted:true after 12066ms newPid:29684 hooks:[SessionStart:resume] rosterAttempt:2",
+    "stopVsSendNote": "the racing resume spawned and the message arrived, but the fork landed in the LAUNCH cwd (sandbox), not the worktree — relay must pass the worktree cwd it learned from the hook payload",
+    "attachVsSend": "BLOCKED: not measured — `claude attach` needs an interactive terminal. Run it manually (Task 4 Step 2)."
+  },
+  "resumeForksSessionId": "`claude --bg --resume <uuid>` starts a NEW session id and reports SessionStart source=fork; the daemon respawn after kill -9 keeps the SAME session id and reports source=resume. Task identity must follow the fork chain, not one session id (roadmap B4 dedupe key and the \"a foreign session_id cannot hijack a bound task\" rule both need this)",
+  "subagentStopOnParentInterrupt": "absent — stopping the parent while a subagent runs emits SessionEnd but no SubagentStop, so subagent permits must be reclaimed on SessionEnd (B5 recovery step 1)",
+  "attachDetectable": "unknown — agents --json exposed no attach field in this run",
+  "permit": {
+    "agentPreToolUse": 3,
+    "subagentStarts": 1,
+    "subagentStops": 1,
+    "denied": 2,
+    "preToolUseDenyWorks": true,
+    "parallelObserved": false,
+    "denyReasonSeenByWorker": true,
+    "agentTypes": [
+      "relay-explore"
+    ]
+  },
+  "permissionHold": {
+    "held": {
+      "holdMs": 8000,
+      "hookTimeoutS": 60,
+      "toolUseId": "toolu_019CQLe1ihMCu3QRB92ArQ91",
+      "workerWaitedMs": 8039,
+      "statusDuringHold": {
+        "state": "blocked",
+        "status": "waiting",
+        "waitingFor": "permission prompt"
+      },
+      "wroteFile": true,
+      "stopSeen": true,
+      "finished": true,
+      "afterState": {
+        "state": "done",
+        "status": "idle",
+        "waitingFor": null
+      },
+      "note": "re-derived from spikes/results/06-permhold.jsonl after fixing the tool_use_id correlation (a PermissionRequest payload has none)"
+    },
+    "timedOut": {
+      "holdMs": 40000,
+      "hookTimeoutS": 10,
+      "toolUseId": "toolu_01GysT7yqucUcwgQ8diYfdzE",
+      "workerWaitedMs": 17391,
+      "statusDuringHold": {
+        "state": "blocked",
+        "status": "waiting",
+        "waitingFor": "permission prompt"
+      },
+      "wroteFile": true,
+      "stopSeen": true,
+      "finished": true,
+      "afterState": {
+        "state": "done",
+        "status": "idle",
+        "waitingFor": null
+      },
+      "note": "re-derived from spikes/results/06-permhold.jsonl after fixing the tool_use_id correlation (a PermissionRequest payload has none)"
+    },
+    "payloadKeys": [
+      "session_id",
+      "transcript_path",
+      "cwd",
+      "prompt_id",
+      "permission_mode",
+      "effort",
+      "hook_event_name",
+      "tool_name",
+      "tool_input",
+      "permission_suggestions"
+    ],
+    "hookTimeoutOutcome": "ALLOW — with the hook timing out at 10s and relay never answering, the Write still completed ~7s later. A hook timeout is not fail-closed, so relay’s auto-deny must fire well before the hook timeout."
+  },
+  "agentsJsonWaitingVocab": {
+    "state": "blocked",
+    "status": "waiting",
+    "waitingFor": "permission prompt"
+  },
+  "guard": "BLOCKED: not measured — Task 6 Step 3 needs a worker told to `git push` and to write outside its worktree; the auto-mode classifier refuses to issue that instruction from this session",
+  "identity": {
+    "sameNameTwice": [
+      "relay-spike:same",
+      "relay-spike:same"
+    ],
+    "ownerFileSurvives": "cwd-removed",
+    "cwdDeletedAgentsJson": {
+      "id": "0e234a19",
+      "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+      "kind": "background",
+      "startedAt": 1788101028374,
+      "sessionId": "0e234a19-67b3-4f2d-8543-fd0c81c1077a",
+      "name": "relay-spike:same",
+      "state": "stopped"
+    },
+    "rmDirtyKeepsWorktree": true,
+    "jobStateJson": [
+      "state",
+      "detail",
+      "tempo",
+      "output",
+      "children",
+      "linkScanOffset",
+      "template",
+      "respawnFlags",
+      "providerEnv",
+      "intent",
+      "name",
+      "nameSource",
+      "sessionId",
+      "resumeSessionId",
+      "daemonShort",
+      "cwd",
+      "createdAt",
+      "updatedAt",
+      "firstTerminalAt",
+      "backend"
+    ]
+  },
+  "rmRefusesUnpushedWorktree": "`claude rm <id>` KEEPS the session when its worktree has commits that are not pushed anywhere: stdout `kept <id> — worktree has commits that are not pushed anywhere` + `worktree kept at <path>`, and the row stays in `agents --json --all`. B3's rm row must treat this as NOT applied (or force-remove the worktree first), otherwise close/cleanup silently leaks sessions and worktrees.",
+  "recovery": "BLOCKED: not run — the checklist needs an interactive `claude attach` for the attached row and keeps five live sessions up for minutes. Procedure in spikes/scripts/08-recovery.md.",
+  "dispatcher": {
+    "n": 10,
+    "p50_ms": 7368,
+    "p95_ms": 10106,
+    "accuracy": 1,
+    "tokens_per_call": 98952.4,
+    "cost_per_call": 0.6745620999999999,
+    "errors": 0
+  },
+  "dispatcherRuns": [
+    {
+      "text": "auth에 테스트도 추가해줘",
+      "expect": "route_to_task",
+      "got": "route_to_task",
+      "ok": true,
+      "wall_ms": 6771,
+      "code": 0,
+      "duration_ms": 3305,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 61810,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 139,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 61810,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 139,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 61810,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 61810
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 1.2431699999999999,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "prod 네임스페이스로 해",
+      "expect": "route_to_task",
+      "got": "route_to_task",
+      "ok": true,
+      "wall_ms": 7489,
+      "code": 0,
+      "duration_ms": 3950,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 104722,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 137,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 104722,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 137,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 104722,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 104722
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 2.1013100000000002,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "myapp 로그인 페이지 다크모드 지원",
+      "expect": "new_task",
+      "got": "new_task",
+      "ok": true,
+      "wall_ms": 7165,
+      "code": 0,
+      "duration_ms": 3582,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6210,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 197,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6210,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 197,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6210,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6210
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.232553,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "terraform state 잠금 풀어줘",
+      "expect": "new_task",
+      "got": "new_task",
+      "ok": true,
+      "wall_ms": 7408,
+      "code": 0,
+      "duration_ms": 3823,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6205,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 186,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6205,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 186,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6205,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6205
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.23190299999999997,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "T-01 마무리하고 닫아",
+      "expect": "close_task",
+      "got": "close_task",
+      "ok": true,
+      "wall_ms": 7368,
+      "code": 0,
+      "duration_ms": 3830,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 88356,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 159,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 88356,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 159,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 88356,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 88356
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 1.77509,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "React 19에서 useEffect 두 번 도는 이유가 뭐야",
+      "expect": "answer_directly",
+      "got": "answer_directly",
+      "ok": true,
+      "wall_ms": 10106,
+      "code": 0,
+      "duration_ms": 6639,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6217,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 358,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6217,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 358,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6217,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6217
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.240743,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "그거 어떻게 됐어",
+      "expect": "route_to_task",
+      "got": "route_to_task",
+      "ok": true,
+      "wall_ms": 7848,
+      "code": 0,
+      "duration_ms": 4192,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6202,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 187,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6202,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 187,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6202,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6202
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.23189300000000002,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "README 오타 고쳐줘 myapp",
+      "expect": "new_task",
+      "got": "new_task",
+      "ok": true,
+      "wall_ms": 6916,
+      "code": 0,
+      "duration_ms": 3446,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6206,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 180,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6206,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 180,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6206,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6206
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.231623,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "k8s 작업 취소해",
+      "expect": "close_task",
+      "got": "close_task",
+      "ok": true,
+      "wall_ms": 6133,
+      "code": 0,
+      "duration_ms": 2585,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6201,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 101,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6201,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 101,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6201,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6201
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.227573,
+      "is_error": false,
+      "stderr": ""
+    },
+    {
+      "text": "auth 리팩토링 결과 요약해줘",
+      "expect": "route_to_task",
+      "got": "route_to_task",
+      "ok": true,
+      "wall_ms": 6474,
+      "code": 0,
+      "duration_ms": 2944,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 6208,
+        "cache_read_input_tokens": 98483,
+        "output_tokens": 142,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 6208,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "not_available",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 142,
+            "cache_read_input_tokens": 98483,
+            "cache_creation_input_tokens": 6208,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 6208
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard"
+      },
+      "cost": 0.229763,
+      "is_error": false,
+      "stderr": ""
+    }
+  ],
+  "dispatcherTimeoutKill": {
+    "code": 143,
+    "wall_ms": 1709
+  },
+  "killSwitch": {
+    "stoppedAllMs": 899,
+    "resumedWithContext": 3,
+    "resumeSpawned": 3
+  },
+  "dispatcherBurnEstimate": "~99k tokens and ~$0.67 of list-price usage per dispatched message (p50 7.4s, p95 10.1s). At 100 messages/day that is ~10M tokens/day — almost all of it the CLI own system prompt, not relay context. The B6 fast-path and the daily ceiling are load-bearing, not optional.",
+  "probeReplies": [
+    {
+      "msgV": 1,
+      "msg_id": "7ccccdcd-f03f-4098-a5a5-cfaed29d563c",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nIDLE-ACK\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "ed3ed737-a2e3-4d46-8db4-622ade1b8704",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB0\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "4dfc6047-da34-45a5-b3b0-ada01202c685",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB1\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "010f6b01-e4cd-4454-b37f-fb089602543a",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB2\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "66309088-d9ce-4b4e-b216-9901ce5ec8dc",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB3\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "d11b8274-fc12-4ef0-8c81-7a751be4f3ba",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB4\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "c4cfc2bc-fcb9-41f6-879a-765eca0ac333",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB5\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "3b0f8711-4479-4684-8a80-58cf330e8df5",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB6\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "d6ba6148-e93b-4c73-9066-95dbfeba065a",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB7\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "b1bb7aca-bb48-4d1e-ab3c-fe2f1e6a5eb8",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB8\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    },
+    {
+      "msgV": 1,
+      "msg_id": "97c27913-732f-4160-ae31-a26aba2251ce",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "<cross-session-message from=\"uds:/tmp/cc-socks/65626.sock\" hop-chain=\"b38790057ea195eff93470ee\" from-name=\"relay-spike:matrix\" from-mode=\"prompting\">\nB9\n</cross-session-message>"
+      },
+      "priority": "next",
+      "from": "uds:/tmp/cc-socks/65626.sock"
+    }
+  ],
+  "strayReplyRouting": "When a worker replies to a `from` socket that nothing is listening on, the CLI does NOT drop the reply: it delivers it to another registered peer. Measured — with only the orchestrator's session registered besides the spike, every orphaned reply (BUSY-ACK, IDLE-ACK, B0..B7) landed in that unrelated session. relay registers itself as a peer (B8, name `relay`), so in production relay's own inbox WILL receive text no task asked for. ingest must discriminate and drop orphans.",
+  "replyFrameShape": "{msgV:1, msg_id:<fresh>, type, message:{role,content}, priority:'next', from:'uds:/tmp/cc-socks/<sender pid>.sock'} with the text wrapped as <cross-session-message from=… hop-chain=… from-name=… from-mode=…>. No session id and no in-reply-to: resolve the sender via from → ~/.claude/sessions/<pid>.json → sessionId (from-name is not an identity — spike ⑦ measured two live sessions sharing a name). hop-chain is stable across a chain and absent on the first reply — a loop-detection id, never a message key.",
+  "deliverySignal": "The worker's REPLY FRAME on relay's own inbox socket is the delivery proof. `UserPromptSubmit` fires only when the message STARTS a turn: a frame merged into a running turn produces no hook at all (burst: 10/10 acked but only 8/10 and 2/10 hooked). Roadmap B3's send(socket) row must not promote on the UserPromptSubmit marker alone or mid-turn sends stay `unknown` forever.",
+  "deliveryBusyWindowGotcha": "A single long `sleep` is useless for making a worker busy: the Bash tool auto-backgrounds it and the turn ends within ~10s. Use many short sequential calls.",
+  "strayReplyDiscriminator": "A reply frame carries NO session id. Identity is only: top-level `from: \"uds:/tmp/cc-socks/<pid>.sock\"` and `from-name` inside the <cross-session-message> element. relay must resolve `from` -> ~/.claude/sessions/<pid>.json -> sessionId and accept only sessions bound to its own tasks; `from-name` alone is unsafe because two live sessions can share a name (see identity.sameNameTwice). The reply's `msg_id` is fresh and there is no in-reply-to field, so a reply cannot be correlated to a specific outbound send by id — only attributed to a sender session. Per-send correlation needs the worker to echo the `[relay #<id>]` marker.",
+  "socketReplyFrameShape": "Same envelope as inbound plus a hop-chain attribute: {msgV:1, msg_id:<new uuid>, type:'user', message:{role:'user', content:'<cross-session-message from=\"uds:/tmp/cc-socks/<pid>.sock\" hop-chain=\"<24 hex>\" from-name=\"<peer name>\" from-mode=\"prompting\">\\n<text>\\n</cross-session-message>'}, priority:'next', from:'uds:/tmp/cc-socks/<pid>.sock'}. hop-chain is stable across every reply in one chain (identical across all ten burst replies) and was absent on the very first reply, so it is a chain id, not a message key."
+}

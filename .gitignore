@@ -8,3 +8,6 @@ web/dist/*
 *.db
 *.db-wal
 *.db-shm
+spikes/results/spool/
+spikes/results/dispatcher-cwd/
+spikes/results/launchd-auth.json
