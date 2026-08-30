@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { now } from "../core/clock.ts";
 import { rowToTask } from "../core/projections.ts";
+import { redact } from "../core/redact.ts";
 import { log as slog } from "../log.ts";
 
 // Bounds. A long-running task's JSONL is megabytes; feeding it whole would make a casual question the most expensive
@@ -34,7 +35,10 @@ function summarise(j: any): string {
   return bits.length ? `${j.type ?? "?"}: ${bits.join(" | ")}` : "";
 }
 
-/** The tail of the transcript, digested to legible lines and capped. Reading only, never writing. */
+/** The tail of the transcript, digested to legible lines, capped and redacted. Reading only, never writing.
+ *  A worker's transcript is the one string in relay that never passed through `capPayload`, so it is the one place a
+ *  secret it printed (`cat .env`, `gh auth token`) could still be verbatim. Redacting here rather than at the call
+ *  site is deliberate: the prompt leaves in an argv, and a future caller must not be able to skip this. */
 export function transcriptDigest(path: string | null): string {
   if (!path || !existsSync(path)) return "";
   let text = "";
@@ -48,7 +52,8 @@ export function transcriptDigest(path: string | null): string {
   for (const line of lines) { if (!line.trim()) continue; try { const s = summarise(JSON.parse(line)); if (s) out.push(s); } catch { /* not a record we understand */ } }
   const kept: string[] = []; let budget = TRANSCRIPT_BUDGET;
   for (let i = out.length - 1; i >= 0; i--) { const cost = out[i].length + 1; if (cost > budget) break; kept.unshift(out[i]); budget -= cost; }
-  return kept.join("\n");
+  if (!kept.length && out.length) kept.push(out[out.length - 1].slice(0, TRANSCRIPT_BUDGET));   // one record bigger than the whole budget: truncate it, do not drop it
+  return redact(kept.join("\n"));
 }
 
 /** Everything an Ask about one task may see: the state relay already holds, its recent events, and the transcript tail.

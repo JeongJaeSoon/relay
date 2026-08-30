@@ -61,10 +61,31 @@ describe("the transcript slice is bounded", () => {
     expect(d).toContain("assistant: checking | → Bash bun test");
     expect(d).toContain("← 2 failed");
   });
+  test("one record longer than the whole budget is truncated, not dropped", () => {
+    const s = setup(); const path = join(s.dir, "one-huge.jsonl");   // one record, 40 parts — each part is capped, the line is not
+    writeFileSync(path, line("assistant", Array.from({ length: 40 }, (_, i) => ({ type: "text", text: `part ${i} ${"z".repeat(280)}` }))));
+    const d = transcriptDigest(path);
+    expect(d.length).toBeGreaterThan(0); expect(d.length).toBeLessThanOrEqual(TRANSCRIPT_BUDGET);
+  });
   test("a tail that starts mid-record drops the broken first line", () => {
     const s = setup(); const path = join(s.dir, "tail.jsonl");
     writeFileSync(path, "x".repeat(TRANSCRIPT_TAIL_BYTES) + "\n" + line("assistant", [{ type: "text", text: "the end" }]));
     expect(transcriptDigest(path)).toBe("assistant: the end");
+  });
+});
+
+describe("nothing a worker printed leaves unredacted", () => {
+  test("secrets in a transcript never reach the digest", () => {
+    const s = setup(); s.task("u1", 1); const path = join(s.dir, "leak.jsonl");
+    const key = "sk-ant-" + "a".repeat(40); const bearer = "Bearer " + "b".repeat(40); const gh = "ghp_" + "c".repeat(36);
+    writeFileSync(path, line("assistant", [{ type: "tool_use", name: "Bash", input: { command: "cat .env" } }]) +
+      line("user", [{ type: "tool_result", content: `ANTHROPIC_API_KEY=${key}` }]) +
+      line("assistant", [{ type: "text", text: `authorization: ${bearer} and ${gh}` }]));
+    const d = transcriptDigest(path);
+    expect(d).not.toContain(key); expect(d).not.toContain(bearer); expect(d).not.toContain(gh);
+    expect(d).toContain("[redacted:anthropic]"); expect(d).toContain("[redacted:bearer]"); expect(d).toContain("[redacted:github]");
+    s.hook("u1", { tool_name: "Bash", transcript_path: path });
+    expect(buildAskContext(s.db, "u1")).not.toContain(key);
   });
 });
 
