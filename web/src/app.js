@@ -62,10 +62,10 @@ function chatQuestion(t){
   msgs.append(wrap);scrollChat();
 }
 
-/* ================= request ledger (채팅 우측 레일) =================
-   행은 web/src/ledger.ts의 requestRows()가 만든다. 여기는 그 순수 결과를 그리고 행동 버튼만 붙인다. */
+/* ================= request ledger (the rail right of the chat) =================
+   Rows come from requestRows() in web/src/ledger.ts. This only draws that pure result and attaches the action buttons. */
 const LEDGER=[];                                                                          /* filled by the adapter, needs-you first */
-let ledgerFilter="open";                                                                  /* open = 아직 정리되지 않은 요청만, all = 전부 */
+let ledgerFilter="open";                                                                  /* open = only requests not yet settled, all = everything */
 const LEDGER_ACTS={
   redispatch:{label:"Retry",run:r=>relay.redispatch(r.id)},
   restart:{label:"Restart",run:r=>{const t=S.tasks.get(r.taskId);if(t)relay.restart(t)}},
@@ -81,7 +81,7 @@ function ledgerRowEl(r){
   pill.append(el("i","dot"),el("span",null,r.state));
   st.append(pill,el("span","lg-disp",r.dispositionLabel));
   const t=r.taskId?S.tasks.get(r.taskId):null;
-  if(t)st.append(ttagBtn(t));
+  r.taskIds.forEach(id=>{const tt=S.tasks.get(id);if(tt)st.append(ttagBtn(tt))});                 /* a split made several — name every one */
   if(r.source!=="user")st.append(el("span","lg-src",r.source));
   row.append(st);
   if(r.answer)row.append(el("div","lg-ans "+(r.answerKind||""),r.answer));

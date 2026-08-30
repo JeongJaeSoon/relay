@@ -4,7 +4,7 @@ import type { Message, MessageSource, Task, TaskStatus } from "@shared/types.ts"
 import { stKey, stLabel, type StKey } from "./consts.ts";
 
 /** What happened to the request. Read off dispatch_state and the dispatcher's recorded decision — nothing is guessed. */
-export type Disposition = "deciding" | "new_task" | "routed" | "delivered" | "answered" | "fastpath" | "close_request" | "needs_confirm" | "failed";
+export type Disposition = "deciding" | "new_task" | "split" | "routed" | "delivered" | "answered" | "fastpath" | "close_request" | "needs_confirm" | "failed";
 /** Sort and filter tier. `needs_you` is the point of the view: those requests are stranded until the user acts. */
 export type Bucket = "needs_you" | "in_flight" | "settled";
 export type RequestAction = "redispatch" | "answer" | "restart" | "close";
@@ -13,7 +13,7 @@ export type AnswerKind = "answer" | "summary" | "question" | "error";
 export interface RequestRow {
   id: string; text: string; createdAt: number; source: MessageSource;
   disposition: Disposition; dispositionLabel: string;
-  taskUuid: string | null; taskId: string | null; taskStatus: TaskStatus | null;
+  taskUuid: string | null; taskId: string | null; taskIds: string[]; taskStatus: TaskStatus | null;
   state: string; st: StKey; bucket: Bucket;
   answer: string | null; answerKind: AnswerKind | null;
   actions: RequestAction[];
@@ -34,6 +34,7 @@ function dispositionOf(m: Message): Disposition {
     case "direct": return "delivered";                                         // a reply aimed at a task, or an answer to its question — never went to the dispatcher
     default: switch (m.dispatch_json?.action) {                                // "dispatched"
       case "new_task": return "new_task";
+      case "split": return "split";
       case "route_to_task": return "routed";
       case "answer_directly": return "answered";
       case "close_task": return "close_request";
@@ -44,10 +45,14 @@ function dispositionOf(m: Message): Disposition {
 
 const labelOf = (d: Disposition, taskId: string | null): string => {
   const t = taskId ?? "a task";
-  return d === "deciding" ? "Deciding" : d === "new_task" ? `Started ${t}` : d === "routed" ? `Routed into ${t}` : d === "delivered" ? `Sent to ${t}`
+  return d === "deciding" ? "Deciding" : d === "new_task" ? `Started ${t}` : d === "split" ? "Split into separate tasks" : d === "routed" ? `Routed into ${t}` : d === "delivered" ? `Sent to ${t}`
     : d === "answered" ? "Answered by the dispatcher" : d === "fastpath" ? "Answered from the status fast path" : d === "close_request" ? `Close ${t} requested`
       : d === "needs_confirm" ? "Waiting for your confirmation" : "Dispatch failed";
 };
+
+/** A split makes several tasks and `messages.task_uuid` holds only the first (C.4.4), so the row's state is decided by
+ *  the piece that most needs reading: anything waiting on the user, else anything still running, else the first. */
+const lead = (ts: Task[]): Task | null => ts.find((t) => ATTENTION.has(t.status)) ?? ts.find((t) => ACTIVE.has(t.status)) ?? ts[0] ?? null;
 
 /** The state of the disposition, not of the task: a request stuck at needs_confirm is "waiting for you" even when the task it named is running. */
 function stateOf(d: Disposition, m: Message, task: Task | null): { state: string; st: StKey } {
@@ -107,12 +112,17 @@ export function requestRows(messages: Message[], tasks: Record<string, Task>): R
     // Dispatcher replies (fast-path answer, needs-confirm prompt) carry no task_uuid, so they are linked by position: everything up to the next request belongs to this one.
     const trail: Message[] = [];
     for (let j = i + 1; j < ordered.length && ordered[j].role !== "user"; j++) trail.push(ordered[j]);
-    const task = m.task_uuid ? tasks[m.task_uuid] ?? null : null;
+    // A split records every task it made in dispatch_json.task_ids; every other decision names at most the one in task_uuid.
+    const own = (m.dispatch_json?.task_ids ?? []).map((id) => Object.values(tasks).find((t) => t.display_id === id)).filter((t): t is Task => !!t);
+    const first = m.task_uuid ? tasks[m.task_uuid] ?? null : null;
+    const all = own.length ? own : first ? [first] : [];
+    const task = lead(all) ?? first;
     const d = dispositionOf(m); const taskId = task?.display_id ?? null;
+    const taskIds = own.length ? m.dispatch_json!.task_ids! : taskId ? [taskId] : [];
     rows.push({
       id: m.id, text: m.text, createdAt: m.created_at, source: m.source,
       disposition: d, dispositionLabel: labelOf(d, taskId),
-      taskUuid: m.task_uuid, taskId, taskStatus: task?.status ?? null,
+      taskUuid: m.task_uuid, taskId, taskIds, taskStatus: task?.status ?? null,
       ...stateOf(d, m, task), bucket: bucketOf(d, m, task),
       ...answerOf(d, m, task, trail, outcome), actions: actionsOf(d, task),
     });

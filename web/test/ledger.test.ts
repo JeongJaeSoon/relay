@@ -97,3 +97,20 @@ test("the stranded requests come first, then the in-flight ones, newest first in
   expect(needsYou(rows)).toBe(4);
   expect(rows).toHaveLength(6);                                            // the system row is not a request
 });
+
+// A split makes several tasks but `messages.task_uuid` holds only the first (C.4.4), so reading the row off that one
+// alone named one task out of three and hid the state of the other two — including a piece stranded on a question.
+test("a split names every task it made, and its state is the piece that most needs reading", () => {
+  const ids = ["T-01", "T-02", "T-03"];
+  const m = msg({ text: "TUI 설계랑 라이프사이클 정리 같이", task_uuid: "u1", dispatch_json: { action: "split", task_ids: ids } });
+  const tasks = byId(task("u1", "T-01", "running"), task("u2", "T-02", "waiting_input", { question: { text: "which file?", options: [], asked_at: 1, source: "marker" } }), task("u3", "T-03", "done"));
+  const r = one(m, tasks);
+  expect(r).toMatchObject({ disposition: "split", dispositionLabel: "Split into separate tasks", taskIds: ids });
+  expect(r).toMatchObject({ taskId: "T-02", state: "Needs input", bucket: "needs_you", actions: ["answer"] });   // not T-01, which task_uuid points at
+  expect(r.answer).toBe("which file?");
+  // nothing waiting: the running piece decides, and the row stays in flight rather than settling on the done one
+  const running = one(m, byId(task("u1", "T-01", "done"), task("u2", "T-02", "running"), task("u3", "T-03", "done")));
+  expect(running).toMatchObject({ taskId: "T-02", bucket: "in_flight", taskIds: ids });
+  // every piece finished
+  expect(one(m, byId(task("u1", "T-01", "done"), task("u2", "T-02", "done"), task("u3", "T-03", "done")))).toMatchObject({ bucket: "settled" });
+});
