@@ -22,6 +22,7 @@ import { recover } from "./lifecycle/recovery.ts";
 import { IdleReaper } from "./lifecycle/idle.ts";
 import { UsageGuard } from "./lifecycle/usage.ts";
 import { Watchdog } from "./lifecycle/watchdog.ts";
+import { sweep } from "./lifecycle/retention.ts";
 import { log } from "./log.ts";
 import { hookTokenFor } from "./gateway/auth.ts";
 import type { PendingPermission } from "./hooks/ingest.ts";
@@ -88,7 +89,8 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   const http = startServer(ctx); log.info("listening", { port: cfg.port });
   const spool = new Spool(paths.spool, () => svc.ingestDeps);
   await recover({ db, log: evlog, runner, permits, outbox, dispatcher, scheduler, tasks: svc, spool, maxAgents, instanceId });
-  const timers = [setInterval(() => idle.tick(), 60_000), setInterval(() => usage.tick(), 60_000), setInterval(() => watchdog.tick().catch((e) => log.warn("watchdog", { e: String(e) })), 5_000), setInterval(() => spool.drain().catch(() => {}), 30_000), setInterval(() => spool.sweep(7), 3600_000)];
+  const timers = [setInterval(() => idle.tick(), 60_000), setInterval(() => usage.tick(), 60_000), setInterval(() => watchdog.tick().catch((e) => log.warn("watchdog", { e: String(e) })), 5_000), setInterval(() => spool.drain().catch(() => {}), 30_000), setInterval(() => spool.sweep(7), 3600_000),
+    setInterval(() => { try { log.info("retention", sweep(db, 90, evlog)); } catch (e) { log.warn("retention", { e: String(e) }); } }, 24 * 3600_000)];
   const stop = () => { timers.forEach(clearInterval); for (const p of pendingPermissions.values()) p.resolve("deny"); http.stop(); peer?.stop(); db.close(); };   // never leave a worker waiting on a dead relay
   process.on("SIGTERM", () => { stop(); process.exit(0); }); process.on("SIGINT", () => { stop(); process.exit(0); });
   return { ctx, stop };
