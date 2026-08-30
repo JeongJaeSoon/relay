@@ -6,7 +6,7 @@ import { openDb } from "../db/db.ts";
 import { NativeSessionRunner } from "../runner/native.ts";
 import { has, relayBin } from "./client.ts";
 export interface Check { name: string; ok: boolean; detail: string; fix?: string }
-export const checkPerms = (p: string, mode: number): Check => { if (!existsSync(p)) return { name: p, ok: false, detail: "없음" }; const m = statSync(p).mode & 0o777; return { name: p, ok: m === mode, detail: m.toString(8), fix: m === mode ? undefined : `chmod ${mode.toString(8)} ${p}` }; };
+export const checkPerms = (p: string, mode: number): Check => { if (!existsSync(p)) return { name: p, ok: false, detail: "missing" }; const m = statSync(p).mode & 0o777; return { name: p, ok: m === mode, detail: m.toString(8), fix: m === mode ? undefined : `chmod ${mode.toString(8)} ${p}` }; };
 export const parseDaemonStatus = (t: string) => ({ pid: Number(t.match(/pid:\s*(\d+)/)?.[1] ?? 0), version: t.match(/version:\s*(\S+)/)?.[1] ?? "" });
 export const summarize = (r: Check[]) => r.map((c) => `${c.ok ? "✔" : "✖"} ${c.name}${c.detail ? " — " + c.detail : ""}${!c.ok && c.fix ? `\n    → ${c.fix}` : ""}`).join("\n");
 const probeEnv = (): Record<string, string> => Object.fromEntries(Object.entries(process.env).filter(([k, v]) => k !== "ANTHROPIC_API_KEY" && v != null)) as Record<string, string>;
@@ -30,29 +30,29 @@ export async function serviceAuthProbe(claudeBin: string): Promise<"keychain" | 
 async function serviceChecks(): Promise<Check[]> {
   const out = join(paths.home, "doctor-service.json");
   const txt = await serviceRun("dev.relay.doctor", `${relayBin()} doctor --json --quiet > "${out}" 2>&1`, out, 120_000);
-  try { return (JSON.parse(txt) as Check[]).map((c) => ({ ...c, name: `[service] ${c.name}` })); } catch { return [{ name: "[service] doctor", ok: false, detail: txt.slice(0, 160) || "no output", fix: "서비스 PATH/권한 확인: relay doctor --service 재실행" }]; }
+  try { return (JSON.parse(txt) as Check[]).map((c) => ({ ...c, name: `[service] ${c.name}` })); } catch { return [{ name: "[service] doctor", ok: false, detail: txt.slice(0, 160) || "no output", fix: "check the service PATH/permissions, then re-run relay doctor --service" }]; }
 }
 /** Library entry: every check, no process.exit (setup reuses pieces, tests call it directly). */
 export async function runChecks(opts: { service?: boolean; probe?: boolean } = {}): Promise<Check[]> {
   const cfg = loadConfig(); const r: Check[] = []; const pathEnv = [...cfg.path_prepend, process.env.PATH ?? ""].join(":");
-  const ver = (await run([cfg.claude_bin, "--version"])).out.trim(); r.push({ name: "claude CLI", ok: /(\d+)\.(\d+)\.(\d+)/.test(ver) && (await import("./setup.ts")).versionOk(ver), detail: ver || "없음", fix: "claude update" });
-  const login = await run([cfg.claude_bin, "-p", "reply OK", "--tools", "", "--max-turns", "1", "--effort", "low", "--output-format", "json"], 60_000); r.push({ name: "CLI 로그인", ok: login.code === 0 && !/"is_error":true/.test(login.out), detail: login.code === 0 ? "ok" : login.err.slice(0, 80), fix: "claude → /login" });
-  for (const bin of ["node", "claude"]) { const w = await run(["sh", "-c", `PATH="${pathEnv}" command -v ${bin}`]); r.push({ name: `PATH에서 ${bin}`, ok: w.code === 0, detail: w.out.trim(), fix: "relay setup (path_prepend 갱신)" }); }
-  r.push({ name: "ANTHROPIC_API_KEY 미설정", ok: !process.env.ANTHROPIC_API_KEY, detail: process.env.ANTHROPIC_API_KEY ? "설정됨(서비스에서는 제거됨)" : "", fix: "unset ANTHROPIC_API_KEY" });
+  const ver = (await run([cfg.claude_bin, "--version"])).out.trim(); r.push({ name: "claude CLI", ok: /(\d+)\.(\d+)\.(\d+)/.test(ver) && (await import("./setup.ts")).versionOk(ver), detail: ver || "missing", fix: "claude update" });
+  const login = await run([cfg.claude_bin, "-p", "reply OK", "--tools", "", "--max-turns", "1", "--effort", "low", "--output-format", "json"], 60_000); r.push({ name: "CLI login", ok: login.code === 0 && !/"is_error":true/.test(login.out), detail: login.code === 0 ? "ok" : login.err.slice(0, 80), fix: "claude → /login" });
+  for (const bin of ["node", "claude"]) { const w = await run(["sh", "-c", `PATH="${pathEnv}" command -v ${bin}`]); r.push({ name: `${bin} on PATH`, ok: w.code === 0, detail: w.out.trim(), fix: "relay setup (refreshes path_prepend)" }); }
+  r.push({ name: "ANTHROPIC_API_KEY unset", ok: !process.env.ANTHROPIC_API_KEY, detail: process.env.ANTHROPIC_API_KEY ? "set (stripped in the service)" : "", fix: "unset ANTHROPIC_API_KEY" });
   r.push({ name: "git", ok: (await run(["git", "--version"])).code === 0, detail: "" });
-  const up = await fetch(`http://127.0.0.1:${cfg.port}/api/usage`, { headers: { authorization: `Bearer ${existsSync(paths.apiToken) ? readFileSync(paths.apiToken, "utf8").trim() : ""}` } }).then((x) => x.ok).catch(() => false); r.push({ name: `서버 :${cfg.port}`, ok: true, detail: up ? "실행 중" : "꺼짐", fix: up ? undefined : "brew services start relay" });
-  if (existsSync(paths.serviceFailed)) r.push({ name: "서비스 기동 실패 플래그", ok: false, detail: `버전 ${readFileSync(paths.serviceFailed, "utf8").trim()} 기동 실패 후 잠든 상태`, fix: `원인 확인(~/Library/Logs/relay/stderr.log) 후: rm ${paths.serviceFailed} && brew services restart relay` });
-  if (existsSync(paths.db)) { const db = openDb(paths.db); const ic = (db.query("pragma integrity_check").get() as any)?.integrity_check; db.close(); r.push({ name: "DB 무결성", ok: ic === "ok", detail: String(ic), fix: "relay db restore <backup>" }); }
-  for (const f of [paths.apiToken, paths.hookToken]) if (existsSync(f)) r.push({ ...checkPerms(f, 0o600), name: `토큰 권한 ${f}` });
-  if (existsSync(paths.spool)) { const q = existsSync(join(paths.spool, "quarantine")) ? readdirSync(join(paths.spool, "quarantine")).length : 0; r.push({ name: "훅 스풀", ok: q === 0, detail: `격리 ${q}건`, fix: `ls ${join(paths.spool, "quarantine")}` }); }
-  for (const n of ["relay-worker.md", "relay-explore.md", "relay-verify.md"]) r.push({ name: `에이전트 ${n}`, ok: existsSync(join(paths.agentsDir, n)), detail: "", fix: "relay setup" });
+  const up = await fetch(`http://127.0.0.1:${cfg.port}/api/usage`, { headers: { authorization: `Bearer ${existsSync(paths.apiToken) ? readFileSync(paths.apiToken, "utf8").trim() : ""}` } }).then((x) => x.ok).catch(() => false); r.push({ name: `server :${cfg.port}`, ok: true, detail: up ? "running" : "down", fix: up ? undefined : "brew services start relay" });
+  if (existsSync(paths.serviceFailed)) r.push({ name: "service start-failure flag", ok: false, detail: `asleep after version ${readFileSync(paths.serviceFailed, "utf8").trim()} failed to start`, fix: `check the cause (~/Library/Logs/relay/stderr.log), then: rm ${paths.serviceFailed} && brew services restart relay` });
+  if (existsSync(paths.db)) { const db = openDb(paths.db); const ic = (db.query("pragma integrity_check").get() as any)?.integrity_check; db.close(); r.push({ name: "DB integrity", ok: ic === "ok", detail: String(ic), fix: "relay db restore <backup>" }); }
+  for (const f of [paths.apiToken, paths.hookToken]) if (existsSync(f)) r.push({ ...checkPerms(f, 0o600), name: `token permissions ${f}` });
+  if (existsSync(paths.spool)) { const q = existsSync(join(paths.spool, "quarantine")) ? readdirSync(join(paths.spool, "quarantine")).length : 0; r.push({ name: "hook spool", ok: q === 0, detail: `${q} quarantined`, fix: `ls ${join(paths.spool, "quarantine")}` }); }
+  for (const n of ["relay-worker.md", "relay-explore.md", "relay-verify.md"]) r.push({ name: `agent ${n}`, ok: existsSync(join(paths.agentsDir, n)), detail: "", fix: "relay setup" });
   const mcp = await run([cfg.claude_bin, "mcp", "get", "relay"]); const mcpCmd = mcp.out.match(/(?:command|Command)[^:]*:\s*(\S+)/)?.[1] ?? null;   // a stale Cellar path after brew upgrade still "exists" in the registry but not on disk
-  r.push({ name: "MCP relay 등록", ok: mcp.code === 0 && (!mcpCmd || existsSync(mcpCmd)), detail: mcpCmd ?? (mcp.code === 0 ? "등록됨" : "없음"), fix: `${cfg.claude_bin} mcp remove --scope user relay; relay setup` });
+  r.push({ name: "MCP relay registration", ok: mcp.code === 0 && (!mcpCmd || existsSync(mcpCmd)), detail: mcpCmd ?? (mcp.code === 0 ? "registered" : "missing"), fix: `${cfg.claude_bin} mcp remove --scope user relay; relay setup` });
   const ds = await run([cfg.claude_bin, "daemon", "status"]);   // hidden subcommand (not in --help); informational only — a stopped supervisor is normal and starts on the first --bg
-  r.push({ name: "claude 슈퍼바이저", ok: true, detail: ds.code === 0 ? `pid ${parseDaemonStatus(ds.out).pid} · ${parseDaemonStatus(ds.out).version}` : "미실행(첫 --bg 때 자동 시작)" });
-  r.push({ name: "capabilities", ok: existsSync(paths.capabilities), detail: existsSync(paths.capabilities) ? `delivery=${JSON.parse(readFileSync(paths.capabilities, "utf8")).delivery}` : "없음", fix: "relay doctor --probe" });
+  r.push({ name: "claude supervisor", ok: true, detail: ds.code === 0 ? `pid ${parseDaemonStatus(ds.out).pid} · ${parseDaemonStatus(ds.out).version}` : "not running (starts on the first --bg)" });
+  r.push({ name: "capabilities", ok: existsSync(paths.capabilities), detail: existsSync(paths.capabilities) ? `delivery=${JSON.parse(readFileSync(paths.capabilities, "utf8")).delivery}` : "missing", fix: "relay doctor --probe" });
   if (opts.probe) r.push(await probeCapabilities(cfg.claude_bin));
-  if (opts.service) { r.push(...(await serviceChecks())); r.push({ name: "[service] Keychain 인증", ok: (await serviceAuthProbe(cfg.claude_bin)) === "keychain" || existsSync(paths.oauthToken), detail: existsSync(paths.oauthToken) ? "토큰 파일 폴백" : "", fix: "claude setup-token → relay setup --service" }); }
+  if (opts.service) { r.push(...(await serviceChecks())); r.push({ name: "[service] Keychain auth", ok: (await serviceAuthProbe(cfg.claude_bin)) === "keychain" || existsSync(paths.oauthToken), detail: existsSync(paths.oauthToken) ? "token file fallback" : "", fix: "claude setup-token → relay setup --service" }); }
   return r;
 }
 /** CLI entry: the only function here that exits. */
@@ -71,13 +71,13 @@ export async function probeCapabilities(claudeBin: string): Promise<Check> {
     const s = await runner.spawn({ taskUuid: "probe", displayId: "P-00", name: "relay-probe", cwd, worktree: null, model: "claude-sonnet-5", effort: "low", permissionMode: "auto", advisor: null, agent: "relay-worker", settingsJson: "{}", prompt: "Remember the word KIWI and reply OK.", env: {} });
     short = s.short_id;
     const idle = await poll((rows) => rows.some((r) => r.short_id === short && r.session_id && r.busy === false), 45_000); const row = idle?.find((r) => r.short_id === short);
-    if (!row?.session_id) return { name: "capability probe", ok: false, detail: "--bg 세션이 idle이 되지 않음(45s)" };
-    await runner.stop(short); if (!(await poll((rows) => !rows.some((r) => r.short_id === short && r.alive), 15_000))) return { name: "capability probe", ok: false, detail: "stop이 확인되지 않음" };
+    if (!row?.session_id) return { name: "capability probe", ok: false, detail: "--bg session never went idle (45s)" };
+    await runner.stop(short); if (!(await poll((rows) => !rows.some((r) => r.short_id === short && r.alive), 15_000))) return { name: "capability probe", ok: false, detail: "stop was not confirmed" };
     const r = await runner.resume({ sessionId: row.session_id, cwd, name: "relay-probe", settingsJson: "{}", prompt: "What was the word? Reply with it only.", env: {} }); short2 = r.short_id;
     const ok = !!(await poll((rows) => rows.some((x) => x.short_id === short2 && x.alive), 30_000));
     const caps = existsSync(paths.capabilities) ? JSON.parse(readFileSync(paths.capabilities, "utf8")) : {};
     writeFileSync(paths.capabilities, JSON.stringify({ ...caps, cli_version: (await run([claudeBin, "--version"])).out.trim(), bgResume: ok ? "context-kept" : "fail", ...(ok ? { delivery: caps.delivery ?? "resume" } : {}), probed_at: new Date().toISOString() }, null, 2));   // no print fallback (C9)
-    return { name: "capability probe", ok, detail: ok ? "--bg --resume ok" : "--bg --resume 실패 — Phase 0 ① 재검토 필요(print 폴백 없음)" };
+    return { name: "capability probe", ok, detail: ok ? "--bg --resume ok" : "--bg --resume failed — Phase 0 ① needs a rethink (no print fallback)" };
   } catch (e) { return { name: "capability probe", ok: false, detail: String(e).slice(0, 160) }; }
   finally { await cleanup([short2, short]); }
 }

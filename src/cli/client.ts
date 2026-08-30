@@ -4,7 +4,7 @@ import { relayBin } from "../runner/settings.ts";
 export { relayBin };                                                          // absolute path, Cellar→opt mapped, quoted when it contains spaces (02 Task 7)
 /** relayBin() as argv: the hook command string is shell-quoted; Bun.spawn / `claude mcp add` want tokens. */
 export const relayArgv = (): string[] => (relayBin().match(/"(?:[^"\\]|\\.)*"|\S+/g) ?? []).map((t) => (t.startsWith('"') ? JSON.parse(t) : t));
-export class RelayDown extends Error { constructor() { super("relay: 서버가 꺼져 있습니다 — `brew services start relay` 또는 `relay serve`"); } }
+export class RelayDown extends Error { constructor() { super("relay: the server is not running — `brew services start relay` or `relay serve`"); } }
 export class RelayHttpError extends Error { constructor(public status: number, body: string) { super(`relay: ${status} ${body}`); } }
 export class CliError extends Error { constructor(message: string, public code = 1) { super(message); } }
 export function client() {
