@@ -65,6 +65,7 @@ Human-readable Korean output by default; `--json` prints JSON only, for scripts.
 | `path_prepend` | `[]` | Dirs prepended to PATH under the service (claude's dir, node's dir) |
 | `max_concurrent_agents` | `10` | Global permit pool size |
 | `[dispatcher] model / effort / timeout_ms / rate_per_min` | `claude-fable-5` / `medium` / `60000` / `10` | One-shot routing call |
+| `[dispatcher] max_split` | `4` | How many tasks one message may be split into. `1` turns splitting off |
 | `[worker] model / advisor / permission_mode / allow_push` | `claude-opus-5` / `claude-fable-5` / `auto` / `false` | Worker session defaults |
 | `[worker.effort] small / normal / epic` | `high` / `xhigh` / `xhigh` | Effort per task size |
 | `[usage] daily_ceiling_tokens / max_tool_calls_per_turn` | `null` / `400` | Usage guards |

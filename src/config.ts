@@ -24,6 +24,7 @@ export const ConfigSchema = z.object({
   dispatcher: z.object({
     model: z.string().default("claude-fable-5"), effort: Effort.default("medium"), retry_effort: Effort.default("high"),
     timeout_ms: z.number().int().default(60_000), rate_per_min: z.number().int().default(10),
+    max_split: z.number().int().min(1).default(4),                 // 1 turns message splitting off: the action is not offered to the model and any split is refused (design C.4)
   }).prefault({}),   // REVIEW PATCH #3: zod4 .default({}) skips inner defaults
   worker: z.object({
     model: z.string().default("claude-opus-5"),

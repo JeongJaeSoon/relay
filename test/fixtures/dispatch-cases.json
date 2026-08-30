@@ -1,0 +1,117 @@
+{
+  "_note": "Dispatcher regression corpus (design C.5). `world` is the context every case is judged against; `model_output` is the structured output the model is expected to produce for `message`, and `expect` is what relay must then do with it. The unit test replays `model_output` through the real Dispatcher + TaskService, so it guards the pipeline and the guardrails. A live accuracy run compares a real model's output against `model_output`.",
+  "world": {
+    "max_split": 4,
+    "projects": [
+      { "id": "p-relay", "name": "relay", "path": "/tmp/relay" },
+      { "id": "p-freee", "name": "freee-mcp", "path": "/tmp/freee-mcp" },
+      { "id": "p-meterly", "name": "meterly", "path": "/tmp/meterly" }
+    ],
+    "tasks": [
+      { "display_id": "T-01", "project": "relay", "title": "favicon 교체", "status": "running" }
+    ]
+  },
+  "cases": [
+    {
+      "name": "single/new_task — one project, one piece of work",
+      "kind": "single",
+      "message": "relay 대시보드에 다크 모드 붙여줘",
+      "model_output": { "action": "new_task", "project": "relay", "title": "다크 모드", "size": "normal", "prompt": "relay 대시보드에 다크 모드 붙여줘", "confidence": "high" },
+      "expect": { "dispatch_state": "dispatched", "action": "new_task", "created": ["T-02"], "routed": [], "badge": "dispatcher · new_task · normal · relay" }
+    },
+    {
+      "name": "single/route_to_task — a follow-up to a running task",
+      "kind": "single",
+      "message": "그거 파비콘 크기도 32px 로 맞춰줘",
+      "model_output": { "action": "route_to_task", "task_id": "T-01", "prompt": "파비콘 크기도 32px 로 맞춰줘", "confidence": "high" },
+      "expect": { "dispatch_state": "dispatched", "action": "route_to_task", "created": [], "routed": ["T-01"], "badge": "dispatcher · route_to_task · T-01" }
+    },
+    {
+      "name": "single/answer_directly — a question that needs no work",
+      "kind": "single",
+      "message": "worktree 는 태스크마다 하나씩 생기는 거 맞지?",
+      "model_output": { "action": "answer_directly", "answer": "네, 태스크마다 별도 워크트리가 생깁니다.", "confidence": "high" },
+      "expect": { "dispatch_state": "dispatched", "action": "answer_directly", "created": [], "routed": [], "badge": "dispatcher · answer_directly" }
+    },
+    {
+      "name": "single/close_task — the user asks to finish one",
+      "kind": "single",
+      "message": "T-01 이제 닫아도 돼",
+      "model_output": { "action": "close_task", "task_id": "T-01", "confidence": "high" },
+      "expect": { "dispatch_state": "dispatched", "action": "close_task", "created": [], "routed": [], "badge": "dispatcher · close_task · T-01" }
+    },
+    {
+      "name": "single/low confidence — ambiguous target",
+      "kind": "single",
+      "message": "그거 좀 고쳐줘",
+      "model_output": { "action": "route_to_task", "task_id": "T-01", "prompt": "그거 좀 고쳐줘", "confidence": "low" },
+      "expect": { "dispatch_state": "needs_confirm", "created": [], "routed": [] }
+    },
+    {
+      "name": "split/mixed projects — a worktree cannot span repositories",
+      "kind": "split",
+      "message": "relay 쪽은 재접속 배너 붙이고, freee-mcp 는 회사 전환 API 마저 채워줘",
+      "model_output": {
+        "action": "split",
+        "confidence": "high",
+        "items": [
+          { "action": "new_task", "project": "relay", "title": "재접속 배너", "size": "small", "prompt": "재접속 배너 붙여줘" },
+          { "action": "new_task", "project": "freee-mcp", "title": "회사 전환 API", "size": "normal", "prompt": "회사 전환 API 마저 채워줘" }
+        ]
+      },
+      "expect": { "dispatch_state": "dispatched", "action": "split", "created": ["T-02", "T-03"], "routed": [], "badge": "dispatcher · split · 2 · T-02 T-03" }
+    },
+    {
+      "name": "split/related work in one project stays one task",
+      "kind": "split",
+      "message": "relay 대시보드 입력창을 여러 줄로 바꾸고, 초안도 복원되게 하고, 전송 버튼 정렬도 같이 고쳐줘",
+      "model_output": { "action": "new_task", "project": "relay", "title": "입력창 개선", "size": "normal", "prompt": "대시보드 입력창을 여러 줄로 바꾸고, 초안 복원과 전송 버튼 정렬까지 같이 고쳐줘", "confidence": "high" },
+      "expect": { "dispatch_state": "dispatched", "action": "new_task", "created": ["T-02"], "routed": [], "badge": "dispatcher · new_task · normal · relay" }
+    },
+    {
+      "name": "split/over the cap — five pieces against max_split 4",
+      "kind": "split",
+      "message": "relay, freee-mcp, meterly 전부 손보고 릴리스 노트랑 README 도 갱신해줘",
+      "model_output": {
+        "action": "split",
+        "confidence": "high",
+        "items": [
+          { "action": "new_task", "project": "relay", "title": "정리", "size": "normal", "prompt": "relay 손봐줘" },
+          { "action": "new_task", "project": "freee-mcp", "title": "정리", "size": "normal", "prompt": "freee-mcp 손봐줘" },
+          { "action": "new_task", "project": "meterly", "title": "정리", "size": "normal", "prompt": "meterly 손봐줘" },
+          { "action": "new_task", "project": "relay", "title": "릴리스 노트", "size": "small", "prompt": "릴리스 노트 갱신해줘" },
+          { "action": "new_task", "project": "relay", "title": "README", "size": "small", "prompt": "README 갱신해줘" }
+        ]
+      },
+      "expect": { "dispatch_state": "needs_confirm", "created": [], "routed": [] }
+    },
+    {
+      "name": "split/one ambiguous piece fails the whole split",
+      "kind": "split",
+      "message": "meterly 요금 파서 고치고, 아까 그것도 마저 해줘",
+      "model_output": {
+        "action": "split",
+        "confidence": "high",
+        "items": [
+          { "action": "new_task", "project": "meterly", "title": "요금 파서", "size": "normal", "prompt": "요금 파서 고쳐줘", "confidence": "high" },
+          { "action": "route_to_task", "task_id": "T-01", "prompt": "아까 그것도 마저 해줘", "confidence": "low" }
+        ]
+      },
+      "expect": { "dispatch_state": "needs_confirm", "created": [], "routed": [] }
+    },
+    {
+      "name": "split/follow-up plus new work in another project",
+      "kind": "split",
+      "message": "파비콘은 32px 로 맞추고, meterly 요금 파서도 새로 시작해줘",
+      "model_output": {
+        "action": "split",
+        "confidence": "high",
+        "items": [
+          { "action": "route_to_task", "task_id": "T-01", "prompt": "파비콘 크기를 32px 로 맞춰줘" },
+          { "action": "new_task", "project": "meterly", "title": "요금 파서", "size": "normal", "prompt": "요금 파서 새로 시작해줘" }
+        ]
+      },
+      "expect": { "dispatch_state": "dispatched", "action": "split", "created": ["T-02"], "routed": ["T-01"], "badge": "dispatcher · split · 2 · T-01 T-02" }
+    }
+  ]
+}

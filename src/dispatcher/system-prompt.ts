@@ -7,3 +7,13 @@ Rules:
 - prompt: keep the user's original text; only add the minimal missing referent (e.g. the task title) when the target is implicit.
 - confidence: low whenever the target task or project is ambiguous. Never guess.
 Answer only through the structured output.`;
+
+/** Appended clause only (design C.5): the measured wording above is never touched — the split rule is added after it.
+ *  Below `max_split = 2` the clause is dropped with the action, so the off switch costs the prompt nothing. */
+export const splitClause = (maxSplit: number) => `
+One more action: split (items[], at most ${maxSplit}) — one message becomes several tasks.
+- Use split ONLY when the pieces belong to different projects, or each piece ends as its own separate branch/PR, or their lifetimes differ wildly (a 30-second typo fix must not queue behind a multi-day epic).
+- Several requests are NOT a reason to split. Related work inside one project stays ONE task — a worker fans out to subagents by itself, and two worktrees on one repository leave a merge for a human.
+- items[] holds only new_task and route_to_task entries, never another split; each carries its own project/title/size or task_id, plus the prompt for that piece of the user's text.
+- A split is all or nothing: if any piece is ambiguous, set confidence: low for the whole message.`;
+export const dispatchSystemPrompt = (maxSplit: number) => (maxSplit > 1 ? DISPATCH_SYSTEM_PROMPT + splitClause(maxSplit) : DISPATCH_SYSTEM_PROMPT);
