@@ -13,9 +13,10 @@ import { DecisionSchema, DISPATCH_JSON_SCHEMA } from "./schema.ts";
 import { DISPATCH_SYSTEM_PROMPT } from "./system-prompt.ts";
 
 export type RunClaude = (args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
-export const bunRunClaude: RunClaude = async (args, { cwd, timeoutMs }) => {
+/** Absolute `claude` path from config (04 Global Constraints): launchd's minimal PATH has no brew/npm bin dir. */
+export const bunRunClaude = (claudeBin = "claude"): RunClaude => async (args, { cwd, timeoutMs }) => {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "ANTHROPIC_API_KEY")) as Record<string, string>;
-  const p = Bun.spawn(["claude", ...args], { cwd, env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const p = Bun.spawn([claudeBin, ...args], { cwd, env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   const t1 = setTimeout(() => p.kill("SIGINT"), timeoutMs); const t2 = setTimeout(() => p.kill("SIGTERM"), timeoutMs + 5000);
   const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   const code = await p.exited; clearTimeout(t1); clearTimeout(t2); return { code, stdout, stderr };
@@ -27,7 +28,7 @@ export class Dispatcher {
   private chain: Promise<void> = Promise.resolve();
   private stamps: number[] = [];   // token bucket for rate limiting
   private run: RunClaude;
-  constructor(private db: Database, private log: EventLog, private cfg: Config, private opts: Opts) { this.run = opts.runClaude ?? bunRunClaude; }
+  constructor(private db: Database, private log: EventLog, private cfg: Config, private opts: Opts) { this.run = opts.runClaude ?? bunRunClaude(cfg.claude_bin); }
   enqueue(messageId: string) { this.chain = this.chain.then(() => this.process(messageId)).catch((e) => slog.error("dispatcher chain error", { e: String(e) })); }
   /** Re-enqueue every pending message (startup, resume-all). */
   drainPending() { for (const r of this.db.query("select id from messages where role='user' and dispatch_state in ('pending','deciding') order by created_at").all() as any[]) this.enqueue(r.id); }
