@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { badgeParts, closeConfirmUuid, createNotifQueue, dlogEntry, eventLine, isDispatcherBadgeRow, isTimelineEvent, toDemoForeign, toDemoTask } from "../src/adapter.ts";
+import { badgeParts, closeConfirmUuid, createNotifQueue, eventLine, isDispatcherBadgeRow, isTimelineEvent, toDemoForeign, toDemoTask } from "../src/adapter.ts";
 import { store } from "../src/store.ts";
 const base = (uuid: string, status: any, extra: Record<string, unknown> = {}) => ({ uuid, num: 3, display_id: "T-03", project_id: "p", title: "인증 리팩토링", status, size: "normal", effort: "xhigh", model: "claude-opus-5", session_id: "s", short_id: "ab12", worktree_path: "/w", branch: "relay-abc", base_sha: null, process_state: "alive", process_generation: 2, turn_state: "busy", attach_state: "none", attached_by: null, paused: false, last_summary: null, last_step: "Edit src/auth.ts", question: null, parent_uuid: null, agent_id: null, agent_type: null, queued_at: null, qhead: false, started_at: 1000, ended_at: null, created_at: 900, updated_at: 1, closed_at: null, usage_tokens: 0, summary_json: null, ...extra }) as any;
 const ctx = { projects: [{ id: "p", name: "myapp" }] as any, tasks: {} as any };
@@ -12,7 +12,7 @@ test("toDemoTask maps status/label/step/question/children into the demo shape", 
   expect(toDemoTask(base("u3", "needs_review", { last_summary: "테스트 실패" }), ctx)).toMatchObject({ status: "wait", statusLabel: "Needs review", step: "테스트 실패" });
   expect(toDemoTask(base("u4", "queued", { started_at: null, queued_at: 7, qhead: true }), ctx)).toMatchObject({ status: "queue", queuedAt: 7, qhead: true, startedAt: null });
 });
-test("badgeParts follows dispatch_state; dlogEntry mirrors the demo's rail; closeConfirmUuid parses the server's close prompt", () => {
+test("badgeParts follows dispatch_state; closeConfirmUuid parses the server's close prompt", () => {
   const m = (st: string, extra: Record<string, unknown> = {}) => ({ id: "m1", role: "user", source: "user", client_message_id: "c", dispatch_state: st, text: "auth 리팩토링", task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: 1, ...extra }) as any;
   const tasks = { u1: base("u1", "running") }; const c = { ...ctx, tasks };
   expect(badgeParts(m("pending"), c)).toMatchObject({ kind: "gateway", parts: ["⏳ Accepted"], judging: false });
@@ -21,11 +21,7 @@ test("badgeParts follows dispatch_state; dlogEntry mirrors the demo's rail; clos
   expect(badgeParts(m("fastpath"), c)).toMatchObject({ kind: "gateway", parts: ["fast-path"] });
   expect(badgeParts(m("failed", { dispatch_error: "timeout" }), c)).toMatchObject({ parts: ["failed · timeout"], retry: true });
   expect(badgeParts(m("direct", { task_uuid: "u1" }), c)).toMatchObject({ kind: "↪ Reply", task: { id: "T-03" } });
-  expect(dlogEntry(m("deciding"), c)).toMatchObject({ messageId: "m1", status: "judging" });
-  expect(dlogEntry(m("dispatched", { task_uuid: "u1", dispatch_json: { action: "route_to_task" } }), c)).toMatchObject({ status: "done", result: { action: "route_to_task", ids: ["T-03"] } });
   expect(badgeParts(m("dispatched", { task_uuid: "u1", dispatch_json: { action: "split", task_ids: ["T-03", "T-04"] } }), c)).toMatchObject({ kind: "dispatcher", parts: ["split", "2", "T-03 T-04"] });
-  expect(dlogEntry(m("dispatched", { task_uuid: "u1", dispatch_json: { action: "split", task_ids: ["T-03", "T-04"] } }), c)).toMatchObject({ result: { action: "split", ids: ["T-03", "T-04"] } });
-  expect(dlogEntry(m("failed", { dispatch_error: "timeout" }), c).result).toMatchObject({ action: "failed", note: "timeout" });
   expect(closeConfirmUuid("Close T-03 auth? [close confirm: POST /api/tasks/3f2a-uuid/close]")).toBe("3f2a-uuid"); expect(closeConfirmUuid("hello")).toBeNull();
 });
 test("eventLine summarises hook events and stringifies payloads for the demo's <details><pre>", () => {

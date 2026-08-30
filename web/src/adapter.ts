@@ -1,7 +1,8 @@
-// web/src/adapter.ts — the only place that knows both worlds: server Task/Message/SystemState (store) and the demo engine's S/N/DLOG/chat globals (app.js).
+// web/src/adapter.ts — the only place that knows both worlds: server Task/Message/SystemState (store) and the demo engine's S/N/LEDGER/chat globals (app.js).
 import type { EventEnvelope, ForeignSession, Message, Project, Task } from "@shared/types.ts";
 import * as api from "./api.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
+import { requestRows } from "./ledger.ts";
 import { diffNotifs, type NotifKind } from "./notify.ts";
 import { store } from "./store.ts";
 export interface DemoTaskCore { id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
@@ -10,7 +11,7 @@ export interface DemoEvent { id: number; at: Date; txt: string; payload: string 
 export type DemoTask = DemoTaskCore & { events: DemoEvent[]; timers: unknown[]; x: number; y: number };
 const TERMINAL = new Set(["done", "needs_review", "error", "cancelled"]);
 type Ctx = { projects: Project[]; tasks: Record<string, Task> };
-const D: any = globalThis;                                                     // app.js globals (classic script): S, N, DLOG, gwEl, msgs, el, ttagBtn, chat*, notify, withdrawNotif, relayout, refresh, renderBanner, renderSettings, renderDlog, select, centerOn
+const D: any = globalThis;                                                     // app.js globals (classic script): S, N, LEDGER, gwEl, msgs, el, ttagBtn, chat*, notify, withdrawNotif, relayout, refresh, renderBanner, renderSettings, renderLedger, select, centerOn
 const PROC: Record<string, string> = { none: "not started", starting: "starting", alive: "running", stopped: "stopped", crashed: "crashed" };
 // ---- pure ------------------------------------------------------------------------------------------
 export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
@@ -44,11 +45,6 @@ export function badgeParts(m: Message, ctx: Ctx): { kind: string; parts: string[
     case "direct": return { kind: "↪ Reply", parts: [], task, judging: false };
     default: return { kind: "dispatcher", parts: d ? (d.action === "split" ? ["split", String(d.task_ids?.length ?? 0), (d.task_ids ?? []).join(" ")] : [d.action, ...(d.size ? [d.size] : []), ...(d.project ? [d.project] : [])]) : [], task, judging: false };
   }
-}
-export function dlogEntry(m: Message, ctx: Ctx) {
-  const st = m.task_uuid ? ctx.tasks[m.task_uuid] : null; const d = m.dispatch_json; const judging = m.dispatch_state === "pending" || m.dispatch_state === "deciding";
-  const result = judging ? null : m.dispatch_state === "failed" ? { action: "failed", note: m.dispatch_error ?? "failed" } : m.dispatch_state === "fastpath" ? { action: "fast-path", note: "instant answer (0 LLM calls)" } : m.dispatch_state === "needs_confirm" ? { action: d?.action ?? "needs_confirm", note: "needs confirm" } : { action: d?.action ?? (m.dispatch_state === "direct" ? "reply" : "—"), ids: d?.task_ids ?? (st ? [st.display_id] : []) };
-  return { id: m.id, messageId: m.id, text: m.text, status: judging ? "judging" as const : "done" as const, result };
 }
 export function eventLine(e: EventEnvelope): DemoEvent {
   const p: any = e.payload ?? {}; const txt = e.type.startsWith("hook.") ? `${e.type.slice(5)}${p.tool_name ? " · " + p.tool_name : ""}${p.notification_type ? " · " + p.notification_type : ""}` : e.type === "send.outcome" ? `delivery ${p.outcome} (${p.via})` : e.type === "message.sent" ? `${p.direction === "in" ? "← " : "→ "}${p.to ?? p.from ?? ""}` : e.type;
@@ -145,8 +141,9 @@ export function installAdapter() {
       else D.chatMsg(task ?? null, m.text);                                    // worker_summary | error | dispatcher_answer
     }
     D.scrollChat?.();
-    const users = store.state.messages.filter((m) => m.role === "user").slice(-20).reverse(); D.DLOG.length = 0; for (const m of users) D.DLOG.push(dlogEntry(m, ctx())); D.renderDlog();
   };
+  /** The ledger is derived, never accumulated: a task changing status changes the disposition of every request that landed in it. */
+  const syncLedger = () => { D.LEDGER.length = 0; D.LEDGER.push(...requestRows(store.state.messages, store.state.tasks)); };
   const syncEvents = (uuids: Iterable<string>) => { for (const uuid of uuids) { const t = demoOf(uuid); if (!t) continue; const list = store.state.events[uuid] ?? []; const have = new Set(t.events.map((e) => e.id)); for (const e of list) if (!have.has(e.seq) && isTimelineEvent(e.type)) t.events.push(eventLine(e)); if (t.events.length > 200) t.events.splice(0, t.events.length - 200); if (S.sel === t.id) D.refresh(); } };
   const flushNotifs = () => {                                                  // decisions were made at frame time; the DOM work happens here, once per render
     const { ops, chips } = notifs.drain();
@@ -161,6 +158,7 @@ export function installAdapter() {
     if (all || d.messages.size) syncMessages(all ? store.state.messages.map((m) => m.id) : d.messages);
     if (d.events.size) syncEvents(d.events);
     const foreignChanged = all || d.foreign; if (foreignChanged) syncForeign();
+    if (all || d.messages.size || d.tasks.size) { syncLedger(); if (!all && !tasksChanged && !foreignChanged) D.renderLedger(); }   // otherwise relayout() → refresh() draws it
     if (tasksChanged || foreignChanged || all) D.relayout();                   // one layout+render per animation frame, whatever arrived
   };
   store.subscribe((f) => {
