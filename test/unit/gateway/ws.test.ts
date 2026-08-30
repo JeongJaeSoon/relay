@@ -21,3 +21,17 @@ describe("WsHub", () => {
     hub.handleClose(ws);
   });
 });
+
+test("hello promises the frame cursor, not the event cursor", () => {
+  // A client's cursor only advances on frames it applies, so an event that produces none (system.recovered, emitted on
+  // every start) must not raise as_of_seq — otherwise the reconnect banner never clears.
+  const db = openDb(":memory:"); migrate(db); const cfg = parseConfig("");
+  const hub = new WsHub(() => log, cfg, db); const log = new EventLog(db, (f) => hub.broadcast(f), cfg);
+  log.emit({ type: "project.registered", payload: { id: "p1", name: "q", path: "/q", description: "", keywords: [], base_ref: "fresh", is_git: true, created_at: 1 } });
+  log.emit({ type: "system.recovered", payload: { reconciled: 0 } });
+  expect(log.lastSeq()).toBe(2);
+  expect(log.lastFrameSeq()).toBe(1);
+  const ws = fakeWs(); hub.handleOpen(ws, 0);
+  expect(ws.sent[0].as_of_seq).toBe(1);
+  expect(ws.sent.slice(1).map((f: any) => f.seq)).toEqual([1]);            // the replay reaches the promise exactly
+});

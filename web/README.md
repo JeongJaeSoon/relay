@@ -72,8 +72,9 @@ rAF로 합쳐 한 프레임에 `relayout()` 1회만 부르므로, 훅이 몰려�
   `task.patched` 119건 대 hook 110건이었고, `command.*`/`permit.*`/`process.*`까지 섞여 있었다. 라이브
   스트림과 같은 기준(`hook.*`/`send.outcome`/`message.sent`)으로 양쪽을 거른다(`isTimelineEvent`).
 - **재접속 후 `이벤트 재생 중` 고착** — 모든 seq가 프레임을 내지는 않는다. 기동 때마다 나오는
-  `system.recovered`는 프레임이 0개라 커서가 `as_of_seq`에 영원히 못 닿고 배너가 남았다. 재생 버스트가
-  멎으면(1초 무프레임) 따라잡은 것으로 본다(`ws.ts`).
+  `system.recovered`는 프레임이 0개라 커서가 `as_of_seq`에 영원히 못 닿고 배너가 남았다. 서버가 약속하는
+  `as_of_seq`를 **이벤트 커서가 아니라 프레임 커서**(`max(ws_frames.seq)`)로 바꿔 도달 가능하게 만들었다 —
+  `hello`와 스냅숏 양쪽. 클라이언트는 타이머 없이 정확히 그 지점에서 배너를 지운다.
 
 ## 남은 관찰
 

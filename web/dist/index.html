@@ -2113,9 +2113,7 @@ function installAdapter() {
 }
 
 // web/src/ws.ts
-var RESYNC_IDLE_MS = 1000;
 function connect(opts = {}) {
-  const idleMs = opts.resyncIdleMs ?? RESYNC_IDLE_MS;
   const WS = opts.WebSocketImpl ?? WebSocket;
   const f = opts.fetchImpl ?? fetch;
   const token = readToken();
@@ -2128,18 +2126,6 @@ function connect(opts = {}) {
     let buffering = first;
     const buf = [];
     let asOf = -1;
-    let idle;
-    const caughtUp = () => {
-      if (asOf < 0)
-        return;
-      asOf = -1;
-      clearTimeout(idle);
-      store.setConn("ok");
-    };
-    const armIdle = () => {
-      clearTimeout(idle);
-      idle = setTimeout(caughtUp, idleMs);
-    };
     ws.onopen = () => {
       backoff = 1000;
     };
@@ -2165,7 +2151,6 @@ function connect(opts = {}) {
         } else {
           asOf = fr.as_of_seq;
           store.setConn("resync");
-          armIdle();
         }
         return;
       }
@@ -2173,16 +2158,13 @@ function connect(opts = {}) {
         buf.push(fr);
       else {
         store.applyFrame(fr);
-        if (asOf >= 0) {
-          if (store.state.seq >= asOf)
-            caughtUp();
-          else
-            armIdle();
+        if (asOf >= 0 && store.state.seq >= asOf) {
+          asOf = -1;
+          store.setConn("ok");
         }
       }
     };
     ws.onclose = () => {
-      clearTimeout(idle);
       asOf = -1;
       store.setConn("reconnecting");
       setTimeout(open, backoff);
