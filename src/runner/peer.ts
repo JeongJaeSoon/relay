@@ -1,5 +1,5 @@
 // src/runner/peer.ts — inbox-socket client/server built from the Phase 0 ② fixture (peer-frames.json).
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SendOutcome } from "@shared/types.ts";
@@ -47,6 +47,37 @@ export function sendFrame(socketPath: string, frame: OutboundFrame, timeoutMs = 
     } }).catch(() => { clearTimeout(timer); finish(); });
   });
 }
+/** Reply frames carry NO session id and NO in-reply-to (measured): only `from: "uds:/tmp/cc-socks/<pid>.sock"`. The
+ *  sender is resolved through the session registry — `from-name` is not an identity (two live sessions shared a name in
+ *  Phase 0 ⑦). Returns the sender's session id, or null when nothing owns that socket. */
+export function sessionIdForSocket(from: string | null | undefined, dir = join(homedir(), ".claude", "sessions")): string | null {
+  const path = String(from ?? "").replace(/^uds:/, ""); if (!path) return null;
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".json")) continue;
+      try { const j = JSON.parse(readFileSync(join(dir, f), "utf8")); if (j?.messagingSocketPath === path && typeof j.sessionId === "string") return j.sessionId; } catch {}
+    }
+  } catch {}
+  return null;
+}
+/** The inverse lookup, for sending: `agents --json` carries no pid for background rows (Phase 0 ④), so a worker's inbox
+ *  socket is found by matching its session id in the registry, never by guessing `<pid>.sock`. */
+export function socketPathForSession(sessionId: string | null | undefined, dir = join(homedir(), ".claude", "sessions")): string | null {
+  if (!sessionId) return null;
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".json")) continue;
+      try { const j = JSON.parse(readFileSync(join(dir, f), "utf8")); if (j?.sessionId === sessionId && typeof j.messagingSocketPath === "string") return j.messagingSocketPath; } catch {}
+    }
+  } catch {}
+  return null;
+}
+/** The text a peer frame carries, whichever shape it arrived in. */
+export const frameText = (f: any): string => String(f?.message?.content ?? f?.message ?? f?.text ?? "");
+/** Our `[relay #<id8>]` markers inside a frame — the only per-send correlation that exists (the reply's `msg_id` is
+ *  fresh and there is no in-reply-to field; `hop-chain` is stable across a whole chain, so it is loop detection only). */
+export const markersIn = (text: string): string[] => [...new Set((text.match(/\[relay #([0-9a-f]{8})\]/g) ?? []).map((m) => m.slice(8, 16)))];
+
 /** relay registers itself as a peer so workers can reply / notify_when_idle. Mirrors the registry shape captured in the fixture. */
 export class PeerServer {
   private server: ReturnType<typeof Bun.listen> | null = null; socketPath = ""; registryPath = "";

@@ -1,6 +1,6 @@
 // src/lifecycle/outbox.ts — commands table + per-task serial executor (roadmap B3).
 import type { Database } from "bun:sqlite";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Command, CommandKind, DeliveryMethod, SendOutcome, Task } from "@shared/types.ts";
@@ -66,10 +66,32 @@ export class Outbox {
     }
     return out;
   }
+  /** Promotion, source 1 and 2: the marker echoed in a UserPromptSubmit hook (idle delivery) or in a reply frame the
+   *  worker sent back over the inbox socket (mid-turn delivery). */
   markAccepted(taskUuid: string, marker: string) {
     for (const r of this.db.query("select * from commands where task_uuid=? and state in ('unknown','running','pending') and kind in ('send','resume') order by rowid").all(taskUuid) as any[]) {
       const c = rowToCommand(r); if ((c.payload as any).marker === marker) { this.log.emit({ type: "command.applied", task_uuid: taskUuid, causation_id: c.id, payload: { id: c.id } }); this.log.emit({ type: "send.outcome", task_uuid: taskUuid, causation_id: c.id, payload: { command_id: c.id, outcome: "accepted", via: "marker", message_id: (c.payload as any).message_id ?? null } }); }
     }
+  }
+  /** Promotion, source 3 (the one that needs no cooperation from the worker): scan the tail of the session transcript
+   *  for our `[relay #<id8>]` markers. A frame merged into a turn that was ALREADY running fires no hook at all
+   *  (re-measured 2026-08-31), so without this a delivered mid-turn send would sit at `unknown` forever — and an
+   *  `unknown` head blocks that task's queue until a human clears it. Called at every turn boundary (Stop).
+   *  ponytail: this is the fallback. The primary signal is the worker echoing the marker when it acknowledges a relay
+   *  message, which belongs in the worker system prompt (`agents/relay-worker.md`, currently on plan/01-phase0). */
+  promoteFromTranscript(taskUuid: string, transcriptPath: string, tailBytes = 256 * 1024): number {
+    const pending = this.db.query("select * from commands where task_uuid=? and state in ('unknown','running','pending') and kind in ('send','resume')").all(taskUuid) as any[];
+    const markers = new Set(pending.map((r) => (rowToCommand(r).payload as any).marker).filter(Boolean));
+    if (!markers.size || !transcriptPath || !existsSync(transcriptPath)) return 0;
+    let text = "";
+    try { const size = statSync(transcriptPath).size; const from = Math.max(0, size - tailBytes); const fd = openSync(transcriptPath, "r"); const buf = Buffer.alloc(size - from); readSync(fd, buf, 0, buf.length, from); closeSync(fd); text = buf.toString("utf8"); }
+    catch (e) { slog.warn("transcript scan failed", { taskUuid, e: String(e) }); return 0; }
+    let n = 0;
+    for (const m of new Set(text.match(/\[relay #([0-9a-f]{8})\]/g) ?? [])) {
+      const marker = m.slice(8, 16); if (!markers.has(marker)) continue;
+      this.markAccepted(taskUuid, marker); n++;
+    }
+    return n;
   }
   /** Drains the task's queue head-first (a pending stop/rm is always the head). Stops on: empty queue (re-run if enqueue raced us), a blocked/held head (an external trigger — Stop hook, attach release, retry — re-runs), or an unknown/failed head. Awaiting run() awaits the in-flight pass too (recovery relies on that). */
   run(taskUuid: string): Promise<void> {
@@ -103,10 +125,10 @@ export class Outbox {
     if (k === "spawn" && t.status !== "starting") return false;
     if (k === "resume" && !(t.status === "starting" || t.paused)) return false;
     if (k === "send" && !["starting", "running", "waiting_input"].includes(t.status)) return false;
-    // Turn-boundary delivery (B1). Phase 0 corrects roadmap C12: a busy session does NOT read its inbox between tool
-    // calls — the frame is silently dropped (`deliveryBusyOverSocket`) — so BOTH delivery paths wait for the turn to end.
-    // TaskService.onStop re-runs the queue at that boundary.
-    if ((k === "send" || k === "resume") && t.process_state === "alive" && t.turn_state === "busy" && !t.paused) return false;
+    // Turn-boundary delivery (B1/C12) applies to the RESUME path only: it stops and restarts the session, so it must not
+    // cut a running turn. The socket reaches a busy worker mid-turn (re-measured 2026-08-31: a frame sent into a busy
+    // window was acted on 12.9s in, before the first Stop), so socket sends do not wait. onStop re-runs the queue.
+    if ((k === "send" || k === "resume") && this.deps.delivery() !== "socket" && t.process_state === "alive" && t.turn_state === "busy" && !t.paused) return false;
     return true;
   }
   private applied(cmd: Command, t: Task, extra: Record<string, unknown> = {}) { this.log.emit({ type: "command.applied", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, ...extra } }); }
@@ -153,15 +175,15 @@ export class Outbox {
         // `agents --json` has no pid for background rows, so liveness alone gates the socket path; socketPathFor resolves
         // the inbox socket from the session registry (roadmap C3), not from this row's pid.
         if (p.kind === "send" && this.deps.delivery() === "socket" && live?.alive && this.runner.sendSocket) {
-          // A busy inbox drops the frame without a trace (phase 0 `deliveryRule`), so a send to a busy worker is `held`,
-          // never "delivered": it stays pending and the Stop hook re-runs this queue at the turn boundary.
-          if (live.busy === true) { outcome("held", "socket"); throw new HeldError("worker is busy — the inbox would drop this frame"); }
-          const o: SendOutcome = await this.runner.sendSocket(this.deps.socketPathFor(live), text, cmd.id);
+          const claimed: SendOutcome = await this.runner.sendSocket(this.deps.socketPathFor(live), text, cmd.id);
+          // The CLI acks nothing on this socket and the transport is lossy, so a socket send is NEVER optimistically
+          // `accepted`: only the `[relay #<id8>]` marker proves delivery — echoed in UserPromptSubmit (idle), in an
+          // inbound reply frame (mid-turn), or found in the transcript (promoteFromTranscript). Until then, `unknown`.
+          const o: SendOutcome = claimed === "accepted" ? "unknown" : claimed;
           outcome(o, "socket");
-          if (o === "accepted") { this.applied(cmd, t); return; }
           if (o === "refused") { this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "refused by inbox" } }); return; }
-          if (o === "unknown") { this.log.emit({ type: "command.unknown", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "no status frame" } }); return; }
-          throw new HeldError("inbox held the message");                       // stays pending; retried on the next run() trigger (Stop hook, retry, timer)
+          if (o === "held") throw new HeldError("inbox held the message");     // stays pending; retried on the next run() trigger (Stop hook, retry, timer)
+          this.log.emit({ type: "command.unknown", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "no delivery evidence yet — waiting for the marker echo" } }); return;
         }
         if (!t.session_id) throw new Error("no session_id to resume");
         if (live?.alive && live.short_id) { await this.runner.stop(live.short_id); if (!(await this.waitGone(live.short_id))) throw new Error("stop not confirmed"); }

@@ -79,31 +79,29 @@ describe("Outbox", () => {
     s.mk("u2", "queued", { queued_at: 1 }); s.ob.enqueue("u2", "m4", { kind: "send", text: "y", marker: "00000003" }); await s.ob.run("u2"); expect(s.runner.calls.length).toBe(0);
     s.mk("u3", "running"); s.setPaused(true); s.ob.enqueue("u3", "m5", { kind: "send", text: "z", marker: "00000004" }); await s.ob.run("u3"); expect(s.runner.calls.length).toBe(0);
   });
-  test("socket delivery: accepted applies; held stays pending and blocks the queue until the next run; refused fails; unknown blocks until confirmed", async () => {
-    // idle worker: phase 0 measured that only an idle inbox accepts a frame (see the busy test below)
-    const s = setup("socket"); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive", turn_state: "idle" }); s.live("u1", "fake1", false);
-    let outcome: any = "accepted"; (s.runner as any).sendSocket = async () => outcome;
-    s.ob.enqueue("u1", "a", { kind: "send", text: "a", marker: "0000000a" }); await s.ob.run("u1"); expect(s.states()).toEqual(["applied"]);
-    outcome = "held"; s.ob.enqueue("u1", "b", { kind: "send", text: "b", marker: "0000000b" }); s.ob.enqueue("u1", "c", { kind: "send", text: "c", marker: "0000000c" }); await s.ob.run("u1");
-    expect(s.states()).toEqual(["applied", "pending", "pending"]);                                   // held: b stays at the head, c waits behind it (I8)
-    outcome = "accepted"; await s.ob.run("u1"); expect(s.states()).toEqual(["applied", "applied", "applied"]);
-    outcome = "refused"; s.ob.enqueue("u1", "d", { kind: "send", text: "d", marker: "0000000d" }); await s.ob.run("u1"); expect(s.states().at(-1)).toBe("failed");
-    outcome = "unknown"; s.ob.enqueue("u1", "e", { kind: "send", text: "e", marker: "0000000e" }); s.ob.enqueue("u1", "f", { kind: "send", text: "f", marker: "0000000f" }); await s.ob.run("u1");
-    expect(s.states().slice(-2)).toEqual(["unknown", "pending"]);                                     // unknown head blocks f
-    outcome = "accepted"; s.ob.markAccepted("u1", "0000000e"); await s.ob.run("u1"); expect(s.states().slice(-2)).toEqual(["applied", "applied"]);
-    expect(s.db.query("select count(*) c from events where type='send.outcome'").get()).toEqual({ c: 8 });
-  });
-  test("socket delivery to a BUSY worker is held, never reported as delivered (phase 0: a busy inbox drops the frame)", async () => {
+  test("socket delivery reaches a busy worker but is never optimistically accepted; the marker echo promotes it, refused fails, held stays pending", async () => {
+    // A busy session DOES receive an inbox frame mid-turn (re-measured 2026-08-31), so the socket path does not wait
+    // for the turn boundary. There is no ack frame, so nothing here may report `accepted` on its own.
     const s = setup("socket"); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive", turn_state: "busy" }); s.live("u1", "fake1", true);
-    let sent = 0; (s.runner as any).sendSocket = async () => { sent++; return "accepted"; };
+    let outcome: any = "accepted"; let sent = 0; (s.runner as any).sendSocket = async () => { sent++; return outcome; };
     s.ob.enqueue("u1", "a", { kind: "send", text: "a", marker: "0000000a" }); await s.ob.run("u1");
-    expect(sent).toBe(0); expect(s.states()).toEqual(["pending"]);                                   // the turn boundary gate holds it before the socket is touched
-    s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { turn_state: "idle" } } });   // Stop hook
-    s.runner.rows.get("fake1")!.busy = true;                                                         // roster still says busy: hold again rather than drop the frame
-    await s.ob.run("u1"); expect(sent).toBe(0); expect(s.states()).toEqual(["pending"]);
-    expect(s.db.query("select json_extract(payload_json,'$.outcome') o from events where type='send.outcome'").all()).toEqual([{ o: "held" }]);
-    s.runner.rows.get("fake1")!.busy = false; await s.ob.run("u1");
-    expect(sent).toBe(1); expect(s.states()).toEqual(["applied"]);
+    expect(sent).toBe(1); expect(s.states()).toEqual(["unknown"]);                                    // delivered mid-turn, but unproven → unknown, not applied
+    expect(s.db.query("select json_extract(payload_json,'$.outcome') o from events where type='send.outcome'").all()).toEqual([{ o: "unknown" }]);
+    s.ob.markAccepted("u1", "0000000a"); expect(s.states()).toEqual(["applied"]);                     // the `[relay #…]` echo is the only proof
+    outcome = "held"; s.ob.enqueue("u1", "b", { kind: "send", text: "b", marker: "0000000b" }); s.ob.enqueue("u1", "c", { kind: "send", text: "c", marker: "0000000c" }); await s.ob.run("u1");
+    expect(s.states()).toEqual(["applied", "pending", "pending"]);                                    // held: b stays at the head, c waits behind it (I8)
+    outcome = "refused"; await s.ob.run("u1"); expect(s.states()).toEqual(["applied", "failed", "failed"]);   // a refusal is final: the queue drains past it
+    outcome = "unknown"; s.ob.enqueue("u1", "d", { kind: "send", text: "d", marker: "0000000d" }); s.ob.enqueue("u1", "e", { kind: "send", text: "e", marker: "0000000e" }); await s.ob.run("u1");
+    expect(s.states().slice(-2)).toEqual(["unknown", "pending"]);                                     // an unknown head blocks its queue until promoted or confirmed
+  });
+  test("promoteFromTranscript clears a mid-turn send that fired no hook at all", async () => {
+    const s = setup("socket"); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive", turn_state: "busy" }); s.live("u1", "fake1", true);
+    (s.runner as any).sendSocket = async () => "accepted";
+    s.ob.enqueue("u1", "a", { kind: "send", text: "a", marker: "0000abcd" }); await s.ob.run("u1"); expect(s.states()).toEqual(["unknown"]);
+    const f = join(mkdtempSync(join(tmpdir(), "relay-tx-")), "t.jsonl");
+    writeFileSync(f, JSON.stringify({ type: "user", message: { content: "<cross-session-message from=\"uds:/tmp/x.sock\">\n[relay #0000abcd] a\n</cross-session-message>" } }) + "\n");
+    expect(s.ob.promoteFromTranscript("u1", f)).toBe(1); expect(s.states()).toEqual(["applied"]);
+    expect(s.ob.promoteFromTranscript("u1", f)).toBe(0);                                              // nothing left to promote
   });
   test("commands run in insertion order: stop then rm; stop waits for the process to disappear", async () => {
     const s = setup(); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive" }); s.live("u1");

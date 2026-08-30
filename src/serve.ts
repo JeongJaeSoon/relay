@@ -15,7 +15,7 @@ import { NativeSessionRunner } from "./runner/native.ts";
 import type { AgentRunner } from "./runner/runner.ts";
 import { buildSettingsJson, relayBin, workerEnv } from "./runner/settings.ts";
 import { loadCapabilities } from "./runner/capabilities.ts";
-import { loadPeerFixture, PeerServer } from "./runner/peer.ts";
+import { frameText, loadPeerFixture, markersIn, PeerServer, sessionIdForSocket, socketPathForSession } from "./runner/peer.ts";
 import { PermissionPolicy } from "./guard/permission.ts";
 import { Spool } from "./hooks/spool.ts";
 import { recover } from "./lifecycle/recovery.ts";
@@ -50,20 +50,38 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   const maxAgents = () => Number(getMeta(db, "max_concurrent_agents") ?? cfg.max_concurrent_agents);
   const baseEnv = () => workerEnv({ taskUuid: "", port: cfg.port, hookToken: "", oauthToken: oauth, maxAgents: maxAgents() });
   let peer: PeerServer | null = null; const fixture = loadPeerFixture();
-  if (caps.delivery === "socket" && fixture && !opts.runner) { peer = new PeerServer("relay", crypto.randomUUID(), (frame) => log.info("peer message", { frame })); await peer.start(); }
+  // relay must LISTEN on the socket it advertises as `from`, or the workers' replies land in whatever other peer is
+  // registered (exactly the bug that produced the first, wrong delivery matrix in Phase 0 ②).
+  let onPeerFrame: (frame: any) => void = (frame) => log.warn("peer frame arrived before the services were wired", { frame });
+  if (caps.delivery === "socket" && fixture && !opts.runner) { peer = new PeerServer("relay", crypto.randomUUID(), (frame) => onPeerFrame(frame)); await peer.start(); }
   const runner = opts.runner ?? new NativeSessionRunner(baseEnv, { claudeBin: cfg.claude_bin, peer: peer && fixture ? { fixture, socketPath: peer.socketPath, sessionId: "relay" } : undefined });
   const permits = new PermitPool(db, evlog, maxAgents, { subagentPerTask: cfg.pool.subagent_parallel_per_task });
   let svc!: TaskService; const pendingPermissions = new Map<string, PendingPermission>();
   const bin = relayBin();
   const outbox = new Outbox(db, evlog, runner, { delivery: () => caps.delivery, isPaused: () => svc.paused(), settingsJson: (t, gen) => buildSettingsJson({ port: cfg.port, allowPush: cfg.worker.allow_push, maxAgents: maxAgents(), bin, taskUuid: t.uuid, hookToken: hookTokenFor(tokens.hook, t.uuid), gen, home: paths.home }),   // literal per-task values: a --bg worker inherits no environment
     env: (t, gen) => workerEnv({ taskUuid: t.uuid, port: cfg.port, hookToken: hookTokenFor(tokens.hook, t.uuid), oauthToken: oauth, maxAgents: maxAgents(), gen }),   // per-task token + generation nonce
-    socketPathFor: (r) => join(existsSync("/tmp/cc-socks") ? "/tmp/cc-socks" : `/tmp/cc-socks-${process.getuid?.() ?? 501}`, `${r.pid}.sock`), instanceId });
+    // background roster rows carry no pid, so the inbox socket comes from the session registry (roadmap C3)
+    socketPathFor: (r) => socketPathForSession(r.session_id) ?? join(existsSync("/tmp/cc-socks") ? "/tmp/cc-socks" : `/tmp/cc-socks-${process.getuid?.() ?? 501}`, `${r.pid}.sock`), instanceId });
   const scheduler = new Scheduler(db, evlog, permits, (t) => svc.startSlot(t), () => svc.paused());
   svc = new TaskService({ db, log: evlog, cfg, permits, scheduler, outbox, projectNameOf: (id) => (db.query("select name from projects where id=?").get(id) as any)?.name ?? id, pendingPermissions });
   svc.ingestDeps.policy = new PermissionPolicy(cfg.worker.allow_push);
   const dispatcher = new Dispatcher(db, evlog, cfg, { runClaude: opts.runClaude, onDecision: (m, d, p) => svc.applyDecision(m, d, p), onNeedsConfirm: (m, d, r) => svc.needsConfirm(m, d, r), isPaused: () => svc.paused() });
   const usage = new UsageGuard(db, evlog, cfg, svc, permits); const idle = new IdleReaper(db, evlog, cfg, outbox, svc); const watchdog = new Watchdog(db, evlog, runner, svc, permits);
-  const prevStop = svc.ingestDeps.onStop; svc.ingestDeps.onStop = (t, b) => { usage.sampleTranscript(t, String(b.transcript_path ?? "")); prevStop(t, b); };   // installed before recover(): replayed Stops are sampled too
+  // Installed before recover(), so replayed Stops are sampled and promoted too. Promotion runs BEFORE the task service
+  // re-runs the outbox queue, so a delivered mid-turn send is no longer an `unknown` head blocking that queue.
+  const prevStop = svc.ingestDeps.onStop;
+  svc.ingestDeps.onStop = (t, b) => { const path = String(b.transcript_path ?? ""); usage.sampleTranscript(t, path); outbox.promoteFromTranscript(t.uuid, path); prevStop(t, b); };
+  /** A worker reply on relay's own inbox socket. It carries no session id and no in-reply-to: the sender is resolved
+   *  through the session registry, and anything that does not resolve to one of our tasks is dropped, never fed to a
+   *  task or the dispatcher. `[relay #<id8>]` in the body is the mid-turn delivery proof for that task's sends. */
+  onPeerFrame = (frame) => {
+    const text = frameText(frame); const sid = sessionIdForSocket(frame?.from);
+    const row = sid ? ((db.query("select uuid from tasks where session_id=?").get(sid) ?? db.query("select task_uuid as uuid from process_instances where session_id=? order by generation desc limit 1").get(sid)) as any) : null;
+    if (!row) { log.warn("orphan peer frame — no task owns that sender socket", { from: frame?.from, hop_chain: text.match(/hop-chain="([^"]+)"/)?.[1] ?? null }); return; }
+    const markers = markersIn(text);
+    evlog.emit({ type: "message.sent", task_uuid: row.uuid, payload: { direction: "in", from_session: sid, text: text.slice(0, 500), markers, outcome: "accepted" } });
+    for (const m of markers) outbox.markAccepted(row.uuid, m);   // ponytail: needs the worker to echo the marker — `agents/relay-worker.md` (plan 01) must say so; the transcript scan is the fallback until it does
+  };
   svc.onToolUse = (t, promptId) => { if (usage.countToolCall(t.uuid, promptId)) { log.warn("tool-call cap hit — interrupting", { task: t.uuid }); svc.interrupt(t.uuid); } };
   svc.onNudge = () => { watchdog.tick().catch((e) => log.warn("watchdog", { e: String(e) })); };
   const ctx: AppContext = { db, cfg, log: evlog, hub, tokens, services: { ingestDeps: svc.ingestDeps, tasks: svc, outbox, scheduler, dispatcher, permits, pendingPermissions }, dashboardHtml: () => Bun.file(dashboardHtml as unknown as string).text() };
