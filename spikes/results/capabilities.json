@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T14:43:20.077Z",
+  "updated_at": "2026-08-30T14:44:24.023Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -139,7 +139,8 @@
     "state": [
       "blocked",
       "done",
-      "working"
+      "working",
+      "stopped"
     ],
     "status": [
       "busy",
@@ -404,5 +405,44 @@
     "status": "waiting",
     "waitingFor": "permission prompt"
   },
-  "guard": "BLOCKED: not measured — Task 6 Step 3 needs a worker told to `git push` and to write outside its worktree; the auto-mode classifier refuses to issue that instruction from this session"
+  "guard": "BLOCKED: not measured — Task 6 Step 3 needs a worker told to `git push` and to write outside its worktree; the auto-mode classifier refuses to issue that instruction from this session",
+  "identity": {
+    "sameNameTwice": [
+      "relay-spike:same",
+      "relay-spike:same"
+    ],
+    "ownerFileSurvives": "cwd-removed",
+    "cwdDeletedAgentsJson": {
+      "id": "0e234a19",
+      "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox",
+      "kind": "background",
+      "startedAt": 1788101028374,
+      "sessionId": "0e234a19-67b3-4f2d-8543-fd0c81c1077a",
+      "name": "relay-spike:same",
+      "state": "stopped"
+    },
+    "rmDirtyKeepsWorktree": true,
+    "jobStateJson": [
+      "state",
+      "detail",
+      "tempo",
+      "output",
+      "children",
+      "linkScanOffset",
+      "template",
+      "respawnFlags",
+      "providerEnv",
+      "intent",
+      "name",
+      "nameSource",
+      "sessionId",
+      "resumeSessionId",
+      "daemonShort",
+      "cwd",
+      "createdAt",
+      "updatedAt",
+      "firstTerminalAt",
+      "backend"
+    ]
+  }
 }
