@@ -998,14 +998,20 @@ $("#kedClose").addEventListener("click",closeKeysEd);
 kedEl.addEventListener("click",e=>{if(e.target===kedEl)closeKeysEd()});
 
 /* ================= input ================= */
-const input=$("#input");
-$("#chatForm").addEventListener("submit",e=>{
+const input=$("#input"),chatForm=$("#chatForm"),DRAFT="relay-draft";
+function autogrow(){input.style.height="auto";input.style.height=input.scrollHeight+"px"} /* CSS max-height caps it, then it scrolls */
+chatForm.addEventListener("submit",e=>{
   e.preventDefault(); /* IME 조합 중 Enter 가드는 아래 keydown이 담당 */
-  send(input.value);input.value="";
+  send(input.value);input.value="";localStorage.removeItem(DRAFT);autogrow();
 });
+input.addEventListener("input",()=>{autogrow();localStorage.setItem(DRAFT,input.value)});
 input.addEventListener("keydown",e=>{
-  if(e.key==="Enter"&&(e.isComposing||e.keyCode===229)){e.preventDefault()}
+  if(e.key!=="Enter")return;
+  if(e.isComposing||e.keyCode===229)return; /* an Enter mid-composition commits the candidate: never send it, never swallow it either */
+  if(e.shiftKey)return;                     /* Shift+Enter inserts a newline; a textarea has no implicit submit, so sending is explicit below */
+  e.preventDefault();chatForm.requestSubmit();
 });
+input.value=localStorage.getItem(DRAFT)||"";autogrow(); /* a long message survives a reload */
 
 /* ================= module bridge ================= */
 /* 클래식 스크립트의 최상위 const는 window 속성이 아니다 — web/src/adapter.ts가 읽는 것만 노출한다
