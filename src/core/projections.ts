@@ -47,7 +47,7 @@ export function systemState(db: Database, cfg: Config, extra: Partial<SystemStat
     running: cnt("select count(*) c from tasks where status in ('starting','running') and parent_uuid is null"),
     queued: cnt("select count(*) c from tasks where status='queued'"), leases: cnt("select count(*) c from permit_leases where released_at is null"),
     today_tokens: today, daily_ceiling: cfg.usage.daily_ceiling_tokens, delivery_method: (meta("delivery_method") as any) ?? "resume", version: meta("version") ?? "dev",
-    log_dir: ops.log_dir ?? meta("log_dir") ?? "", oauth_fallback: ops.oauth_fallback ?? meta("oauth_fallback") === "1", ...extra,
+    log_dir: ops.log_dir ?? meta("log_dir") ?? "", oauth_fallback: ops.oauth_fallback ?? meta("oauth_fallback") === "1", cli_drift: meta("cli_drift") ?? "", ...extra,
   };
 }
 

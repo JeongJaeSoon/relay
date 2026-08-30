@@ -783,6 +783,7 @@ function renderSettings(){
   $("#setReduce").checked=S.reduce;
   renderProjects();
   $("#setInfo").textContent="Gateway 127.0.0.1:"+(location.port||80)+" · relay v"+(S.version||"—")+" · delivery: "+(S.delivery||"—");
+  const dr=$("#setDrift");dr.textContent=S.cliDrift?"⚠ claude CLI changed since capabilities were probed ("+S.cliDrift+") — run relay doctor --probe":"";dr.hidden=!S.cliDrift;
 }
 function renderProjects(){ /* S.projects는 어댑터가 서버 projects.updated로 채운다 */
   const box=$("#projList");box.textContent="";

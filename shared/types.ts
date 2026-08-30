@@ -96,7 +96,8 @@ export interface SystemState {
   paused: boolean; recovering: boolean; max_concurrent_agents: number;
   running: number; queued: number; leases: number;
   today_tokens: number; daily_ceiling: number | null; delivery_method: DeliveryMethod;
-  version: string; log_dir: string; oauth_fallback: boolean;   // 운영 정보(설정 패널 하단): 로그 위치, 서비스 인증 폴백 여부
+  version: string; log_dir: string; oauth_fallback: boolean;   // operational info (bottom of the settings panel): log location, service-auth fallback
+  cli_drift: string;   // "" when the CLI matches what capabilities.json was probed against, else "<probed> → <current>"
 }
 
 // One event can produce several frames; they share `seq` and are numbered by `idx`. The client cursor is (seq, idx).

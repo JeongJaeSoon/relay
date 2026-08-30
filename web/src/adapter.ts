@@ -121,7 +121,7 @@ export function installAdapter() {
     for (const k of [...S.foreign.keys()]) if (!seen.has(k)) { S.foreign.delete(k); if (S.fsel === k) S.fsel = null; }
   };
   const syncSystem = () => {
-    const sys = store.state.sys; if (sys) { S.maxw = sys.max_concurrent_agents; S.paused = sys.paused; S.usage = sys.today_tokens; S.running = sys.running; S.recovering = sys.recovering; S.version = sys.version; S.delivery = sys.delivery_method; S.dailyCeiling = sys.daily_ceiling; }
+    const sys = store.state.sys; if (sys) { S.maxw = sys.max_concurrent_agents; S.paused = sys.paused; S.usage = sys.today_tokens; S.running = sys.running; S.recovering = sys.recovering; S.version = sys.version; S.delivery = sys.delivery_method; S.dailyCeiling = sys.daily_ceiling; S.cliDrift = sys.cli_drift; }
     S.projects = store.state.projects;
     S.conn = store.state.conn === "resync" ? "replaying" : store.state.conn; S.lastSeq = store.state.seq;
     D.renderBanner(); D.renderSettings();
