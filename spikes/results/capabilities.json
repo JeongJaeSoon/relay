@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T14:28:25.551Z",
+  "updated_at": "2026-08-30T14:29:51.908Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -256,5 +256,60 @@
   "deliveryRule": "socket ONLY when the target session registry status is idle; a busy session silently drops the frame (measured twice, once with the connection held open 45s). For busy/stopped targets use the resume path: confirm stop, then `claude --bg --resume <uuid> \"<msg>\"`.",
   "deliveryBusyOverSocket": "dropped — no ack, no UserPromptSubmit, no later delivery",
   "deliveryBurst": "10/10 arrived, each exactly once, to an idle session — no dedupe needed and no loss",
-  "socketOutcomeSignal": "the `[relay #<id>]` marker in the worker UserPromptSubmit hook is the ONLY delivery evidence (no status frame exists), so roadmap B3 send(socket) must treat every send as `unknown` until the marker arrives"
+  "socketOutcomeSignal": "the `[relay #<id>]` marker in the worker UserPromptSubmit hook is the ONLY delivery evidence (no status frame exists), so roadmap B3 send(socket) must treat every send as `unknown` until the marker arrives",
+  "verdict": {
+    "done": {
+      "marker": "done",
+      "background_tasks": [],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [
+        "Bash"
+      ],
+      "transcriptLagMs": 109
+    },
+    "question": {
+      "marker": "question",
+      "background_tasks": [],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [],
+      "transcriptLagMs": 179
+    },
+    "background": {
+      "marker": "done",
+      "background_tasks": [
+        {
+          "id": "bfi0liu4q",
+          "type": "shell",
+          "status": "running",
+          "description": "sleep 40",
+          "command": "sleep 40"
+        }
+      ],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [
+        "Bash"
+      ],
+      "transcriptLagMs": 172
+    },
+    "blocked": {
+      "marker": "blocked",
+      "background_tasks": [],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [],
+      "transcriptLagMs": 420
+    },
+    "askuser": {
+      "marker": "done",
+      "background_tasks": [],
+      "session_crons": [],
+      "stop_reason": null,
+      "tools": [],
+      "transcriptLagMs": 155
+    }
+  },
+  "agentFilesLoaded": true
 }

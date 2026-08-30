@@ -1,0 +1,24 @@
+{
+  "session_id": "18a0e2bc-3b60-43a4-8b21-68e1ccd1e561",
+  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-v-background/18a0e2bc-3b60-43a4-8b21-68e1ccd1e561.jsonl",
+  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-v-background",
+  "prompt_id": "64757e4b-bd89-479d-8e0c-c1032840b281",
+  "permission_mode": "auto",
+  "agent_type": "relay-worker",
+  "effort": {
+    "level": "low"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "RELAY: done\nStarted `sleep 40` as a background task (id bfi0liu4q). No files changed; verified by the background task confirmation message.",
+  "background_tasks": [
+    {
+      "id": "bfi0liu4q",
+      "type": "shell",
+      "status": "running",
+      "description": "sleep 40",
+      "command": "sleep 40"
+    }
+  ],
+  "session_crons": []
+}
