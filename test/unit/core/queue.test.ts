@@ -25,6 +25,16 @@ describe("Scheduler", () => {
     paused = true; pool.release("task:u4"); log.emit({ type: "task.status_changed", task_uuid: "u4", payload: { status: "done", patch: { status: "done" } } });
     await sch.pump(); expect(started).not.toContain("u5");                     // kill switch
   });
+  test("returns the slot when onSlot leaves the task unable to run, and does not re-queue it", async () => {
+    const db = openDb(":memory:"); migrate(db); const log = new EventLog(db, () => {}, parseConfig(""));
+    db.run("insert into projects(id,name,path,is_git,created_at) values('p','p','/p',1,1)");
+    const pool = new PermitPool(db, log, () => 2); mk(log, "u1", "p", 1);
+    // what a spawn whose outcome relay could not read does: the outbox parks the task in `error` and returns normally
+    const sch = new Scheduler(db, log, pool, async (t) => { log.emit({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: "error", patch: { status: "error", ended_at: 2 } } }); }, () => false);
+    await sch.pump();
+    expect(pool.active()).toBe(0);                                                // the slot must not leak
+    expect(loadTask(db, "u1")!.status).toBe("error");                             // and the task is not resurrected behind the operator's back
+  });
   test("a failing onSlot returns the slot and re-queues the task at the head", async () => {
     const db = openDb(":memory:"); migrate(db); const log = new EventLog(db, () => {}, parseConfig(""));
     db.run("insert into projects(id,name,path,is_git,created_at) values('p','p','/p',1,1)");

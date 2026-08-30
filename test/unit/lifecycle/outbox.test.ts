@@ -62,6 +62,17 @@ describe("Outbox", () => {
     s.ob.enqueue("u1", "k", { kind: "spawn", spec: spec("u1") }); await s.ob.run("u1");
     expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(1); expect(loadTask(s.db, "u1")!.short_id).toBe("fake1");
   });
+  test("a spawn relay could not read the outcome of stays `unknown` (never a second spawn) and parks the task in `error`", async () => {
+    const s = setup(); s.mk("u1", "starting");
+    s.runner.spawn = async () => { throw new Error("spawn failed (1): claude printed no backgrounded line"); };
+    s.ob.enqueue("u1", "k", { kind: "spawn", spec: spec("u1") });
+    await s.ob.run("u1");                                                         // the outbox owns the outcome: it must not throw at the scheduler
+    expect(s.states()).toEqual(["unknown"]);                                      // B3: at-most-once — the operator confirms or retries, relay never retries a spawn on its own
+    const t = loadTask(s.db, "u1")!;
+    expect(t.status).toBe("error"); expect(t.process_state).toBe("none");         // visible, and no longer entitled to the slot it was granted
+    expect(t.last_summary).toContain("spawn failed");
+    await s.ob.run("u1"); expect(s.states()).toEqual(["unknown"]);                // the unknown head blocks the queue: still no second spawn
+  });
   test("send via resume path: waits for the turn to end, then stops the process and resumes with the marker", async () => {
     const s = setup("resume"); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive", turn_state: "busy" }); s.live("u1");
     s.ob.enqueue("u1", "m2", { kind: "send", text: "테스트도 추가해", marker: "0000abcd", message_id: "m2" }); await s.ob.run("u1");

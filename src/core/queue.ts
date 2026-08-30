@@ -24,7 +24,12 @@ export class Scheduler {
           if (!this.permits.acquire({ holder_kind: "task", holder_id: `task:${t.uuid}`, task_uuid: t.uuid, reason: "slot" })) break;
           this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: "starting", patch: { status: "starting", qhead: false, started_at: t.started_at ?? now() } } });
           try { await this.onSlot(loadTask(this.db, t.uuid)!); }
-          catch (e) { slog.error("onSlot failed — returning the slot", { task: t.uuid, e: String(e) }); this.permits.release(`task:${t.uuid}`, "onSlot failed"); this.enqueue(t.uuid, true); }
+          catch (e) { slog.error("onSlot failed — returning the slot", { task: t.uuid, e: String(e) }); this.permits.release(`task:${t.uuid}`, "onSlot failed"); this.enqueue(t.uuid, true); continue; }
+          // The slot follows the task. onSlot can end it without ever starting a process — a spawn whose outcome relay
+          // could not read parks the task in `error` (outbox, B3) instead of requeueing it — and only `starting`/
+          // `running` are entitled to a lease (I2). Take the slot back rather than leak it to a task that will not run.
+          const after = loadTask(this.db, t.uuid);
+          if (!["starting", "running"].includes(after?.status ?? "")) this.permits.release(`task:${t.uuid}`, `not running after onSlot (${after?.status ?? "gone"})`);
         }
       } while (this.again);
     } finally { this.pumping = false; }

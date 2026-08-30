@@ -36,6 +36,22 @@ describe("pipeline: message → dispatch → task → hooks → ws", () => {
     await s.req("POST", `/api/tasks/${ta.uuid}/interrupt`); await new Promise((x) => setTimeout(x, 80)); expect((s.db.query("select status from tasks where uuid=?").get(tb.uuid) as any).status).toBe("starting");
     expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(2); expect(s.invariants()).toEqual([]);
   });
+  test("a spawn whose outcome relay could not read returns the slot: the task is visible and the next task still starts", async () => {
+    const s = await buildTestApp(decide({ action: "new_task", project: "myapp", title: "t", size: "small", prompt: "p", confidence: "high" }));
+    s.setMax(1); s.db.run("insert into meta(key,value) values('max_concurrent_agents','1')");
+    const ok = s.runner.spawn.bind(s.runner); let first = true;
+    s.runner.spawn = async (spec: any) => { if (!first) return ok(spec); first = false; s.runner.calls.push({ kind: "spawn", args: spec }); throw new Error("spawn failed (1): no `backgrounded ·` line"); };
+    await s.req("POST", "/api/messages", { text: "a", client_message_id: "a" }); await new Promise((x) => setTimeout(x, 120));
+    const ta = s.db.query("select * from tasks order by num").get() as any;
+    expect(ta.status).toBe("error");                                                     // not a silent `starting` with no process
+    expect(s.permits.active()).toBe(0);                                                  // the slot came back
+    expect((s.db.query("select state from commands where task_uuid=?").get(ta.uuid) as any).state).toBe("unknown");   // B3: the operator confirms or retries
+    expect(s.invariants()).toEqual([]);
+    await s.req("POST", "/api/messages", { text: "b", client_message_id: "b" }); await new Promise((x) => setTimeout(x, 120));
+    const tb = s.db.query("select * from tasks where num=2").get() as any;
+    expect(tb.status).toBe("starting"); expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(2);       // the freed slot went to the next task
+    expect(s.invariants()).toEqual([]);
+  });
   test("frames of one event share its seq and carry idx 0..n-1 (the dashboard cursor is (seq, idx))", async () => {
     const s = await buildTestApp(); const frames: any[] = []; s.hub.handleOpen({ send: (x: string) => frames.push(JSON.parse(x)) } as any, 0);
     s.seedTask("running");                                                   // task.created → [task.created, system.state] in ONE event
