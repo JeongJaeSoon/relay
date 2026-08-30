@@ -9,6 +9,7 @@ import { EventLog, loadMessage } from "../core/events.ts";
 import { ulid } from "../core/ids.ts";
 import { isStatusQuery, statusAnswer } from "../core/fastpath.ts";
 import { log as slog } from "../log.ts";
+import { buildAskContext } from "./ask-context.ts";
 import { buildContext } from "./context.ts";
 import { AnswerSchema, ANSWER_JSON_SCHEMA, DecisionSchema, dispatchJsonSchema, lowConfidence } from "./schema.ts";
 import { ASK_SYSTEM_PROMPT, dispatchSystemPrompt } from "./system-prompt.ts";
@@ -49,14 +50,16 @@ export class Dispatcher {
     // input from it, so it survives a restart (drainPending) and a replay. The fast path is tried first: declaring a
     // status question must never make it more expensive than the same words without the marker.
     const ask = isAsk(msg.text); const text = ask ? stripAsk(msg.text) : msg.text;
-    if (isStatusQuery(text, msg.reply_to_task_uuid)) {
+    // A message scoped to one task is not a system status query, however it is worded — the fast path's answer is the
+    // whole system's. Same rule the reply path already has, same argument.
+    if (isStatusQuery(text, msg.reply_to_task_uuid ?? msg.task_uuid)) {
       this.patch(id, { dispatch_state: "fastpath" }, "dispatch.fastpath");
       this.log.emit({ type: "message.received", payload: { id: ulid(), role: "dispatcher_answer", source: "user", client_message_id: null, dispatch_state: "direct", text: statusAnswer(this.db, this.cfg), task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
       return;
     }
     this.patch(id, { dispatch_state: "deciding" }, "dispatch.started");
     const prev = this.db.query("select id from messages where role='user' and dispatch_state in ('dispatched','failed','needs_confirm','fastpath') and id<>? order by created_at desc limit 1").get(id) as any;
-    if (ask) return this.answerQuestion(id, text, prev?.id ?? null);
+    if (ask) return this.answerQuestion(id, text, msg.task_uuid, prev?.id ?? null);
     const ctx = buildContext(this.db);
     let last: { decision: DispatchDecision | null; error: string } = { decision: null, error: "" };
     for (const effort of [this.cfg.dispatcher.effort, this.cfg.dispatcher.retry_effort]) {
@@ -72,11 +75,14 @@ export class Dispatcher {
     // A9: the message's `dispatched` mark, the badge row, the task and its spawn command are committed together by TaskService.applyDecision (one transaction) — never here
     this.opts.onDecision(loadMessage(this.db, id)!, last.decision, { chain_prev_id: prev?.id ?? null });
   }
-  /** Ask mode: the only reachable outcome is an answer. Same retry shape as routing, a prompt without the routing context. */
-  private async answerQuestion(id: string, question: string, prevId: string | null) {
+  /** Ask mode: the only reachable outcome is an answer. Same retry shape as routing, and one context — empty for a
+   *  plain question, the target task's state and transcript tail for a task-scoped one. The worker is never touched:
+   *  this spawns its own one-shot `claude -p`, exactly as the dispatcher does, and sends nothing to the session. */
+  private async answerQuestion(id: string, question: string, taskUuid: string | null, prevId: string | null) {
+    const ctx = taskUuid ? buildAskContext(this.db, taskUuid) : "";
     let last: { answer: string | null; error: string } = { answer: null, error: "" };
     for (const effort of [this.cfg.dispatcher.effort, this.cfg.dispatcher.retry_effort]) {
-      last = await this.answer(question, effort, last.error);
+      last = await this.answer(question, ctx, effort, last.error);
       if (last.answer || last.error === "timeout") break;
     }
     if (!last.answer) { this.patch(id, { dispatch_state: "failed", dispatch_error: last.error, chain_prev_id: prevId }, "dispatch.failed"); this.badge(`dispatcher · failed · ${last.error}`); return; }
@@ -91,8 +97,8 @@ export class Dispatcher {
     const parsed = DecisionSchema.safeParse(out);
     return parsed.success ? { decision: parsed.data, error: "" } : { decision: null, error: parsed.error.issues.map((i) => i.message).join("; ") };
   }
-  private async answer(question: string, effort: string, prevError: string) {
-    const prompt = `${prevError ? `[previous attempt failed: ${prevError} — answer strictly via the structured output]\n\n` : ""}[user message]\n${question}`;
+  private async answer(question: string, ctx: string, effort: string, prevError: string) {
+    const prompt = `${ctx ? `${ctx}\n\n` : ""}${prevError ? `[previous attempt failed: ${prevError} — answer strictly via the structured output]\n\n` : ""}[user message]\n${question}`;
     const { out, error } = await this.call(prompt, ASK_SYSTEM_PROMPT, ASK_JSON_SCHEMA, effort);
     if (error) return { answer: null, error };
     const parsed = AnswerSchema.safeParse(out);

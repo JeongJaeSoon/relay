@@ -38,7 +38,7 @@ export function apiRoutes(ctx: AppContext) {
   api.use("*", async (c, next) => { if (c.req.method !== "GET" && c.req.path !== "/api/hooks" && getMeta(ctx.db, "recovering") === "1") return c.json({ error: "recovering — try again shortly" }, 503); await next(); });   // writes wait for reconcile; hooks buffer durably
   const attached = (c: any, t: Task) => (t.attach_state !== "none" ? bad(c, `attached in a terminal (${t.attached_by}) — detach first`, 409) : null);
   api.post("/messages", async (c) => {
-    const b = z.object({ text: z.string().trim().min(1).max(20_000), client_message_id: z.string().max(128).optional(), reply_to_task_id: z.string().optional(), ask: z.boolean().default(false), source: z.enum(["user", "cli", "mcp", "github", "slack", "cron"]).default("user") }).safeParse(await c.req.json());
+    const b = z.object({ text: z.string().trim().min(1).max(20_000), client_message_id: z.string().max(128).optional(), reply_to_task_id: z.string().optional(), ask: z.boolean().default(false), ask_task_id: z.string().optional(), source: z.enum(["user", "cli", "mcp", "github", "slack", "cron"]).default("user") }).safeParse(await c.req.json());
     if (!b.success) return bad(c, "invalid body");
     const cid = b.data.client_message_id ?? ulid();
     const dup = ctx.db.query("select id from messages where client_message_id=?").get(cid) as any; if (dup) return c.json({ message_id: dup.id }, 202);
@@ -46,11 +46,16 @@ export function apiRoutes(ctx: AppContext) {
     if (reply && !loadTask(ctx.db, reply)) return bad(c, "unknown task", 404);                 // validate before emit: messages.task_uuid is a foreign key
     // Ask mode: the client declares a question the way it declares a reply target. Both entry paths — the toggle's
     // `ask` and the `?` the user typed — normalise to one marker on the stored text, which is what the dispatcher reads.
-    const ask = !reply && (b.data.ask || isAsk(b.data.text));
+    // `ask_task_id` scopes the question to one task; it lands in messages.task_uuid, so the target survives a restart
+    // too. It is a question ABOUT that task, never a message TO it — nothing is sent to the worker.
+    const askTask = b.data.ask_task_id ?? null;
+    if (askTask && reply) return bad(c, "ask_task_id asks about a task; reply_to_task_id answers one — not both");
+    if (askTask && !loadTask(ctx.db, askTask)) return bad(c, "unknown task", 404);
+    const ask = !reply && (b.data.ask || isAsk(b.data.text) || !!askTask);
     const text = ask ? markAsk(b.data.text) : b.data.text;
     if (ask && text === ASK_PREFIX) return bad(c, "empty question");
     const id = ulid();
-    ctx.log.emit({ type: "message.received", task_uuid: reply, payload: { id, role: "user", source: b.data.source, client_message_id: cid, dispatch_state: reply ? "direct" : "pending", text, task_uuid: reply, reply_to_task_uuid: reply, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
+    ctx.log.emit({ type: "message.received", task_uuid: reply ?? askTask, payload: { id, role: "user", source: b.data.source, client_message_id: cid, dispatch_state: reply ? "direct" : "pending", text, task_uuid: reply ?? askTask, reply_to_task_uuid: reply, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
     if (reply) S.tasks.answer(reply, b.data.text, id); else S.dispatcher.enqueue(id);
     return c.json({ message_id: id }, 202);
   });

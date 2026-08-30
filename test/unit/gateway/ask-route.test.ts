@@ -26,6 +26,27 @@ describe("Ask mode — POST /api/messages", () => {
     const id = await post(req, { text: "a", ask: true, reply_to_task_id: uuid, client_message_id: "r" });
     expect(textOf(db, id)).toBe("a");
   });
+  test("ask_task_id scopes the question to a task without answering it", async () => {
+    const s = await buildTestApp(); const uuid = s.seedTask("running");
+    const id = await post(s.req, { text: "why is it stuck", ask_task_id: uuid, client_message_id: "s1" }); await s.settle(120);
+    const m = s.db.query("select * from messages where id=?").get(id) as any;
+    expect(m.text).toBe(`${ASK_PREFIX}why is it stuck`);
+    expect(m.task_uuid).toBe(uuid);                                        // the target survives a restart
+    expect(m.reply_to_task_uuid).toBeNull();                               // not a reply: nothing is delivered to the worker
+    expect(m.dispatch_state).toBe("dispatched");                           // it went through the dispatcher, not into the task
+    expect(JSON.parse(m.dispatch_json).action).toBe("answer_directly");
+  });
+  test("ask_task_id is validated, and cannot be combined with reply_to_task_id", async () => {
+    const { req, seedTask } = await buildTestApp(); const uuid = seedTask("running");
+    expect((await req("POST", "/api/messages", { text: "x", ask_task_id: "nope" })).status).toBe(404);
+    expect((await req("POST", "/api/messages", { text: "x", ask_task_id: uuid, reply_to_task_id: uuid })).status).toBe(400);
+  });
+  test("asking about a task queues no command for it", async () => {
+    const s = await buildTestApp(decide({ action: "route_to_task", task_id: "T-01", prompt: "p", confidence: "high" }));
+    const uuid = s.seedTask("running"); const before = (s.db.query("select count(*) c from commands where task_uuid=?").get(uuid) as any).c;
+    await post(s.req, { text: "why is it stuck", ask_task_id: uuid, client_message_id: "s2" }); await s.settle(120);
+    expect(s.db.query("select count(*) c from commands where task_uuid=?").get(uuid)).toEqual({ c: before });
+  });
   test("a bare ? is not a question", async () => {
     const { req } = await buildTestApp();
     expect((await req("POST", "/api/messages", { text: "?" })).status).toBe(400);
