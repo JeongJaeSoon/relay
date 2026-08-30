@@ -47,6 +47,15 @@ describe("Ask mode — POST /api/messages", () => {
     await post(s.req, { text: "why is it stuck", ask_task_id: uuid, client_message_id: "s2" }); await s.settle(120);
     expect(s.db.query("select count(*) c from commands where task_uuid=?").get(uuid)).toEqual({ c: before });
   });
+  test("the ? prefix is a keyboard gesture: only a person typing gets it", async () => {
+    const { req, db } = await buildTestApp();
+    const gh = await post(req, { text: "? why does the build fail", source: "github", client_message_id: "g1" });
+    expect((db.query("select text from messages where id=?").get(gh) as any).text).toBe("? why does the build fail");   // stored verbatim, dispatched as work
+    const cli = await post(req, { text: "? why does the build fail", source: "cli", client_message_id: "g2" });
+    expect((db.query("select text from messages where id=?").get(cli) as any).text).toBe(`${ASK_PREFIX}why does the build fail`);
+    const declared = await post(req, { text: "why does the build fail", ask: true, source: "github", client_message_id: "g3" });
+    expect((db.query("select text from messages where id=?").get(declared) as any).text).toBe(`${ASK_PREFIX}why does the build fail`);   // an explicit declaration works from anywhere
+  });
   test("a bare ? is not a question", async () => {
     const { req } = await buildTestApp();
     expect((await req("POST", "/api/messages", { text: "?" })).status).toBe(400);

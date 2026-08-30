@@ -51,7 +51,10 @@ export function apiRoutes(ctx: AppContext) {
     const askTask = b.data.ask_task_id ?? null;
     if (askTask && reply) return bad(c, "ask_task_id asks about a task; reply_to_task_id answers one — not both");
     if (askTask && !loadTask(ctx.db, askTask)) return bad(c, "unknown task", 404);
-    const ask = !reply && (b.data.ask || isAsk(b.data.text) || !!askTask);
+    // The `?` prefix is a keyboard gesture, so only a person typing gets it: a github/slack/cron body that happens to
+    // start with one is work, not a question. Those sources declare a question with `ask` like any other client.
+    const typed = b.data.source === "user" || b.data.source === "cli";
+    const ask = !reply && (b.data.ask || !!askTask || (typed && isAsk(b.data.text)));
     const text = ask ? markAsk(b.data.text) : b.data.text;
     if (ask && text === ASK_PREFIX) return bad(c, "empty question");
     const id = ulid();
