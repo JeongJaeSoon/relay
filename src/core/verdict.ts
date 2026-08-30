@@ -21,7 +21,7 @@ export function verdict(body: { last_assistant_message?: string; background_task
   const mk = parseMarker(msg);
   if (mk?.kind === "done") return { status: "done", summary: mk.body || firstParagraph(msg.replace(MARKER, "")), question: null, reason: "marker done" };
   if (mk?.kind === "question") return { status: "waiting_input", summary: null, question: { text: mk.body, options: mk.options, asked_at: now(), source: "marker" }, reason: "marker question" };
-  if (mk?.kind === "blocked") return { status: "waiting_input", summary: null, question: { text: `차단됨: ${mk.body}`, options: mk.options, asked_at: now(), source: "marker" }, reason: "marker blocked" };
+  if (mk?.kind === "blocked") return { status: "waiting_input", summary: null, question: { text: `Blocked: ${mk.body}`, options: mk.options, asked_at: now(), source: "marker" }, reason: "marker blocked" };
   if (task.status === "waiting_input" && task.question?.source === "permission") return { status: "waiting_input", summary: null, question: task.question, reason: "permission pending" };
   return { status: "needs_review", summary: firstParagraph(msg), question: null, reason: "marker missing" };
 }

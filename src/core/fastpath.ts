@@ -17,13 +17,13 @@ export function isStatusQuery(text: string, replyTo: string | null = null): bool
   return t.length <= 40 && INTENT.test(t) && !ACTION.test(t) && !DESTRUCTIVE.test(t) && !NEGATION.test(t + " ");
 }
 
-const rel = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}초` : ms < 3_600_000 ? `${Math.round(ms / 60_000)}분` : `${(ms / 3_600_000).toFixed(1)}시간`);
+const rel = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : `${(ms / 3_600_000).toFixed(1)}h`);
 
 export function statusAnswer(db: Database, cfg: Config): string {
   const s = systemState(db, cfg);
   const waiting = (db.query("select count(*) c from tasks where status='waiting_input'").get() as any).c;
-  const head = `실행 중 ${s.running} · 대기 ${s.queued} · 응답 대기 ${waiting} · 오늘 사용량 ~${Math.round(s.today_tokens / 1000)}k tok(추정)${s.paused ? " · kill switch ON" : ""}`;
+  const head = `Running ${s.running} · Queued ${s.queued} · Needs input ${waiting} · today ~${Math.round(s.today_tokens / 1000)}k tok (est.)${s.paused ? " · kill switch ON" : ""}`;
   const rows = db.query("select * from tasks where parent_uuid is null and status not in ('closed') order by num desc limit 12").all().map(rowToTask);
-  const lines = rows.map((t) => `${t.display_id} ${t.title} · ${t.status}${t.started_at ? " " + rel((t.ended_at ?? now()) - t.started_at) : ""}${t.last_step ? " · 마지막: " + t.last_step : ""}`);
+  const lines = rows.map((t) => `${t.display_id} ${t.title} · ${t.status}${t.started_at ? " " + rel((t.ended_at ?? now()) - t.started_at) : ""}${t.last_step ? " · last: " + t.last_step : ""}`);
   return [head, ...lines].join("\n");
 }

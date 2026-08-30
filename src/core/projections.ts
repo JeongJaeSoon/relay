@@ -123,7 +123,7 @@ export function applyProjection(db: Database, ev: EventEnvelope, cfg: Config): F
     case ev.type === "usage.sampled": { if (ev.task_uuid) { db.run("update tasks set usage_tokens=usage_tokens+?, updated_at=? where uuid=?", [p.delta ?? 0, at, ev.task_uuid]); taskFrame(ev.task_uuid); } state(); break; }
     default: /* hook.*, send.outcome, message.sent: stream only (+ dispatch.updated when a send outcome belongs to a chat message) */
       if (ev.task_uuid) { if (p.patch) { patchTask(db, ev.task_uuid, p.patch, at); taskFrame(ev.task_uuid); } frames.push({ type: "task.event", task_uuid: ev.task_uuid, event: ev }); }
-      if (ev.type === "send.outcome" && p.message_id && loadMessage(db, p.message_id)) { if (p.outcome === "refused") patchMessage(db, p.message_id, { dispatch_error: "전달 거부(refused)" }); msgFrame(p.message_id); }
+      if (ev.type === "send.outcome" && p.message_id && loadMessage(db, p.message_id)) { if (p.outcome === "refused") patchMessage(db, p.message_id, { dispatch_error: "delivery refused" }); msgFrame(p.message_id); }
   }
   return frames;
 }

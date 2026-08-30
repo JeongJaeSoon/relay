@@ -14,7 +14,7 @@ describe("verdict", () => {
     expect(verdict(done as any, task).status).toBe("done"); expect(verdict(done as any, task).summary).toMatch(/\S/);
     const q = verdict(question as any, task); expect(q.status).toBe("waiting_input"); expect(q.question!.options.length).toBe(2);
     expect(verdict(background as any, task).status).toBe("running");
-    expect(verdict(blocked as any, task).status).toBe("waiting_input"); expect(verdict(blocked as any, task).question!.text).toMatch(/^차단됨/);
+    expect(verdict(blocked as any, task).status).toBe("waiting_input"); expect(verdict(blocked as any, task).question!.text).toMatch(/^Blocked/);
   });
   test("missing marker → needs_review with fallback summary; empty message → needs_review", () => {
     const v = verdict({ last_assistant_message: "I did things.\nMore.", background_tasks: [], session_crons: [] } as any, task);

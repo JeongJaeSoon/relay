@@ -24,7 +24,7 @@ export class Watchdog {
         if (row.session_id && row.session_id !== task.session_id && !this.db.query("select 1 from tasks where session_id=? and uuid<>?").get(row.session_id, task.uuid))
           this.log.emit({ type: "task.patched", task_uuid: task.uuid, payload: { patch: { session_id: row.session_id }, reason: "fork chain" } });
         if (task.process_state === "starting" && t - task.updated_at > GRACE_MS) this.log.emit({ type: "process.started", task_uuid: task.uuid, payload: { generation: task.process_generation + 1, session_id: row.session_id, short_id: row.short_id, pid: row.pid, source: "watchdog", patch: task.status === "starting" ? { status: "running", started_at: task.started_at ?? t } : {} } });
-        if (row.waiting_for && task.last_step !== `대기: ${row.waiting_for}`) this.log.emit({ type: "task.patched", task_uuid: task.uuid, payload: { patch: { last_step: `대기: ${row.waiting_for}` } } });
+        if (row.waiting_for && task.last_step !== `waiting: ${row.waiting_for}`) this.log.emit({ type: "task.patched", task_uuid: task.uuid, payload: { patch: { last_step: `waiting: ${row.waiting_for}` } } });
         continue;
       }
       const since = this.missingSince.get(task.uuid) ?? t; this.missingSince.set(task.uuid, since);
@@ -32,7 +32,7 @@ export class Watchdog {
       this.missingSince.delete(task.uuid);
       const wasRunning = ["starting", "running"].includes(task.status) && !task.paused;
       this.log.emit({ type: "process.ended", task_uuid: task.uuid, payload: { reason: "watchdog: process gone", crashed: wasRunning } });
-      if (wasRunning) { this.log.emit({ type: "task.status_changed", task_uuid: task.uuid, payload: { status: "error", patch: { status: "error", ended_at: t } } }); this.permits.releaseTask(task.uuid, "crashed"); this.log.emit({ type: "message.received", task_uuid: task.uuid, payload: chatFor("error", loadTask(this.db, task.uuid)!, "세션이 종료됨(SessionEnd 없음) — 재시작 버튼으로 --resume") }); }
+      if (wasRunning) { this.log.emit({ type: "task.status_changed", task_uuid: task.uuid, payload: { status: "error", patch: { status: "error", ended_at: t } } }); this.permits.releaseTask(task.uuid, "crashed"); this.log.emit({ type: "message.received", task_uuid: task.uuid, payload: chatFor("error", loadTask(this.db, task.uuid)!, "Session ended (no SessionEnd) — use Restart to --resume") }); }
     }
     for (const task of this.db.query("select * from tasks where attach_state<>'none'").all().map(rowToTask)) {
       const pid = Number(task.attached_by?.match(/^cli:(\d+)$/)?.[1] ?? 0);

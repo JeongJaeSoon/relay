@@ -14,6 +14,6 @@ describe("fastpath", () => {
   test("over 40 characters is never a fast-path", () => expect(isStatusQuery("상태 " + "가".repeat(40))).toBe(false));
   test("answer summarises counts and tasks", () => {
     const db = openDb(":memory:"); migrate(db);
-    expect(statusAnswer(db, parseConfig(""))).toMatch(/실행 중 0 · 대기 0 · 응답 대기 0/);
+    expect(statusAnswer(db, parseConfig(""))).toMatch(/Running 0 · Queued 0 · Needs input 0/);
   });
 });

@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { loadProjects, rowToMessage, rowToTask } from "../core/projections.ts";
 import { now } from "../core/clock.ts";
 
-const ago = (t: number) => { const m = Math.round((now() - t) / 60_000); return m < 1 ? "방금" : m < 60 ? `${m}분 전` : `${Math.round(m / 60)}시간 전`; };
+const ago = (t: number) => { const m = Math.round((now() - t) / 60_000); return m < 1 ? "just now" : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`; };
 
 /** Projects, active tasks and the last five chat lines — everything the judge sees besides the message itself. */
 export function buildContext(db: Database): string {
