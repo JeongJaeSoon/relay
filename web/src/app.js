@@ -26,9 +26,7 @@ Theme.init();
 /* ================= state ================= */
 const ROW_H=128, SUB_ROW=102, COL_TASK=312, COL_SUB=596, ROW_Y0=40;
 const S={tasks:new Map(),seq:0,sel:null,maxw:10, /* 기본 10, 상한 없음(초과 시 소프트 경고) */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
-const USAGE={small:40000,normal:120000,epic:400000,sub:60000,dispatch:25000};
 const STATUS_LABEL={run:"실행 중",wait:"응답 대기",queue:"대기열",done:"완료",err:"오류",cancelled:"중단됨",closed:"보관됨"};
-const SIZE_EFFORT={small:"opus·high",normal:"opus·xhigh",epic:"opus·xhigh"};
 
 function makeTask(o){
   S.seq++;
@@ -43,24 +41,7 @@ function makeTask(o){
   return t;
 }
 const tasksArr=()=>[...S.tasks.values()];
-const runningCount=()=>tasksArr().filter(t=>t.status==="run").length; /* 서브에이전트도 permit 소비 */
-
 function ev(t,txt,payload){t.events.push({id:(t.evSeq=(t.evSeq||0)+1),at:new Date(),txt,payload});if(t.events.length>60)t.events.shift()}
-function after(t,ms,fn){const h={left:ms,fn};arm(t,h);t.timers.push(h)}
-function arm(t,h){h.at=Date.now()+h.left;h.id=setTimeout(()=>{t.timers=t.timers.filter(x=>x!==h);h.fn()},h.left)}
-function stopTimers(t){t.timers.forEach(h=>clearTimeout(h.id));t.timers=[]}
-function pauseTimers(t){t.timers.forEach(h=>{clearTimeout(h.id);h.left=Math.max(0,h.at-Date.now())})} /* kill switch: 남은 시간 보존 */
-function resumeTimers(t){t.timers.forEach(h=>arm(t,h))}
-function setStep(t,txt){t.step=txt;ev(t,txt);refresh()}
-function runSteps(t,steps,onDone){
-  let i=0;
-  const next=()=>{
-    if(t.status!=="run")return;
-    if(i>=steps.length){onDone&&onDone();return}
-    const st=steps[i++];setStep(t,st[0]);after(t,st[1],next);
-  };
-  next();
-}
 
 /* ================= chat ================= */
 const msgs=$("#msgs");
@@ -132,7 +113,7 @@ function renderDlog(){
       }
       if(r.action==="failed"){
         const b=el("button","nc-btn","재시도");
-        b.addEventListener("click",()=>{en.status="judging";renderDlog();setTimeout(()=>{const t=spawnGeneric(r.retryText||en.text);dlogDone(en,{action:"new_task (재시도)",ids:[t.id]})},900)});
+        b.addEventListener("click",()=>relay.redispatch(en.messageId));
         st.append(b);
       }
     }
@@ -141,265 +122,19 @@ function renderDlog(){
   });
 }
 
-/* ================= dispatcher (simulated) ================= */
-function statusSummary(){
-  const g=st=>tasksArr().filter(t=>!t.sub&&t.status===st);
-  const run=g("run"),wait=g("wait"),q=g("queue"),done=g("done");
-  if(!S.tasks.size)return"현재 태스크가 없습니다. 새 작업을 보내보세요.";
-  const part=[];
-  if(run.length)part.push("실행 중 "+run.length+"건("+run.map(t=>t.id).join(", ")+")");
-  if(wait.length)part.push("응답 대기 "+wait.length+"건");
-  if(q.length)part.push("대기열 "+q.length+"건");
-  if(done.length)part.push("완료 "+done.length+"건");
-  return part.length?part.join(", ")+"입니다.":"모든 태스크가 정리된 상태입니다.";
-}
-function decide(text){
-  const authTask=tasksArr().find(t=>!t.sub&&t.tags.includes("auth")&&t.status!=="closed");
-  if(/테스트/.test(text)&&authTask)
-    return{badge:["route_to_task",authTask.id],run(){routeFollowup(authTask,"테스트 추가");return{ids:[authTask.id]}}};
-  if(/테스트/.test(text))
-    return{badge:["answer_directly","확인 필요"],run(){chatMsg(null,"라우팅할 대상 태스크가 없습니다. 먼저 ① 일반 작업으로 태스크를 만들어보세요.");return{note:"확인 필요"}}};
-  if(/전면|개편|시스템/.test(text))
-    return{badge:["new_task","epic","commerce"],run(){const t=spawnEpic(text);return{ids:[t.id]}}};
-  if(/리팩토링|auth|인증/.test(text))
-    return{badge:["new_task","normal","api-server"],run(){const t=spawnNormal(text);return{ids:[t.id]}}};
-  if(/오타|typo/.test(text))
-    return{badge:["new_task ×2","small","docs"],run(){return{ids:spawnSmalls().map(t=>t.id)}}};
-  return{badge:["new_task","small","workspace"],run(){const t=spawnGeneric(text);return{ids:[t.id]}}};
-}
-function send(text){
-  text=text.trim();if(!text)return;
-  chatUser(text);chatAck();
-  const dl=dlogAdd(text);
-  if(/상태|현황|상황|어때/.test(text)){ /* 게이트웨이 fast-path: LLM 0회 즉답 */
-    chatBadges(["fast-path","DB 스냅샷"],"gateway");
-    chatMsg(null,statusSummary());
-    dlogDone(dl,{action:"fast-path",note:"즉답 (LLM 0회)"});
-    return;
-  }
-  if(text.startsWith("(시뮬) 판단 실패")){
-    gwEl.classList.add("judging");
-    gwEl.querySelector(".gw-s").textContent="dispatcher 판단 중 (fable)";
-    setTimeout(()=>{
-      gwEl.classList.remove("judging");gwEl.querySelector(".gw-s").textContent=":8787 · 상시 수신";
-      chatBadges(["failed","fable timeout 60s"]);
-      chatMsg(null,"판단 실패(fable timeout). 디스패치 로그에서 재시도할 수 있습니다.");
-      dlogDone(dl,{action:"failed",note:"fable timeout — 재시도 가능",retryText:"README 오타 수정해줘"});
-    },1200);
-    return;
-  }
-  S.usage+=USAGE.dispatch;
-  gwEl.classList.add("judging");
-  gwEl.querySelector(".gw-s").textContent="dispatcher 판단 중 (fable)";
-  setTimeout(()=>{
-    gwEl.classList.remove("judging");
-    gwEl.querySelector(".gw-s").textContent=":8787 · 상시 수신";
-    const d=decide(text);chatBadges(d.badge);
-    const res=d.run()||{};
-    if(res.ids&&res.ids.length){const row=el("div","m-badges");row.append(el("span","m-note","→ 전달"));res.ids.forEach(id=>{const t=S.tasks.get(id);if(t)row.append(ttagBtn(t))});msgs.append(row);scrollChat()}
-    dlogDone(dl,{action:d.badge[0],ids:res.ids,note:res.note});
-  },700);
-}
+/* ================= server actions (window.relay, installed by web/src/adapter.ts) ================= */
+function send(text){text=text.trim();if(!text)return;relay.send(text)}                     /* the server echoes the message as chat.message — no optimistic row */
+function answerQuestion(t,choice){if(t.status!=="wait")return;relay.answer(t,choice)}
+function stopTask(t){relay.stop(t)}
+function restartTask(t){relay.restart(t)}
+function archiveTask(t){relay.archive(t)}
+function togglePause(){relay.pause()}                                                   /* banner/settings re-render when system.state arrives */
+function runningCount(){return S.running??tasksArr().filter(t=>t.status==="run").length}  /* server count is authoritative */
 
 /* ================= lifecycle ================= */
-function spawnTask(o){
-  const t=makeTask(o);
-  ev(t,"티켓 생성 ("+t.size+")");
-  if(S.paused){
-    t.status="queue";t.queuedAt=Date.now();t.step="전역 일시정지 — 큐 대기";ev(t,"kill switch 활성: 큐 대기");
-  }else if(runningCount()>=S.maxw){
-    t.status="queue";t.queuedAt=Date.now();t.step="슬롯 대기 중 ("+runningCount()+"/"+S.maxw+" 사용)";ev(t,"슬롯 대기열 진입");
-  }else{
-    startRun(t);
-  }
-  relayout();
-  return t;
-}
-function startRun(t){
-  t.status="run";t.startedAt=t.startedAt||new Date();
-  ev(t,"워커 세션 시작 ("+SIZE_EFFORT[t.size]+")");
-  if(t.scenario)t.scenario(t);
-}
-function finish(t,summary){
-  t.status="done";t.endedAt=new Date();t.step="완료";ev(t,"턴 종료 (Stop) — last_assistant_message 승격");S.usage+=USAGE[t.size]||USAGE.small;
-  if(summary)chatMsg(t,summary);
-  notify("done",t,summary||"작업 완료");
-  refresh();pumpQueue();
-  if(t.pending){
-    const p=t.pending;t.pending=null;
-    after(t,1000,()=>{
-      chatMsg(t,"턴 종료 — 큐잉된 지시를 이어서 처리합니다: "+p);
-      resumeWith(t,p);
-    });
-  }
-}
 /* 대기열 순서: 답변 후 permit 재획득 대기(qhead)가 선두, 나머지는 큐 진입 시각 FIFO */
 const queueOrder=(a,b)=>(b.qhead?1:0)-(a.qhead?1:0)||(a.queuedAt||0)-(b.queuedAt||0);
 const queuedTasks=()=>tasksArr().filter(t=>t.status==="queue").sort(queueOrder);
-function pumpQueue(){
-  while(!S.paused&&runningCount()<S.maxw){
-    const q=queuedTasks()[0];
-    if(!q)break;
-    ev(q,"슬롯 확보");
-    if(q.sub)runSub(q);
-    else if(q.pendingAnswer){const a=q.pendingAnswer;q.pendingAnswer=null;q.qhead=false;q.status="run";q.onAnswer&&q.onAnswer(a)}
-    else if(q.pendingRun){const f=q.pendingRun;q.pendingRun=null;q.qhead=false;f()}
-    else startRun(q);
-  }
-  relayout(); /* 대기열 레인 → 트리 행으로 이동 (트랜지션) */
-}
-function ask(t,q,chips){
-  t.status="wait";t.question={q,chips};t.step="사용자 응답 대기";
-  ev(t,"질문: "+q);
-  chatQuestion(t);
-  notify("wait",t,q);
-  refresh();pumpQueue(); /* 대기는 슬롯 반납 */
-}
-function answerQuestion(t,choice){
-  if(t.status!=="wait")return;
-  t.question=null;
-  withdrawNotif(t.id,"wait");
-  document.querySelectorAll('.m-chips[data-task="'+t.id+'"] .chip').forEach(b=>b.disabled=true);
-  ev(t,"응답 수신: "+choice);
-  chatNote("→ "+t.id+" 응답 전달: accepted");
-  if(S.paused||runningCount()>=S.maxw){ /* 답변 후 permit 재획득 — 없으면 큐 선두 */
-    t.status="queue";t.queuedAt=Date.now();t.qhead=true;t.step="답변 수신 — 슬롯 대기";t.pendingAnswer=choice;ev(t,"permit 없음 → 대기열 선두");
-    relayout();return;
-  }
-  t.status="run";
-  if(t.onAnswer)t.onAnswer(choice);
-  refresh();
-}
-/* 후속 실행 게이트: kill switch 중이거나 permit이 없으면 대기열 선두에 보류하고 슬롯 확보 시 pumpQueue가 이어감 */
-function gateRun(t,label,fn){
-  if(!S.paused&&runningCount()<S.maxw)return true;
-  t.status="queue";t.queuedAt=Date.now();t.qhead=true;t.pendingRun=fn;t.endedAt=null;
-  t.step=(S.paused?"전역 일시정지":"슬롯 대기")+" — "+label;ev(t,label+" 보류 ("+(S.paused?"kill switch":"permit 없음")+") → 대기열 선두");
-  relayout();return false;
-}
-function resumeWith(t,label){
-  if(!gateRun(t,"후속 지시",()=>resumeWith(t,label)))return;
-  t.status="run";t.endedAt=null;
-  ev(t,"세션 재개(resume) — 컨텍스트 복원");
-  runSteps(t,[["추가 지시 처리: "+label,1600],["테스트 작성 중",2600],["테스트 실행 중",2200]],
-    ()=>finish(t,"테스트 12개 추가 — 전체 46개 통과. 커밋 1건 추가."));
-  refresh();
-}
-function stopTask(t){
-  stopTimers(t);withdrawNotif(t.id,"wait");t.question=null; /* 답 못 받을 질문 알림 철회 */
-  t.children.forEach(id=>{const c=S.tasks.get(id);if(c&&(c.status==="run"||c.status==="queue")){stopTimers(c);c.status="cancelled";c.step="상위 태스크 중단"}});
-  t.status="cancelled";t.step="claude stop — 프로세스 정지";t.endedAt=new Date();
-  ev(t,"사용자 중단 (claude stop) — worktree·transcript 보존");
-  chatMsg(t,"중단했습니다. worktree는 보존되며 --resume으로 재시작할 수 있습니다.");
-  notify("err",t,"사용자가 중단함 — 재시작할 수 있습니다");
-  refresh();pumpQueue();
-}
-function restartTask(t){
-  withdrawNotif(t.id,"err");
-  if(!gateRun(t,"재시작",()=>restartTask(t)))return;
-  t.status="run";t.endedAt=null;ev(t,"재시작 (claude --resume)");
-  runSteps(t,[["세션 재개(resume) — 이전 컨텍스트 로드",1800],["중단 지점부터 계속",2600]],
-    ()=>finish(t,"재시작 후 작업 완료."));
-  refresh();
-}
-function archiveTask(t){
-  t.status="closed";t.step="보관됨";withdrawNotif(t.id);ev(t,"보관");
-  if(S.sel===t.id)S.sel=null;
-  t.children.forEach(id=>{const c=S.tasks.get(id);if(c)c.status="closed"});
-  relayout();
-}
-
-/* ================= scenarios ================= */
-function spawnNormal(){
-  return spawnTask({title:"auth 모듈 리팩토링",project:"api-server",size:"normal",tags:["auth"],
-    scenario(t){
-      runSteps(t,[
-        ["worktree 생성: relay-"+t.id.toLowerCase(),1400],
-        ["코드 탐색 중 (explore·sonnet)",2800],
-        ["리팩토링 구현 중",3400],
-        ["테스트 실행 중",2600],
-      ],()=>finish(t,"auth 모듈 리팩토링 완료 — 12개 파일 수정, 테스트 34개 통과. PR 준비됨."));
-      after(t,5400,()=>{if(t.status==="run")ev(t,"PostToolUse Bash · 2.1s","$ npm test\n  34 passed, 0 failed (2.1s)")});
-    }});
-}
-function routeFollowup(t,label){
-  if(t.status==="run"||t.status==="queue"){
-    t.pending=label;
-    ev(t,"후속 지시 큐잉: "+label);
-    chatMsg(t,"실행 중이라 현재 턴이 끝나면 이어서 처리합니다 — 큐잉됨.");
-    refresh();
-  }else if(t.status==="done"){
-    chatMsg(t,"완료된 세션을 재개해 이어서 처리합니다.");
-    resumeWith(t,label);
-  }else{
-    t.pending=label;chatMsg(t,"응답 대기 중 — 재개 시 이어서 처리합니다.");refresh();
-  }
-}
-function spawnEpic(){
-  return spawnTask({title:"결제 시스템 전면 개편",project:"commerce",size:"epic",
-    scenario(t){
-      t.onAnswer=choice=>{
-        setStep(t,"PG 연동 구현 중 ("+choice+")");
-        t.answered=true;checkEpicDone(t);
-      };
-      runSteps(t,[
-        ["worktree 생성: relay-"+t.id.toLowerCase(),1400],
-        ["계획 수립 중 — 서브 티켓 분해",2600],
-      ],()=>{
-        setStep(t,"서브에이전트 2건 병렬 실행 중");
-        spawnSub(t,"결제 API 설계",7000);
-        spawnSub(t,"DB 마이그레이션 초안",9000);
-        after(t,3000,()=>{
-          if(t.status!=="run")return;
-          ask(t,"PG사 선택이 필요합니다. 어느 쪽으로 진행할까요?",["토스페이먼츠","스트라이프","보류(모의 구현)"]);
-        });
-      });
-    }});
-}
-function spawnSub(parent,title,ms){
-  const c=makeTask({title,project:parent.project,size:"small",sub:true,parent:parent.id,status:"queue",ms});
-  parent.children.push(c.id);
-  ev(c,"서브에이전트 요청 (Agent 도구 PreToolUse → permit 확인)");
-  if(!S.paused&&runningCount()<S.maxw)runSub(c);
-  else{c.step="permit 대기 (슬롯 없음)";ev(c,"permit 없음 — 순차 대기")}
-  relayout();
-}
-function runSub(c){
-  const parent=S.tasks.get(c.parent);
-  c.status="run";c.startedAt=c.startedAt||new Date();c.step="진행 중";
-  ev(c,"permit 획득 — 서브에이전트 시작 (탐색 sonnet·low → 구현 opus)");
-  after(c,c.ms,()=>{
-    if(c.status!=="run")return;
-    c.status="done";c.endedAt=new Date();c.step="완료";ev(c,"완료");S.usage+=USAGE.sub;
-    ev(parent,"← "+c.id+" SendMessage: 「"+c.title+"」 완료 보고",'{"from":"'+c.id+'","to":"'+parent.id+'","outcome":"accepted"}');
-    c.msgUntil=Date.now()+2200;animateEdges();setTimeout(refresh,2300);
-    checkEpicDone(parent);refresh();pumpQueue();
-  });
-}
-function checkEpicDone(t){
-  const kids=t.children.map(id=>S.tasks.get(id));
-  if(t.answered&&kids.length&&kids.every(c=>c&&c.status==="done")&&t.status==="run"){
-    after(t,1800,()=>{
-      if(t.status!=="run")return;
-      finish(t,"결제 개편 1단계 완료 — 서브 티켓 2건 병합, PR 3건 생성. 다음 단계는 티켓으로 등록했습니다.");
-    });
-  }
-}
-function spawnSmalls(){
-  return[spawnGeneric("README 오타 수정"),spawnGeneric("CHANGELOG 오타 수정")];
-}
-function spawnGeneric(text){
-  const title=text.length>22?text.slice(0,22)+"…":text;
-  return spawnTask({title,project:"docs",size:"small",
-    scenario(t){
-      runSteps(t,[
-        ["worktree 생성: relay-"+t.id.toLowerCase(),1200],
-        ["수정 적용 중",2400],
-        ["검증 중",1800],
-      ],()=>finish(t,"「"+t.title+"」 완료 — 커밋 1건."));
-    }});
-}
-
 /* ================= layout & graph ================= */
 const world=$("#world"),nodesBox=$("#nodes"),edgesSvg=$("#edges"),gwEl=$("#gw"),canvas=$("#canvas");
 function layout(){
@@ -479,7 +214,7 @@ function renderNodes(){
     n.className="node st-"+t.status+(t.sub?" sub":"")+(!t.sub&&t.status==="queue"?" queued":"")+(S.sel===t.id?" sel":"")+(fam.has(t.id)?" rel":"")+(n.dataset.fresh?" fresh":"");
     n.style.left=t.x+"px";n.style.top=t.y+"px";
     n.querySelector(".n-title").textContent=t.title;
-    let pillTxt=t.status==="run"&&S.paused?"정지됨":STATUS_LABEL[t.status];
+    let pillTxt=t.status==="run"&&S.paused?"정지됨":(t.statusLabel||STATUS_LABEL[t.status]);
     if(!t.sub&&t.status==="queue"){
       const qi=queuedTasks().filter(x=>!x.sub).indexOf(t);
       pillTxt="대기 "+(qi+1);
@@ -491,7 +226,7 @@ function renderNodes(){
     n.querySelector(".n-step").textContent=t.step;
     n.querySelector(".n-elapsed").textContent=elapsedText(t);
     n.querySelector(".br").textContent=t.sub?"":"relay-"+t.id.toLowerCase();
-    n.setAttribute("aria-label",t.title+" — "+STATUS_LABEL[t.status]);
+    n.setAttribute("aria-label",t.title+" — "+(t.statusLabel||STATUS_LABEL[t.status]));
   });
   $("#emptyHint").style.display=tasksArr().some(t=>t.status!=="closed")?"none":"flex";
 }
@@ -570,9 +305,9 @@ const sideMeta=t=>t.id+" · "+t.project+" · "+(elapsedText(t)||"—");
 function renderSidebar(){
   const fam=famOf(S.sel);
   const sb=$("#sidebar"),st=sb.scrollTop;sb.textContent="";
-  const pool=el("div","pool"+(S.usage>800000?" warn":""));
+  const pool=el("div","pool"+(S.usage>(S.dailyCeiling||1e6)*.8?" warn":""));
   const r1=el("div");r1.append(el("b",null,"에이전트 "+runningCount()+"/"+S.maxw),el("span",null," · 대기 "+tasksArr().filter(t=>t.status==="queue").length+(S.paused?" · ⏸ 일시정지":"")));
-  const r2=el("div");r2.append(el("span",null,"오늘 사용량 ≈ "),el("b",null,Math.round(S.usage/1000)+"k 토큰"),el("span",null," (추정)"+(S.usage>800000?" · 소프트 한도 초과":"")));
+  const r2=el("div");r2.append(el("span",null,"오늘 사용량 ≈ "),el("b",null,Math.round(S.usage/1000)+"k 토큰"),el("span",null," (추정)"+(S.usage>(S.dailyCeiling||1e6)*.8?" · 소프트 한도 초과":"")));
   pool.append(r1,r2);sb.append(pool);
   GROUPS.forEach(g=>{
     const list=tasksArr().filter(t=>!t.sub&&g.match(t));
@@ -614,16 +349,15 @@ function renderDetail(){
     rows.append(dd);return dd;
   };
   const pillWrap=el("span","st-"+t.status);
-  pillWrap.append(el("span","pill",STATUS_LABEL[t.status]));
+  pillWrap.append(el("span","pill",(t.statusLabel||STATUS_LABEL[t.status])));
   row("상태",pillWrap);
   row("ID",t.id,true);
   row("프로젝트",t.project,true);
-  row("크기",t.sub?"sub":t.size+" ("+SIZE_EFFORT[t.size]+")");
-  if(!t.sub)row("브랜치","worktree-relay-"+t.id.toLowerCase(),true);
-  row("세션",t.sid+(t.status==="run"||t.status==="wait"?" · 실행 중":t.status==="queue"?" · 대기":t.status==="done"?" · 유휴":" · 정지"),true);
+  row("크기",t.sub?"sub · "+t.agentType:t.size+" ("+t.model+"·"+t.effort+")");
+  if(!t.sub)row("브랜치",t.branch,true);
+  row("세션",t.sid+" · "+t.proc+" · gen "+t.gen+(t.attached?" · attach("+t.attached+")":""),true);
   row("시작",t.startedAt?clock(t.startedAt):"—",true);
   row("경과",elapsedText(t)||"—",true).dataset.el=t.id;
-  if(t.pending)row("큐잉됨",t.pending);
   const kin=(t.sub?[t.parent]:t.children).filter(id=>{const r=S.tasks.get(id);return r&&r.status!=="closed"});
   if(kin.length){ /* 같은 작업 단위 — 클릭하면 그쪽으로 이동 */
     const chips=el("div","chips");
@@ -647,22 +381,26 @@ function renderDetail(){
   if(!t.sub){
     const btns=el("div","d-btns");
     const b1=el("button","act","터미널에서 열기");
-    b1.addEventListener("click",()=>{const cmd=(t.status==="run"||t.status==="wait")?"claude attach "+t.sid:"claude --resume "+t.sid;navigator.clipboard&&navigator.clipboard.writeText(cmd).catch(()=>{});chatNote("클립보드에 복사: "+cmd)});
+    b1.addEventListener("click",()=>relay.attach(t));
     const b2=el("button","act","worktree 경로 복사");
-    b2.addEventListener("click",()=>{const pth="~/projects/"+t.project+"/.claude/worktrees/relay-"+t.id.toLowerCase();navigator.clipboard&&navigator.clipboard.writeText(pth).catch(()=>{});chatNote("클립보드에 복사: "+pth)});
+    b2.addEventListener("click",()=>{const pth=t.worktree||"(worktree 없음)";navigator.clipboard&&navigator.clipboard.writeText(pth).catch(()=>{});chatNote("클립보드에 복사: "+pth)});
     btns.append(b1,b2);body.append(btns);
     const acts=el("div","d-actions");
     if(t.status==="run"||t.status==="wait"){
       const b=el("button","act danger","중단");
       b.addEventListener("click",()=>stopTask(t));acts.append(b);
     }
-    if(t.status==="err"||t.status==="cancelled"){
+    if(t.status==="err"||t.status==="cancelled"||t.statusLabel==="검토 필요"){
       const b=el("button","act","재시작");
       b.addEventListener("click",()=>restartTask(t));acts.append(b);
     }
-    if(t.status==="done"||t.status==="err"||t.status==="cancelled"){
-      const b=el("button","act","보관");
-      b.addEventListener("click",()=>archiveTask(t));acts.append(b);
+    if(["done","err","cancelled"].includes(t.status)||t.statusLabel==="검토 필요"){
+      const b=el("button","act","보관");let armed=false; /* 2단계 확인 — worktree 정리는 되돌릴 수 없다 */
+      b.addEventListener("click",()=>{
+        if(!armed){armed=true;b.textContent="보관 확인 (worktree 정리)";b.classList.add("danger");return}
+        archiveTask(t);
+      });
+      acts.append(b);
     }
     if(acts.children.length)body.append(acts);
   }
@@ -931,8 +669,9 @@ function renderBanner(){
   const conn=$("#conn");conn.className="conn"+(S.conn==="reconnecting"?" off":S.conn==="replaying"?" sync":"");
   $("#connTxt").textContent=S.conn==="reconnecting"?"재연결 중":S.conn==="replaying"?"이벤트 재생 중":"연결됨";
   let msg="",cls="";
-  if(S.conn==="reconnecting"){msg="연결 끊김 — 서버에 재연결 중… (마지막 seq 120)";cls="err"}
-  else if(S.conn==="replaying"){msg="재연결됨 — 이벤트 재생 중 (from_seq 120 → 134)"}
+  if(S.conn==="reconnecting"){msg="연결 끊김 — 서버에 재연결 중… (마지막 seq "+(S.lastSeq||0)+")";cls="err"}
+  else if(S.conn==="replaying"){msg="재연결됨 — 이벤트 재생 중"}
+  else if(S.recovering){msg="relay 복구 중 — 세션 대조 후 명령을 재개합니다"}
   else if(S.paused){msg="⏸ 전역 일시정지 (kill switch) — 새 디스패치·슬롯 배정 중단, 실행 중 워커는 정지 요청됨"}
   const was=b.classList.contains("on");
   b.className=msg?"on "+cls:"";
@@ -942,20 +681,6 @@ function renderBanner(){
   b.append(el("span",null,msg));
   if(S.paused&&S.conn==="ok"){const r=el("button","act","재개");r.addEventListener("click",()=>togglePause());b.append(r)}
   setBh();
-}
-function togglePause(){ /* §5.4: 새 dispatch 중단 + 전 워커 claude stop, 해제 시 --resume으로 이어서 */
-  S.paused=!S.paused;
-  tasksArr().filter(t=>t.status==="run").forEach(t=>{
-    if(S.paused){pauseTimers(t);ev(t,"claude stop (kill switch)")}
-    else{resumeTimers(t);ev(t,"claude --resume (kill switch 해제)")}
-  });
-  if(!S.paused)pumpQueue();
-  refresh();renderBanner();chatNote(S.paused?"kill switch ON — 전역 일시정지":"kill switch OFF — 재개");
-}
-function simulateDisconnect(){
-  if(S.conn!=="ok")return;
-  S.conn="reconnecting";renderBanner();
-  setTimeout(()=>{S.conn="replaying";renderBanner();setTimeout(()=>{S.conn="ok";renderBanner();chatNote("재동기화 완료 — 누락 이벤트 14건 재생")},1300)},2500);
 }
 ncEl.addEventListener("click",e=>e.stopPropagation()); /* 패널 내부 클릭이 외부클릭 판정으로 새지 않게 */
 notifBtn.addEventListener("click",e=>{
@@ -985,6 +710,20 @@ function renderSettings(){
   $("#setAutofit").checked=S.autofit;
   $("#setDnd").checked=N.dnd;
   $("#setReduce").checked=S.reduce;
+  renderProjects();
+  $("#setInfo").textContent="게이트웨이 127.0.0.1:"+(location.port||80)+" · relay v"+(S.version||"—")+" · 전달: "+(S.delivery||"—");
+}
+function renderProjects(){ /* S.projects는 어댑터가 서버 projects.updated로 채운다 */
+  const box=$("#projList");box.textContent="";
+  const list=S.projects||[];
+  if(!list.length){box.append(el("div","group-empty","등록된 프로젝트가 없습니다"));return}
+  list.forEach(p=>{
+    const rowEl=el("div","set-proj");
+    const txt=el("div","txt");txt.append(el("div","tt",p.name),el("div","mm mono",p.path));
+    const x=el("button","nx","✕");x.setAttribute("aria-label",p.name+" 삭제");
+    x.addEventListener("click",()=>relay.removeProject(p.id));
+    rowEl.append(txt,x);box.append(rowEl);
+  });
 }
 $("#gearBtn").addEventListener("click",e=>{
   e.stopPropagation();
@@ -995,10 +734,16 @@ $("#gearBtn").addEventListener("click",e=>{
 $("#settings").addEventListener("click",e=>e.stopPropagation());
 document.querySelectorAll("#segTheme button").forEach(b=>b.addEventListener("click",()=>Theme.set(b.dataset.m)));
 document.querySelectorAll("#segLayout button").forEach(b=>b.addEventListener("click",()=>setGraphLayout(b.dataset.l)));
-$("#maxwDec").addEventListener("click",()=>{S.maxw=Math.max(1,S.maxw-1);renderSettings()});
-$("#maxwInc").addEventListener("click",()=>{S.maxw+=1;renderSettings();pumpQueue()});
+$("#maxwDec").addEventListener("click",()=>relay.setMax(S.maxw-1));
+$("#maxwInc").addEventListener("click",()=>relay.setMax(S.maxw+1));
 $("#setAutofit").addEventListener("change",e=>{S.autofit=e.target.checked});
 $("#setDnd").addEventListener("change",e=>{N.dnd=e.target.checked;renderNotif();renderSettings()});
+$("#projAdd").addEventListener("click",()=>{
+  const name=$("#projName").value.trim(),path=$("#projPath").value.trim();
+  if(!name||!path){chatNote("프로젝트 등록 실패: 이름과 경로가 필요합니다");return}
+  relay.registerProject({name,path,description:$("#projDesc").value.trim(),keywords:$("#projKw").value.split(",").map(k=>k.trim()).filter(Boolean)});
+  ["#projName","#projPath","#projDesc","#projKw"].forEach(sel=>{$(sel).value=""});
+});
 $("#setReduce").addEventListener("change",e=>{
   S.reduce=e.target.checked;
   document.documentElement.classList.toggle("reduce",S.reduce);
@@ -1091,11 +836,6 @@ const PAL={open:false,idx:0,list:[]};
 const palEl=$("#palette"),palInput=$("#palInput"),palList=$("#palList");
 function commands(){
   return [
-    {t:"① 일반 작업 실행",run:()=>send(PRESETS[1])},
-    {t:"② 후속 지시 실행",run:()=>send(PRESETS[2])},
-    {t:"③ 질문 실행",run:()=>send(PRESETS[3])},
-    {t:"④ 에픽 실행",run:()=>send(PRESETS[4])},
-    {t:"⑤ 소작업 ×2 실행",run:()=>send(PRESETS[5])},
     {t:"전체 보기 (fit)",run:fit},
     {t:"사이드바 토글",k:KEYS.toggleSidebar,run:()=>togglePanel("sb")},
     {t:"상세 패널 토글",k:KEYS.toggleDetail,run:()=>togglePanel("dt")},
@@ -1115,13 +855,12 @@ function commands(){
     {t:"설정 열기",run:()=>{SET.open=true;renderSettings()}},
     {t:"방해 금지 토글",run:()=>{N.dnd=!N.dnd;renderNotif();renderSettings()}},
     {t:"알림 모두 지우기",run:()=>{N.items.forEach(i=>clearTimeout(i.timer));N.items=[];renderNotif()}},
-    {t:"동시 실행 상한 +1",run:()=>{S.maxw+=1;renderSettings();pumpQueue()}},
-    {t:"동시 실행 상한 −1",run:()=>{S.maxw=Math.max(1,S.maxw-1);renderSettings();renderSidebar()}},
+    {t:"동시 실행 상한 +1",run:()=>relay.setMax(S.maxw+1)},
+    {t:"동시 실행 상한 −1",run:()=>relay.setMax(S.maxw-1)},
     {t:"새 태스크 자동 맞춤 토글",run:()=>{S.autofit=!S.autofit;renderSettings()}},
     {t:"애니메이션 감소 토글",run:()=>{S.reduce=!S.reduce;document.documentElement.classList.toggle("reduce",S.reduce);renderSettings()}},
     {t:"전역 일시정지 (kill switch) 토글",run:togglePause},
-    {t:"시뮬레이션: 연결 끊김 → 재동기화",run:simulateDisconnect},
-    {t:"시뮬레이션: 판단 실패 (fable timeout)",run:()=>send("(시뮬) 판단 실패 — 이 메시지는 dispatcher timeout을 재현합니다")},
+    {t:"프로젝트 등록…",run:()=>{SET.open=true;renderSettings();$("#projPath").focus()}},
     {t:"단축키 JSON 편집…",run:openKeysEd},
   ];
 }
@@ -1135,7 +874,7 @@ $("#palBtn").addEventListener("click",e=>{e.stopPropagation();togglePalette()});
 function closePalette(){PAL.open=false;palEl.classList.remove("open");palInput.blur()}
 function renderPal(){
   const q=palInput.value.trim().toLowerCase();
-  PAL.list=commands().filter(c=>!q||c.t.toLowerCase().includes(q));
+  PAL.list=commands().filter(c=>!q||q.split(/\s+/).every(n=>c.t.toLowerCase().includes(n)));
   if(PAL.idx>=PAL.list.length)PAL.idx=Math.max(0,PAL.list.length-1);
   palList.textContent="";
   if(!PAL.list.length){palList.append(el("div","pal-empty","일치하는 명령이 없습니다"));palInput.removeAttribute("aria-activedescendant");return}
@@ -1196,18 +935,11 @@ $("#chatForm").addEventListener("submit",e=>{
 input.addEventListener("keydown",e=>{
   if(e.key==="Enter"&&(e.isComposing||e.keyCode===229)){e.preventDefault()}
 });
-const PRESETS={
-  1:"auth 모듈 리팩토링 해줘",
-  2:"테스트도 추가해줘",
-  3:"지금 상태 어때?",
-  4:"결제 시스템 전면 개편 진행해줘",
-  5:"README랑 CHANGELOG 오타 수정해줘",
-};
-document.querySelectorAll(".preset").forEach(b=>{
-  b.addEventListener("click",()=>send(PRESETS[b.dataset.p]));
-});
+
+/* ================= module bridge ================= */
+/* 클래식 스크립트의 최상위 const는 window 속성이 아니다 — web/src/adapter.ts가 읽는 것만 노출한다
+   (el, chatUser, notify, relayout, refresh, select 등 함수 선언은 이미 전역 객체에 올라간다). */
+Object.assign(window,{S,N,DLOG,msgs,gwEl});
 
 /* ================= boot ================= */
-chatNote("relay 시뮬레이션 — 실제 에이전트는 실행되지 않습니다");
-chatMsg(null,"안녕하세요. 상단 프리셋 ①〜⑤를 누르거나 메시지를 보내면 접수 → 판단 → 실행 흐름을 볼 수 있습니다. ⌘⇧P(또는 헤더 ⌘ 버튼)로 명령 팔레트가 열립니다.");
 layout();refresh();fit();renderNotif();renderSettings();renderBanner(); /* 초기 화면도 태스크 있을 때와 같은 좌상단 앵커 */

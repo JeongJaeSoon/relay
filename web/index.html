@@ -443,6 +443,18 @@ input[type="checkbox"]{accent-color:var(--accent)}
 .step button:hover{background:var(--surface2)}
 .step b{font-size:var(--fs-body);min-width:14px;text-align:center}
 .set-info{padding:9px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:var(--fs-micro)}
+.set-projs{display:flex;flex-direction:column;max-height:132px;overflow:auto;border-top:1px solid var(--line)}
+.set-proj{display:flex;align-items:center;gap:8px;padding:6px 14px;font-size:var(--fs-small)}
+.set-proj+.set-proj{border-top:1px solid var(--line)}
+.set-proj .txt{min-width:0;flex:1}
+.set-proj .tt{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.set-proj .mm{color:var(--muted);font-size:var(--fs-micro);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.set-projf{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px;border-top:1px solid var(--line)}
+.set-projf input{
+  flex:1 1 46%;min-width:0;height:26px;padding:0 8px;border-radius:6px;
+  background:var(--surface2);border:1px solid var(--line-strong);color:var(--text);font-size:var(--fs-micro);font-family:inherit;
+}
+.set-projf button{flex:none}
 
 /* ---------- minimap ---------- */
 #minimap{
@@ -677,8 +689,17 @@ input[type="checkbox"]{accent-color:var(--accent)}
     <div class="set-row"><span>방해 금지 (토스트 억제)</span><input type="checkbox" id="setDnd"></div>
     <div class="set-row"><span>애니메이션 감소</span><input type="checkbox" id="setReduce"></div>
     <div class="set-row"><span>단축키</span><button class="act" id="keysBtn">JSON 편집…</button></div>
+    <div class="set-row"><span>프로젝트</span></div>
   </div>
-  <div class="set-info mono">게이트웨이 127.0.0.1:8787 · relay v0.1 데모</div>
+  <div class="set-projs" id="projList"></div>
+  <div class="set-projf">
+    <input id="projName" placeholder="이름" aria-label="프로젝트 이름">
+    <input id="projPath" placeholder="경로" aria-label="프로젝트 경로">
+    <input id="projDesc" placeholder="설명" aria-label="프로젝트 설명">
+    <input id="projKw" placeholder="키워드 (쉼표)" aria-label="프로젝트 키워드">
+    <button class="act" id="projAdd">등록</button>
+  </div>
+  <div class="set-info mono" id="setInfo">게이트웨이 127.0.0.1:8790</div>
 </div>
 <div id="palette" role="dialog" aria-modal="true" aria-label="명령 팔레트">
   <div class="pal-box">
