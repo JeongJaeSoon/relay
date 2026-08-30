@@ -71,7 +71,7 @@ Full data in `spikes/results/capabilities.json` (also copied to
 | # | verdict | evidence |
 |---|---|---|
 | ① gate | **PASS** | `GATE PASSED`; `bgResume: context-kept`; every required flag present; `--json-schema` → `structured_output`. launchd auth BLOCKED (see below) |
-| ② delivery | **PASS (go)** | socket delivery lands on an idle worker, burst 10/10 exactly once; a busy worker drops it, so busy/stopped go through `--bg --resume` |
+| ② delivery | **PASS (go)** | socket delivery lands on an idle worker and every burst frame is replied to; the busy case is unsettled (see below) and relay holds those sends to the turn boundary; stopped goes through `--bg --resume` |
 | ③ verdict | **PASS** | `RELAY: done/question/blocked` all parse from `last_assistant_message`; `background_tasks` populated; `AskUserQuestion` blocked |
 | ④ races | PASS (recorded) | supervisor restarts a `kill -9`'d worker in ~12s; `--bg --resume` forks a new session id; no `SubagentStop` when the parent is stopped; hooks lost during a 6s receiver outage |
 | ⑤ permit | PASS | `PreToolUse(Agent)` deny held subagents to 1 of 3; the worker did the rest sequentially |
@@ -96,6 +96,37 @@ Full data in `spikes/results/capabilities.json` (also copied to
 - A `PermissionRequest` payload has **no `tool_use_id`**; correlate with the preceding `PreToolUse`.
 - A `PermissionRequest` hook timeout **allows** the tool, so relay's auto-deny must fire first.
 - `claude rm` refuses (keeps the session) when the worktree has uncommitted or unpushed work.
+
+### ② delivery — what is settled and what is not
+
+Two instrumentation defects in the first runs produced conclusions that were later withdrawn. Both are
+fixed in `02-delivery-matrix.ts` (`assertSpikeTarget()`, a probe that actually listens on the socket it
+advertises as `from`, and a two-signal score `hook:yes|no/ack:yes|no`).
+
+**Settled:**
+
+- The socket carries **no ack frame** — the receiver never answers on the connection it received the frame on.
+- **`UserPromptSubmit` is not a delivery detector.** It fires only for a message that *starts* a turn. A frame
+  merged into a running turn is delivered and acted on and fires no hook at all — which is why one burst scored
+  8/10 and another 2/10 while all ten replies came back. Roadmap B3's "promote to `accepted` when the marker
+  appears in `UserPromptSubmit`" strands delivered mid-turn sends at `unknown`, which blocks their task queue.
+  relay's evidence ladder is: marker in `UserPromptSubmit` → marker in the worker's reply frame on relay's own
+  inbox socket → marker in the transcript tail.
+- **A reply carries no session id and no in-reply-to**, and a fresh `msg_id`. Sender identity resolves through
+  `from` → `~/.claude/sessions/<pid>.json` → `sessionId`. `from-name` is not an identity (⑦ measured two live
+  sessions sharing a name). `hop-chain` is stable across a chain and absent on the first reply — a
+  loop-detection id, never a message key.
+- **A reply to a dead `from` socket is not dropped** — the CLI delivers it to another registered peer. This was
+  measured by accident: the probe advertised a socket it never bound, and every reply landed in the only other
+  registered peer on the machine. relay registers as a peer, so it must listen on the socket it advertises and
+  must drop inbound frames that do not resolve to one of its own tasks.
+
+**Unsettled: whether a busy worker receives.** Mid-turn delivery acked once (run A, 12.9s, 2.7s before the turn
+ended) and was not reproduced. The runs that appeared to show failure were invalid — one used `\b` against text
+sitting inside JSON escapes, another had no busy window at all because the worker backgrounded its `sleep`. No
+valid run has shown a busy target failing to receive. relay does not wait on this: it holds a socket send to a
+busy worker until the turn boundary, which is correct whichever way the answer falls (a delay if delivery works,
+required if it does not), so further measurement would not change the code.
 
 ### Still needs the user
 
