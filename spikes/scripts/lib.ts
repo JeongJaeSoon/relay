@@ -1,5 +1,5 @@
 // spikes/scripts/lib.ts — shared helpers for Phase 0 spike scripts.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const SPIKES = new URL("../", import.meta.url).pathname;      // <repo>/spikes/
@@ -79,6 +79,38 @@ export function settings(port: number, events: string[] = ALL_EVENTS, extra: Rec
   }
   return JSON.stringify({ crossSessionInbound: "accept", hooks, ...extra });
 }
+
+/** Resolve a session's inbox socket. Measured 2026-08-30: `agents --json` has no pid for background rows, but every
+ *  session (background included) writes ~/.claude/sessions/<pid>.json with sessionId + messagingSocketPath + status. */
+export function peerRegistry(): any[] {
+  const dir = join(process.env.HOME ?? "", ".claude", "sessions");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => {
+    try { return JSON.parse(readFileSync(join(dir, f), "utf8")); } catch { return null; }
+  }).filter(Boolean);
+}
+export const peerSocketFor = (sessionId: string): string | null => peerRegistry().find((r) => r.sessionId === sessionId)?.messagingSocketPath ?? null;
+
+/** Send one line-delimited frame to a session inbox socket and collect whatever comes back within waitMs. */
+export async function socketSend(sockPath: string, frame: unknown, waitMs = 5000): Promise<{ replies: unknown[]; error: string | null }> {
+  const replies: unknown[] = []; let error: string | null = null;
+  await new Promise<void>((resolve) => {
+    let done = false; const fin = () => { if (!done) { done = true; resolve(); } };
+    Bun.connect({ unix: sockPath, socket: {
+      open(s) { s.write(JSON.stringify(frame) + "\n"); setTimeout(() => { s.end(); fin(); }, waitMs); },
+      data(_s, b) { for (const l of b.toString().split("\n").filter(Boolean)) { try { replies.push(JSON.parse(l)); } catch { replies.push({ unparsed: l }); } } },
+      close() { fin(); }, error(_s, e) { error = String(e); fin(); },
+    } }).catch((e) => { error = String(e); fin(); });
+  });
+  return { replies, error };
+}
+
+/** Build the measured cross-session frame (spikes/fixtures/peer-frames.json). */
+export const peerFrame = (fromSock: string, fromName: string, text: string) => ({
+  msgV: 1, msg_id: crypto.randomUUID(), type: "user",
+  message: { role: "user", content: `<cross-session-message from="uds:${fromSock}" from-name="${fromName}" from-mode="prompting">\n${text}\n</cross-session-message>` },
+  priority: "next", from: `uds:${fromSock}`,
+});
 
 /** Spawn the hook receiver and remember it, so bail() below never leaves a listener holding the port between runs. */
 const HOOKDS: { kill: (s?: number | NodeJS.Signals) => void }[] = [];

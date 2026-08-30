@@ -18,7 +18,7 @@
   },
   "advisorFlag": false,
   "restrictedFlag": true,
-  "updated_at": "2026-08-30T14:07:35.147Z",
+  "updated_at": "2026-08-30T14:28:25.551Z",
   "worktreeCreateHook": {
     "role": "provider",
     "observed": "session killed before init when the hook returns no path",
@@ -212,5 +212,49 @@
     "firstTerminalAt"
   ],
   "jobStateHasRespawnFlags": true,
-  "launchdAuth": "BLOCKED: not measured — `launchctl bootstrap` was refused by the permission system in this agent session. Run: sh spikes/scripts/01-launchd-auth.sh"
+  "launchdAuth": "BLOCKED: not measured — `launchctl bootstrap` was refused by the permission system in this agent session. Run: sh spikes/scripts/01-launchd-auth.sh",
+  "delivery": "socket",
+  "peerRegistration": true,
+  "socketInboundKeys": [
+    "msgV",
+    "msg_id",
+    "type",
+    "message.role",
+    "message.content",
+    "priority",
+    "from"
+  ],
+  "socketAuthLine": "optional — no auth line was sent and the frame was delivered (macOS)",
+  "socketDeliveryProof": "worker UserPromptSubmit received <cross-session-message …>[relay #test0001] say PONG</cross-session-message>",
+  "peerSocketResolution": "~/.claude/sessions/<pid>.json matched on sessionId → messagingSocketPath (agents --json has no pid for background rows)",
+  "sendMessageToolReportedFailure": "SendMessage from a claude session to the fake peer reported {success:false} even though the frame arrived — the sender expects an ack the spike peer did not produce",
+  "deliveryMatrix": {
+    "busy": "no-ack/not-arrived",
+    "idle": "no-ack/arrived",
+    "burst": "no-ack,no-ack,no-ack,no-ack,no-ack,no-ack,no-ack,no-ack,no-ack,no-ack arrived:10/10",
+    "stopped": "accepted/arrived"
+  },
+  "deliveryMethodTested": "socket",
+  "socketAck": "none — receiver never answers on the socket",
+  "bun": {
+    "compileOk": true,
+    "sizeBytes": 61003280,
+    "wsOk": true,
+    "sqliteOk": true,
+    "embedOk": true,
+    "spawnClaudeOk": true,
+    "mcpRoundTrip": true
+  },
+  "spool": {
+    "lossWithoutSpool": "see races.restartVsHookPost",
+    "accumulated": 5,
+    "drainAfterRestart": true,
+    "concurrent20": true,
+    "sigkillPartial": false,
+    "malformedQuarantined": true
+  },
+  "deliveryRule": "socket ONLY when the target session registry status is idle; a busy session silently drops the frame (measured twice, once with the connection held open 45s). For busy/stopped targets use the resume path: confirm stop, then `claude --bg --resume <uuid> \"<msg>\"`.",
+  "deliveryBusyOverSocket": "dropped — no ack, no UserPromptSubmit, no later delivery",
+  "deliveryBurst": "10/10 arrived, each exactly once, to an idle session — no dedupe needed and no loss",
+  "socketOutcomeSignal": "the `[relay #<id>]` marker in the worker UserPromptSubmit hook is the ONLY delivery evidence (no status frame exists), so roadmap B3 send(socket) must treat every send as `unknown` until the marker arrives"
 }
