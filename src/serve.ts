@@ -14,7 +14,7 @@ import { Dispatcher, type RunClaude } from "./dispatcher/dispatcher.ts";
 import { NativeSessionRunner } from "./runner/native.ts";
 import type { AgentRunner } from "./runner/runner.ts";
 import { buildSettingsJson, relayBin, workerEnv } from "./runner/settings.ts";
-import { loadCapabilities } from "./runner/capabilities.ts";
+import { currentCliVersion, driftWarns, loadCapabilities, showVersion, versionDrift, versionOk } from "./runner/capabilities.ts";
 import { frameText, loadPeerFixture, markersIn, PeerServer, sessionIdForSocket, socketPathForSession } from "./runner/peer.ts";
 import { PermissionPolicy } from "./guard/permission.ts";
 import { Spool } from "./hooks/spool.ts";
@@ -49,6 +49,18 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   let hub!: WsHub; let foreign: ForeignSessions | undefined;
   const evlog = new EventLog(db, (f) => hub.broadcast(f), cfg); hub = new WsHub(() => evlog, cfg, db, () => foreign?.list() ?? []);
   const caps = loadCapabilities(); setMeta(db, "delivery_method", caps.delivery); setMeta(db, "version", VERSION); setMeta(db, "log_dir", paths.logDir); setMeta(db, "oauth_fallback", oauth ? "1" : "0");
+  // Everything relay knows about the CLI was measured once, into capabilities.json. A `claude update` since then can
+  // turn into quiet misbehaviour, so say so — but never block the boot and never re-probe: the probe spawns a real
+  // background session and spends subscription usage, which is the user's call, not a service restart's.
+  const cliVersion = await currentCliVersion(cfg.claude_bin); const drift = versionDrift(caps.cli_version, cliVersion);
+  setMeta(db, "cli_drift", driftWarns(drift) ? `${showVersion(caps.cli_version)} → ${showVersion(cliVersion)}` : "");
+  if (driftWarns(drift)) log.warn("claude CLI version drift — capabilities.json was measured against another build and may no longer describe this CLI; `relay doctor --probe` re-checks the --bg --resume gate against it", { probed: caps.cli_version, current: cliVersion, drift });
+  // Independent of the drift check above: that one asks whether this is the CLI we measured, this one whether the CLI
+  // is supported at all. A CLI below the floor still drifts `unknown` — and so stays silent above — whenever
+  // capabilities.json was never measured. Warn only — refusing to start under launchd means exit 0 into the
+  // service-failed path, which is indistinguishable from a crashed service; `relay doctor` and `relay setup` already
+  // refuse where a human is watching.
+  if (!versionOk(cliVersion)) log.warn(`claude CLI ${cliVersion || "version unreadable"} — relay requires 2.1.251 or newer; workers can fail at spawn on flags this build may not have (--bg, --agent, --settings, --json-schema). Run \`claude update\`.`, { current: cliVersion, floor: "2.1.251" });
   if (!getMeta(db, "relay_instance_id")) setMeta(db, "relay_instance_id", crypto.randomUUID()); const instanceId = () => getMeta(db, "relay_instance_id")!;
   const maxAgents = () => Number(getMeta(db, "max_concurrent_agents") ?? cfg.max_concurrent_agents);
   const baseEnv = () => workerEnv({ taskUuid: "", port: cfg.port, hookToken: "", oauthToken: oauth, maxAgents: maxAgents() });

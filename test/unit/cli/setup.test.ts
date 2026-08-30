@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseVersion, versionOk, tomlStringify, planAgentInstall, discoverRepos } from "../../../src/cli/setup.ts";
+import { parseVersion, versionOk, tomlStringify, planAgentInstall, discoverRepos, probeReason } from "../../../src/cli/setup.ts";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,4 +23,16 @@ test("discoverRepos finds repos one and two levels down, and never descends into
 
   const found = discoverRepos(root).map((p) => p.slice(root.length + 1)).sort();
   expect(found).toEqual(["project/kollegium", "project/relay", "semapad"]);
+});
+
+// Gating the probe on the capabilities file merely existing meant `relay setup` after a `claude update` — the
+// obvious thing to do — kept the stale measurements forever.
+test("the wizard probes when nothing is measured, re-probes on drift, and stays quiet when the CLI matches", () => {
+  expect(probeReason(false, "unknown", "2.1.251 (Claude Code)")).toBe("missing");
+  expect(probeReason(true, "2.1.251", "2.4.0 (Claude Code)")).toBe("drift");     // minor bump: re-measure
+  expect(probeReason(true, "2.1.251", "3.0.0")).toBe("drift");
+  expect(probeReason(true, "2.1.251", "2.1.299")).toBe("drift");                 // and a patch bump too: this CLI releases there
+  expect(probeReason(true, "2.1.251", "2.1.251 (Claude Code)")).toBeNull();      // in sync: no session, no usage
+  expect(probeReason(true, "2.1.299", "2.1.299")).toBeNull();                    // the gate's own stamp: a probed CLI is not re-probed every run
+  expect(probeReason(true, "unknown", "2.1.251")).toBeNull();                    // an unreadable version is not evidence of drift
 });

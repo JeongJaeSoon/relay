@@ -45,7 +45,7 @@ relay open            # http://127.0.0.1:8790
 relay doctor              # 사람이 읽는 요약, 실패 항목엔 해결 명령
 relay doctor --json       # 스크립트용
 relay doctor --service    # 같은 점검을 launchd 안에서 다시 실행해 [service] 접두로 병합
-relay doctor --probe      # CLI capability 재검사 → capabilities.json 갱신
+relay doctor --probe      # `--bg --resume` 게이트만 재측정 → capabilities.json의 bgResume/delivery 갱신
 ```
 
 `--service`가 중요한 이유: PATH와 Keychain 문제는 로그인 셸에서는 보이지 않고 서비스

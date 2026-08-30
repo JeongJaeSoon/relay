@@ -449,6 +449,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
 .step button:hover{background:var(--surface2)}
 .step b{font-size:var(--fs-body);min-width:14px;text-align:center}
 .set-info{padding:9px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:var(--fs-micro)}
+.set-drift{color:var(--c-wait)}
 .set-projs{display:flex;flex-direction:column;max-height:132px;overflow:auto;border-top:1px solid var(--line)}
 .set-proj{display:flex;align-items:center;gap:8px;padding:6px 14px;font-size:var(--fs-small)}
 .set-proj+.set-proj{border-top:1px solid var(--line)}
@@ -708,6 +709,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
     <button class="act" id="projAdd">Register</button>
   </div>
   <div class="set-info mono" id="setInfo">Gateway 127.0.0.1:8790</div>
+  <div class="set-info set-drift mono" id="setDrift" hidden></div>
 </div>
 <div id="palette" role="dialog" aria-modal="true" aria-label="Command palette">
   <div class="pal-box">

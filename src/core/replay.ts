@@ -4,7 +4,7 @@ import type { EventEnvelope } from "@shared/types.ts";
 import type { Config } from "../config.ts";
 import { applyProjection } from "./projections.ts";
 const PROJECTIONS = ["tasks", "messages", "commands", "process_instances", "permit_leases", "ws_frames", "projects"];
-const KEEP_META = ["schema_version", "relay_instance_id", "max_concurrent_agents", "delivery_method", "version", "log_dir", "oauth_fallback", "recovering"];   // operational keys are not event-sourced
+const KEEP_META = ["schema_version", "relay_instance_id", "max_concurrent_agents", "delivery_method", "version", "log_dir", "oauth_fallback", "cli_drift", "recovering"];   // operational keys are not event-sourced
 /** Wipes projection tables and re-applies events in seq order inside one transaction. Returns the number of events replayed. */
 export function rebuildProjections(db: Database, cfg: Config): number {
   let n = 0;
