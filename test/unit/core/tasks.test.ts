@@ -43,7 +43,7 @@ describe("TaskService", () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
     const t = s.db.query("select uuid from tasks").get() as any; s.hook(t.uuid, { hook_event_name: "SessionStart", source: "startup" });
     s.svc.applyDecision(s.userMsg("테스트도"), { action: "route_to_task", task_id: "T-01", prompt: "테스트도 추가해", confidence: "high" }); await s.settle();
-    expect(s.runner.calls.map((c) => c.kind)).toEqual(["spawn", "stop", "resume", "stop", "rm"]);   // the trailing pair is the reap of the session the fork superseded
+    expect(s.runner.calls.map((c) => c.kind)).toEqual(["spawn", "stop", "resume", "stop"]);   // the trailing stop reaps the superseded session; removing it waits for close, since the fork shares its worktree
     s.hook(t.uuid, { hook_event_name: "SessionStart", source: "resume" }); s.hook(t.uuid, { ...(stopDone as any) }); expect(loadTask(s.db, t.uuid)!.status).toBe("done");
     s.svc.applyDecision(s.userMsg("하나 더"), { action: "route_to_task", task_id: "T-01", prompt: "하나 더", confidence: "high" }); await s.settle();
     expect(loadTask(s.db, t.uuid)!.status).toBe("starting"); expect(s.lastStart()).toBe("resume"); expect(s.permits.active()).toBe(1);
@@ -91,7 +91,7 @@ describe("TaskService", () => {
     s.runner.calls.length = 0;
     s.svc.close(t); await s.outbox.run(t);
     expect(loadTask(s.db, t)!.status).toBe("closed");
-    expect(s.runner.calls.map((c) => `${c.kind} ${c.args}`)).toEqual(["stop g3", "rm g3", "stop g1", "stop g2", "rm g1", "rm g2"]);   // nothing is removed before it is stopped
+    expect(s.runner.calls.map((c) => `${c.kind} ${c.args}`)).toEqual(["stop g3", "stop g1", "stop g2", "rm g3", "rm g1", "rm g2"]);   // every session stopped before any is removed — they share one worktree
     expect([...s.runner.rows.keys()]).toEqual([]);                                                    // none left registered with the CLI
     expect(s.db.query("select count(*) c from commands where state<>'applied'").get()).toEqual({ c: 0 });   // I5: a closed task keeps no pending commands
   });

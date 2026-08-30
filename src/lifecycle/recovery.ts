@@ -56,7 +56,8 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
     report.orphans.push(t.uuid);
     if (row && !d.db.query("select 1 from commands where task_uuid=? and kind='stop' and state in ('pending','running')").get(t.uuid)) d.outbox.enqueue(t.uuid, `recovery-stop:${now()}`, { kind: "stop", reason: "recovery: orphan session" });
     if (row && t.status === "closed" && !d.db.query("select 1 from commands where task_uuid=? and kind='rm' and state in ('pending','running')").get(t.uuid)) d.outbox.enqueue(t.uuid, `recovery-rm:${now()}`, { kind: "rm" });
-    d.outbox.reap(t, "recovery: superseded generation", t.status === "closed");   // same rule as the rm two lines up: a cancelled task keeps its worktree on purpose
+    d.outbox.reapStops(t, "recovery: superseded generation");
+    if (t.status === "closed") d.outbox.reapRms(t);                              // same rule as the rm two lines up: a cancelled task keeps its worktree on purpose
   }
   for (const c of d.db.query("select uuid, agent_id from tasks where parent_uuid is not null and status='running'").all() as any[]) { const parent = d.db.query("select process_state from tasks where uuid=(select parent_uuid from tasks where uuid=?)").get(c.uuid) as any; if (parent?.process_state !== "alive") { d.log.emit({ type: "task.status_changed", task_uuid: c.uuid, payload: { status: "done", patch: { status: "done", ended_at: now() } } }); d.permits.release(`agent:${c.agent_id}`, "recovery"); } }
   // ③ permits
