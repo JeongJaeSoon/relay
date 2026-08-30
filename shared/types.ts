@@ -1,0 +1,96 @@
+// shared/types.ts — canonical domain types shared by server, CLI and dashboard.
+export type TaskStatus =
+  | "queued" | "starting" | "running" | "waiting_input"
+  | "done" | "needs_review" | "error" | "cancelled" | "closed";
+export type ProcessState = "none" | "starting" | "alive" | "stopped" | "crashed";
+export type TurnState = "idle" | "busy";
+export type AttachState = "none" | "leased" | "attached";
+export type TaskSize = "small" | "normal" | "epic";
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+export type DeliveryMethod = "socket" | "resume";   // no print fallback: a worker is always a supervisor-owned `claude --bg` session (roadmap C9)
+export type SendOutcome = "accepted" | "held" | "refused" | "unknown";
+
+export interface Project {
+  id: string; name: string; path: string; description: string;
+  keywords: string[]; base_ref: "fresh" | "head"; is_git: boolean; created_at: number;
+}
+
+export interface TaskQuestion {
+  text: string; options: string[]; asked_at: number;
+  source: "marker" | "permission"; permission_tool_use_id?: string;
+}
+
+export interface Task {
+  uuid: string; num: number; display_id: string;            // display_id = "T-08" (표시 전용)
+  project_id: string; title: string; status: TaskStatus;
+  size: TaskSize; effort: Effort; model: string;
+  session_id: string | null; short_id: string | null;       // Claude session UUID / `claude agents` short id
+  worktree_path: string | null; branch: string | null; base_sha: string | null;
+  process_state: ProcessState; process_generation: number;
+  turn_state: TurnState; attach_state: AttachState; attached_by: string | null;
+  paused: boolean;                                          // kill switch가 정지시킨 실행 중 태스크
+  last_summary: string | null; last_step: string | null;    // last_step = 노드 라이브 캡션(최근 도구명·요약)
+  question: TaskQuestion | null;
+  parent_uuid: string | null; agent_id: string | null; agent_type: string | null; // 서브에이전트 의사 태스크
+  queued_at: number | null; qhead: boolean;
+  started_at: number | null; ended_at: number | null;
+  created_at: number; updated_at: number; closed_at: number | null;
+  usage_tokens: number;                                     // transcript 합산 추정치
+  summary_json: TaskSummary | null;                         // 보존 정리(90일) 후 남는 요약(04 retention)
+}
+export interface TaskSummary { v: 1; status: TaskStatus; usage_tokens: number; events: number; commands: Record<string, number>; last_summary: string | null; digest: string; swept_at: number }
+
+export type MessageRole = "user" | "system" | "worker_summary" | "dispatcher_answer" | "question" | "error";
+export type MessageSource = "user" | "cli" | "mcp" | "github" | "slack" | "cron";
+export type DispatchState = "pending" | "deciding" | "dispatched" | "fastpath" | "needs_confirm" | "failed" | "direct";
+
+export interface DispatchDecision {
+  action: "new_task" | "route_to_task" | "answer_directly" | "close_task";
+  task_id?: string; project?: string; title?: string; size?: TaskSize;
+  prompt?: string; answer?: string; confidence: "high" | "low";
+}
+
+export interface Message {
+  id: string; role: MessageRole; source: MessageSource;
+  client_message_id: string | null; dispatch_state: DispatchState;
+  text: string; task_uuid: string | null; reply_to_task_uuid: string | null;
+  dispatch_json: DispatchDecision | null; dispatch_error: string | null;
+  chain_prev_id: string | null;                            // 직전 판단 메시지(문맥 체인, B6)
+  created_at: number;
+}
+
+export interface EventEnvelope {
+  v: 1;                                                     // envelope schema version (upcasters live in projections.ts)
+  seq: number; event_id: string; type: string; task_uuid: string | null;
+  source_session_id: string | null; source_event_id: string | null;
+  process_generation: number | null; turn_id: string | null; tool_use_id: string | null;
+  causation_id: string | null; occurred_at: number; recorded_at: number;
+  payload: unknown; truncated: boolean; blob_id: string | null;   // blob_id → blobs table row holding the full (redacted) payload when truncated
+}
+
+export type CommandKind = "spawn" | "send" | "stop" | "resume" | "rm";
+export type CommandState = "pending" | "running" | "applied" | "failed" | "unknown";
+export interface Command {
+  id: string; task_uuid: string; kind: CommandKind; payload: unknown;
+  state: CommandState; attempts: number; created_at: number; applied_at: number | null; error: string | null;
+}
+
+export interface SystemState {
+  paused: boolean; recovering: boolean; max_concurrent_agents: number;
+  running: number; queued: number; leases: number;
+  today_tokens: number; daily_ceiling: number | null; delivery_method: DeliveryMethod;
+  version: string; log_dir: string; oauth_fallback: boolean;   // 운영 정보(설정 패널 하단): 로그 위치, 서비스 인증 폴백 여부
+}
+
+// One event can produce several frames; they share `seq` and are numbered by `idx`. The client cursor is (seq, idx).
+export type WsFrame =
+  | { seq: number; idx: number; type: "hello"; as_of_seq: number; state: SystemState }
+  | { seq: number; idx: number; type: "chat.message"; message: Message }
+  | { seq: number; idx: number; type: "dispatch.updated"; message: Message }
+  | { seq: number; idx: number; type: "task.created"; task: Task }
+  | { seq: number; idx: number; type: "task.updated"; task: Task }
+  | { seq: number; idx: number; type: "task.event"; task_uuid: string; event: EventEnvelope }
+  | { seq: number; idx: number; type: "system.state"; state: SystemState }
+  | { seq: number; idx: number; type: "projects.updated"; projects: Project[] };
+
+export interface TasksSnapshot { as_of_seq: number; tasks: Task[]; projects: Project[]; state: SystemState; messages: Message[] }
