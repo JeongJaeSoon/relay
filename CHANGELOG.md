@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.1
+
+The product speaks English, and a project root must be a git repository.
+
+- **English throughout.** Every user-facing string — CLI output, dashboard, chat, notifications,
+  dispatcher answers, MCP tool results — is English. The Korean *input*-matching patterns stay:
+  reading English labels does not stop anyone typing `상태?`, and the status fast path must still
+  catch it.
+- **A project root must be a git repository.** Registering a plain directory produced a project
+  with no worktree per task and widened the guard's realpath boundary from one repository to the
+  whole tree. `POST /api/projects` now rejects it — that is the boundary the dashboard form posts
+  through too. Projects registered before the rule are left alone and flagged by `relay doctor`.
+- **Point setup at a parent directory.** A non-repository path is scanned two levels deep for
+  repositories and offers them for selection, instead of being registered as one bad project.
+- **A real terminal UI for `relay setup`** (`@clack/prompts`): arrow-key multiselect for the
+  discovered repositories, spinners on the two probes that take a minute each, Ctrl-C as a cancel.
+  Prompts render only on a TTY — clack blocks forever on a closed stdin, so `--yes` and service
+  contexts take defaults and draw nothing.
+- `relay` with no arguments prints help instead of starting a server and provisioning
+  `~/.config/relay`.
+- Ship the MIT license the formula already claimed.
+
 ## 0.1.0
 
 First release.

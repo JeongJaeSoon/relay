@@ -1,7 +1,7 @@
 class Relay < Formula
   desc "Multi-agent orchestrator for Claude Code sessions with dashboard and CLI"   # <= 80 chars (brew audit)
   homepage "https://github.com/JeongJaeSoon/relay"
-  version "0.1.0"
+  version "0.1.1"
   license "MIT"
 
   on_arm do
