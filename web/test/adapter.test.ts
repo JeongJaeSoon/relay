@@ -23,6 +23,8 @@ test("badgeParts follows dispatch_state; dlogEntry mirrors the demo's rail; clos
   expect(badgeParts(m("direct", { task_uuid: "u1" }), c)).toMatchObject({ kind: "↪ Reply", task: { id: "T-03" } });
   expect(dlogEntry(m("deciding"), c)).toMatchObject({ messageId: "m1", status: "judging" });
   expect(dlogEntry(m("dispatched", { task_uuid: "u1", dispatch_json: { action: "route_to_task" } }), c)).toMatchObject({ status: "done", result: { action: "route_to_task", ids: ["T-03"] } });
+  expect(badgeParts(m("dispatched", { task_uuid: "u1", dispatch_json: { action: "split", task_ids: ["T-03", "T-04"] } }), c)).toMatchObject({ kind: "dispatcher", parts: ["split", "2", "T-03 T-04"] });
+  expect(dlogEntry(m("dispatched", { task_uuid: "u1", dispatch_json: { action: "split", task_ids: ["T-03", "T-04"] } }), c)).toMatchObject({ result: { action: "split", ids: ["T-03", "T-04"] } });
   expect(dlogEntry(m("failed", { dispatch_error: "timeout" }), c).result).toMatchObject({ action: "failed", note: "timeout" });
   expect(closeConfirmUuid("Close T-03 auth? [close confirm: POST /api/tasks/3f2a-uuid/close]")).toBe("3f2a-uuid"); expect(closeConfirmUuid("hello")).toBeNull();
 });

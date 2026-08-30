@@ -32,12 +32,12 @@ export function badgeParts(m: Message, ctx: Ctx): { kind: string; parts: string[
     case "needs_confirm": return { kind: "dispatcher", parts: ["Needs confirm"], judging: false };
     case "failed": return { kind: "dispatcher", parts: [`failed · ${m.dispatch_error ?? ""}`], retry: true, judging: false };
     case "direct": return { kind: "↪ Reply", parts: [], task, judging: false };
-    default: return { kind: "dispatcher", parts: d ? [d.action, ...(d.size ? [d.size] : []), ...(d.project ? [d.project] : [])] : [], task, judging: false };
+    default: return { kind: "dispatcher", parts: d ? (d.action === "split" ? ["split", String(d.task_ids?.length ?? 0), (d.task_ids ?? []).join(" ")] : [d.action, ...(d.size ? [d.size] : []), ...(d.project ? [d.project] : [])]) : [], task, judging: false };
   }
 }
 export function dlogEntry(m: Message, ctx: Ctx) {
   const st = m.task_uuid ? ctx.tasks[m.task_uuid] : null; const d = m.dispatch_json; const judging = m.dispatch_state === "pending" || m.dispatch_state === "deciding";
-  const result = judging ? null : m.dispatch_state === "failed" ? { action: "failed", note: m.dispatch_error ?? "failed" } : m.dispatch_state === "fastpath" ? { action: "fast-path", note: "instant answer (0 LLM calls)" } : m.dispatch_state === "needs_confirm" ? { action: d?.action ?? "needs_confirm", note: "needs confirm" } : { action: d?.action ?? (m.dispatch_state === "direct" ? "reply" : "—"), ids: st ? [st.display_id] : [] };
+  const result = judging ? null : m.dispatch_state === "failed" ? { action: "failed", note: m.dispatch_error ?? "failed" } : m.dispatch_state === "fastpath" ? { action: "fast-path", note: "instant answer (0 LLM calls)" } : m.dispatch_state === "needs_confirm" ? { action: d?.action ?? "needs_confirm", note: "needs confirm" } : { action: d?.action ?? (m.dispatch_state === "direct" ? "reply" : "—"), ids: d?.task_ids ?? (st ? [st.display_id] : []) };
   return { id: m.id, messageId: m.id, text: m.text, status: judging ? "judging" as const : "done" as const, result };
 }
 export function eventLine(e: EventEnvelope): DemoEvent {

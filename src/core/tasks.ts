@@ -1,7 +1,7 @@
 // src/core/tasks.ts — orchestration around tasks: decisions → tasks/commands, verdicts → statuses, user actions.
 import type { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
-import type { DispatchDecision, Message, Task, TaskQuestion, TaskSize } from "@shared/types.ts";
+import type { DispatchDecision, DispatchItem, Message, Task, TaskQuestion, TaskSize } from "@shared/types.ts";
 import type { Config } from "../config.ts";
 import { now } from "./clock.ts";
 import { EventLog, loadMessage, loadTask, type EmitInput } from "./events.ts";
@@ -14,11 +14,14 @@ import type { Outbox } from "../lifecycle/outbox.ts";
 import { cancelPermissions, type IngestDeps, type PendingPermission } from "../hooks/ingest.ts";
 import type { Dispatcher } from "../dispatcher/dispatcher.ts";
 import { getMeta } from "../db/db.ts";
+import { splitGuard } from "../dispatcher/schema.ts";
 
 interface Deps { db: Database; log: EventLog; cfg: Config; permits: PermitPool; scheduler: Scheduler; outbox: Outbox; projectNameOf: (id: string) => string; pendingPermissions: Map<string, PendingPermission> }
 /** 8 hex chars embedded as `[relay #xxxxxxxx]`; the worker echoes it back through UserPromptSubmit so relay can confirm delivery. */
 const marker = () => randomBytes(4).toString("hex");
 const markerFor = (key: string) => createHash("sha256").update(key).digest("hex").slice(0, 8);
+/** One item of a decision, planned but not yet emitted: `created` must be emitted before `rest` (task rows are a FK for the chat rows and commands that follow). */
+type TaskPlan = { uuid: string; display_id: string; created: EmitInput[]; rest: EmitInput[]; kick: boolean };
 const sysMsg = (text: string, taskUuid: string | null = null): MessageInput => ({ id: ulid(), role: "system", source: "user", client_message_id: null, dispatch_state: "direct", text, task_uuid: taskUuid, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() });
 
 export class TaskService {
@@ -46,30 +49,80 @@ export class TaskService {
     const badgeIn: EmitInput = { type: "message.received", payload: badge };
     switch (dec.action) {
       case "new_task": {
-        const proj = this.d.db.query("select id from projects where name=? or id=?").get(dec.project ?? "", dec.project ?? "") as any;
-        if (!proj) return this.needsConfirm(msg, dec, `project ${dec.project} not registered`);
-        const size: TaskSize = dec.size ?? "normal"; const uuid = newUuid(); const num = (this.d.db.query("select coalesce(max(num),0)+1 n from tasks where parent_uuid is null").get() as any).n; const t = now();
-        const task: Task = { uuid, num, display_id: displayId(num), project_id: proj.id, title: dec.title ?? msg.text.slice(0, 24), status: "queued", size, effort: this.d.cfg.worker.effort[size], model: this.d.cfg.worker.model,
-          session_id: null, short_id: null, worktree_path: null, branch: null, base_sha: null, process_state: "none", process_generation: 0, turn_state: "idle", attach_state: "none", attached_by: null, paused: false,
-          last_summary: null, last_step: null, question: null, parent_uuid: null, agent_id: null, agent_type: null, queued_at: t, qhead: false, started_at: null, ended_at: null, created_at: t, updated_at: t, closed_at: null, usage_tokens: 0, summary_json: null };
-        const spawn = this.d.outbox.commandInput(uuid, msg.id, { kind: "spawn", spec: this.spec(task, `[relay #${markerFor(msg.id)}] ${task.display_id} · project=${this.d.projectNameOf(proj.id)} · size=${size}\n\n${dec.prompt ?? msg.text}`) });
-        this.d.log.emitMany([{ type: "task.created", task_uuid: uuid, causation_id: msg.id, payload: task }, done({ task_uuid: uuid }), badgeIn, { type: "message.received", task_uuid: uuid, payload: chatFor("started", task, "", this.d.projectNameOf(proj.id)) }, spawn.input]);   // task row first (FK), then the message patch, badge, started chat, spawn
+        const p = this.planNewTask(msg, dec, msg.id, 0);
+        if ("error" in p) return this.needsConfirm(msg, dec, p.error);
+        this.d.log.emitMany([...p.created, done({ task_uuid: p.uuid }), badgeIn, ...p.rest]);   // task row first (FK), then the message patch, badge, started chat, spawn
         void this.d.scheduler.pump(); return;
       }
       case "route_to_task": {
         const t = this.byDisplay(dec.task_id!); if (!t) return this.needsConfirm(msg, dec, `task ${dec.task_id} not found`);
         if (t.status === "error") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); return this.needsConfirm(msg, null, `${t.display_id} is in the error state — restart it first`); }
         if (t.status === "waiting_input" && t.question?.source === "permission") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); this.answer(t.uuid, dec.prompt ?? msg.text, null); return; }
-        const send = this.d.outbox.commandInput(t.uuid, msg.id, { kind: "send", text: dec.prompt ?? msg.text, marker: marker(), message_id: msg.id });
-        const inputs: EmitInput[] = [done({ task_uuid: t.uuid }), badgeIn];
-        if (t.status === "waiting_input") inputs.push({ type: "question.answered", task_uuid: t.uuid, causation_id: msg.id, payload: { text: dec.prompt ?? msg.text, patch: { question: null } } });
-        inputs.push(send.input);
-        if (["done", "needs_review", "cancelled", "waiting_input"].includes(t.status)) inputs.push({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: "queued", patch: { status: "queued", queued_at: now(), qhead: true, ended_at: null } } });
-        this.d.log.emitMany(inputs); this.d.outbox.kick(t.uuid); void this.d.scheduler.pump(); return;
+        const p = this.planRoute(msg, dec, t, msg.id);
+        this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn, ...p.rest]); this.d.outbox.kick(t.uuid); void this.d.scheduler.pump(); return;
       }
       case "answer_directly": { this.d.log.emitMany([done(), badgeIn, { type: "message.received", payload: { ...sysMsg(dec.answer ?? ""), role: "dispatcher_answer" } }]); return; }
       case "close_task": { const t = this.byDisplay(dec.task_id!); if (!t) return this.needsConfirm(msg, dec, `task ${dec.task_id} not found`); this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn, { type: "message.received", task_uuid: t.uuid, payload: sysMsg(`Close ${t.display_id} ${t.title}? [close confirm: POST /api/tasks/${t.uuid}/close]`, t.uuid) }]); return; }
+      case "split": return this.applySplit(msg, dec, done);
     }
+  }
+
+  /** Design C: one message becomes several tasks. Every guardrail is checked and every item is planned BEFORE the
+   *  first emit, so a split either lands whole through one emitMany or never starts — half of it dispatched with the
+   *  rest silently dropped is the worst outcome available (C.4.2, C.4.3). */
+  private applySplit(msg: Message, dec: DispatchDecision, done: (extra?: Partial<Message>) => EmitInput) {
+    const refused = splitGuard(dec, this.d.cfg.dispatcher.max_split);
+    if (refused) return this.needsConfirm(msg, dec, refused);
+    const plans: TaskPlan[] = []; let newTasks = 0;
+    for (const [i, it] of dec.items!.entries()) {
+      const at = `split item ${i + 1}`; const key = `${msg.id}:${i}`;
+      if (it.action === "new_task") {
+        const p = this.planNewTask(msg, it, key, newTasks++);
+        if ("error" in p) return this.needsConfirm(msg, dec, `${at}: ${p.error}`);
+        plans.push(p); continue;
+      }
+      const t = this.byDisplay(it.task_id!);
+      if (!t) return this.needsConfirm(msg, dec, `${at}: task ${it.task_id} not found`);
+      if (t.status === "error") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is in the error state — restart it first`);
+      if (t.status === "waiting_input" && t.question?.source === "permission") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is waiting on a permission answer — answer it first`);
+      if (plans.some((p) => p.uuid === t.uuid)) return this.needsConfirm(msg, dec, `${at}: ${t.display_id} appears twice in one split`);
+      plans.push(this.planRoute(msg, it, t, key));
+    }
+    const ids = plans.map((p) => p.display_id);
+    this.d.log.emitMany([
+      ...plans.flatMap((p) => p.created),                                                   // task rows first: the message patch, the chat rows and the commands below all reference them
+      done({ task_uuid: plans[0].uuid, dispatch_json: { ...dec, task_ids: ids } }),         // C.4.4: messages.task_uuid holds one value — the first — and dispatch_json carries the whole list
+      { type: "message.received", payload: sysMsg(`dispatcher · split · ${plans.length} · ${ids.join(" ")}`) },
+      ...plans.flatMap((p) => p.rest),
+    ]);
+    for (const p of plans) if (p.kick) this.d.outbox.kick(p.uuid);
+    void this.d.scheduler.pump();
+  }
+
+  /** Plans a task without emitting. `key` makes the spawn command and its delivery marker unique per item; `numOffset`
+   *  keeps `num` unique when a split allocates several task rows against one `max(num)` read. */
+  private planNewTask(msg: Message, it: DispatchItem | DispatchDecision, key: string, numOffset: number): TaskPlan | { error: string } {
+    const proj = this.d.db.query("select id from projects where name=? or id=?").get(it.project ?? "", it.project ?? "") as any;
+    if (!proj) return { error: `project ${it.project} not registered` };
+    const size: TaskSize = it.size ?? "normal"; const uuid = newUuid(); const num = (this.d.db.query("select coalesce(max(num),0)+1 n from tasks where parent_uuid is null").get() as any).n + numOffset; const t = now();
+    const task: Task = { uuid, num, display_id: displayId(num), project_id: proj.id, title: it.title ?? msg.text.slice(0, 24), status: "queued", size, effort: this.d.cfg.worker.effort[size], model: this.d.cfg.worker.model,
+      session_id: null, short_id: null, worktree_path: null, branch: null, base_sha: null, process_state: "none", process_generation: 0, turn_state: "idle", attach_state: "none", attached_by: null, paused: false,
+      last_summary: null, last_step: null, question: null, parent_uuid: null, agent_id: null, agent_type: null, queued_at: t, qhead: false, started_at: null, ended_at: null, created_at: t, updated_at: t, closed_at: null, usage_tokens: 0, summary_json: null };
+    const spawn = this.d.outbox.commandInput(uuid, key, { kind: "spawn", spec: this.spec(task, `[relay #${markerFor(key)}] ${task.display_id} · project=${this.d.projectNameOf(proj.id)} · size=${size}\n\n${it.prompt ?? msg.text}`) });
+    return { uuid, display_id: task.display_id, created: [{ type: "task.created", task_uuid: uuid, causation_id: msg.id, payload: task }],
+      rest: [{ type: "message.received", task_uuid: uuid, payload: chatFor("started", task, "", this.d.projectNameOf(proj.id)) }, spawn.input], kick: false };
+  }
+
+  /** The plain follow-up path, shared by route_to_task and a split's route items. The caller has already ruled out the
+   *  two diversions (error state, held permission question) that are not a plain send. */
+  private planRoute(msg: Message, it: DispatchItem | DispatchDecision, t: Task, key: string): TaskPlan {
+    const text = it.prompt ?? msg.text;
+    const send = this.d.outbox.commandInput(t.uuid, key, { kind: "send", text, marker: marker(), message_id: msg.id });
+    const rest: EmitInput[] = [];
+    if (t.status === "waiting_input") rest.push({ type: "question.answered", task_uuid: t.uuid, causation_id: msg.id, payload: { text, patch: { question: null } } });
+    rest.push(send.input);
+    if (["done", "needs_review", "cancelled", "waiting_input"].includes(t.status)) rest.push({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: "queued", patch: { status: "queued", queued_at: now(), qhead: true, ended_at: null } } });
+    return { uuid: t.uuid, display_id: t.display_id, created: [], rest, kick: true };
   }
   needsConfirm(msg: Message, dec: DispatchDecision | null, reason: string) {
     const active = this.d.db.query("select display_id, title from tasks where parent_uuid is null and status not in ('closed') order by updated_at desc limit 6").all() as any[];
