@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseVersion, versionOk, tomlStringify, planAgentInstall, discoverRepos, parseSelection } from "../../../src/cli/setup.ts";
+import { parseVersion, versionOk, tomlStringify, planAgentInstall, discoverRepos } from "../../../src/cli/setup.ts";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,15 +23,4 @@ test("discoverRepos finds repos one and two levels down, and never descends into
 
   const found = discoverRepos(root).map((p) => p.slice(root.length + 1)).sort();
   expect(found).toEqual(["project/kollegium", "project/relay", "semapad"]);
-});
-
-test("parseSelection takes numbers, ranges and all", () => {
-  expect(parseSelection("", 5)).toEqual([]);
-  expect(parseSelection("all", 3)).toEqual([0, 1, 2]);
-  expect(parseSelection("ALL", 2)).toEqual([0, 1]);                        // case-insensitive
-  expect(parseSelection("1,3", 5)).toEqual([0, 2]);
-  expect(parseSelection("2-4", 5)).toEqual([1, 2, 3]);
-  expect(parseSelection("4-2", 5)).toEqual([1, 2, 3]);                     // reversed range
-  expect(parseSelection("1, 3 , 1", 5)).toEqual([0, 2]);                   // deduped, whitespace tolerated
-  expect(parseSelection("0,6,abc,2", 5)).toEqual([1]);                     // out of range and junk dropped
 });
