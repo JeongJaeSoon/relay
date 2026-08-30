@@ -49,3 +49,8 @@ First release.
   registered.
 - `claude rm` refusing to remove a session whose worktree holds uncommitted or unpushed work is
   expected, not an error.
+- A worker reads its inbox socket mid-turn, so a send goes straight through whether the worker is
+  busy or idle; only the resume path waits for a turn boundary.
+- `UserPromptSubmit` fires only for a message that starts a turn, so it cannot prove a send landed.
+  A socket send is never optimistically `accepted`: the `[relay #<id>]` marker is the only proof,
+  found in `UserPromptSubmit`, in the worker's reply frame, or in the transcript.
