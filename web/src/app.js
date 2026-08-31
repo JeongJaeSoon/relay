@@ -26,7 +26,7 @@ Theme.init();
 /* ================= state ================= */
 const ROW_H=128, SUB_ROW=102, COL_TASK=312, COL_SUB=596, ROW_Y0=40;
 const COL_FOREIGN=900, FOREIGN_ROW=104; /* column for sessions relay did not start: never joined to the gateway by an edge */
-const S={tasks:new Map(),foreign:new Map(),sel:null,fsel:null,maxw:10, /* 기본 10, 상한 없음(초과 시 소프트 경고) */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
+const S={tasks:new Map(),foreign:new Map(),sel:null,fsel:null,maxw:10, /* default 10, no hard cap — going over is a soft warning */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
 const STATUS_LABEL={run:"Running",wait:"Needs input",queue:"Queued",done:"Done",err:"Error",cancelled:"Cancelled",closed:"Archived"};
 
 const tasksArr=()=>[...S.tasks.values()];
@@ -321,9 +321,10 @@ const sideMeta=t=>t.id+" · "+t.project+" · "+(elapsedText(t)||"—");
 function renderSidebar(){
   const fam=famOf(S.sel);
   const sb=$("#sidebar"),st=sb.scrollTop;sb.textContent="";
-  const pool=el("div","pool"+(S.usage>(S.dailyCeiling||1e6)*.8?" warn":""));
+  const overSoft=S.dailyCeiling!=null&&S.usage>S.dailyCeiling*.8;   // no ceiling configured means no limit to be over — the old 1e6 default invented one and warned forever
+  const pool=el("div","pool"+(overSoft?" warn":""));
   const r1=el("div");r1.append(el("b",null,"Agents "+runningCount()+"/"+S.maxw),el("span",null," · queued "+tasksArr().filter(t=>t.status==="queue").length+(S.paused?" · ⏸ paused":"")));
-  const r2=el("div");r2.append(el("span",null,"Today ≈ "),el("b",null,Math.round(S.usage/1000)+"k tok"),el("span",null," (est.)"+(S.usage>(S.dailyCeiling||1e6)*.8?" · over the soft limit":"")));
+  const r2=el("div");r2.append(el("span",null,"Today ≈ "),el("b",null,Math.round(S.usage/1000)+"k tok"),el("span",null," (est.)"+(overSoft?" · over the soft limit":"")));
   pool.append(r1,r2);sb.append(pool);
   GROUPS.forEach(g=>{
     const list=tasksArr().filter(t=>!t.sub&&g.match(t));
@@ -785,7 +786,7 @@ function renderSettings(){
   $("#setInfo").textContent="Gateway 127.0.0.1:"+(location.port||80)+" · relay v"+(S.version||"—")+" · delivery: "+(S.delivery||"—");
   const dr=$("#setDrift");dr.textContent=S.cliDrift?"⚠ claude CLI changed since capabilities were measured ("+S.cliDrift+") — relay doctor --probe re-checks the --bg --resume gate against it":"";dr.hidden=!S.cliDrift;
 }
-function renderProjects(){ /* S.projects는 어댑터가 서버 projects.updated로 채운다 */
+function renderProjects(){ /* S.projects is filled by the adapter from the server's projects.updated */
   const box=$("#projList");box.textContent="";
   const list=S.projects||[];
   if(!list.length){box.append(el("div","group-empty","No projects registered"));return}
@@ -1020,4 +1021,4 @@ input.value=localStorage.getItem(DRAFT)||"";autogrow(); /* a long message surviv
 Object.assign(window,{S,N,DLOG,msgs,gwEl});
 
 /* ================= boot ================= */
-layout();refresh();fit();renderNotif();renderSettings();renderBanner(); /* 초기 화면도 태스크 있을 때와 같은 좌상단 앵커 */
+layout();refresh();fit();renderNotif();renderSettings();renderBanner(); /* the empty screen anchors top-left the same way a populated one does */
