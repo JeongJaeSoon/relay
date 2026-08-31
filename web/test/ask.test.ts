@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { ASK_PREFIX, isAsk, markAsk, stripAsk } from "@shared/ask.ts";
+import { isAsk, stripAsk } from "@shared/ask.ts";
 import { sendMessage } from "../src/api.ts";
 import { badgeParts } from "../src/adapter.ts";
 import { requestRows } from "../src/ledger.ts";
@@ -12,10 +12,10 @@ const capture = () => {
   return bodies;
 };
 
-test("the marker round-trips and is idempotent", () => {
+test("the ? gesture is recognised and stripped", () => {
   expect(isAsk("? why")).toBe(true); expect(isAsk("?why")).toBe(true); expect(isAsk("why?")).toBe(false);
   expect(stripAsk("?  why did T-02 fail")).toBe("why did T-02 fail");
-  expect(markAsk("why")).toBe(`${ASK_PREFIX}why`); expect(markAsk(markAsk("why"))).toBe(markAsk("why"));
+  expect(stripAsk(stripAsk("? why"))).toBe("why");
 });
 
 test("the ? prefix and the Ask toggle send the same request", async () => {
@@ -40,12 +40,13 @@ test("the task panel's button scopes the question; a reply is never turned into 
   expect(bodies[2].ask).toBeUndefined(); expect(bodies[2].ask_task_id).toBeUndefined();
 });
 
-test("a question is shown as its question text with an ask chip", () => {
-  const m = (text: string, st = "dispatched"): any => ({ id: "m1", role: "user", source: "user", client_message_id: "c", dispatch_state: st, text, task_uuid: null, reply_to_task_uuid: null, dispatch_json: { action: "answer_directly", answer: "a" }, dispatch_error: null, chain_prev_id: null, created_at: 1 });
+test("the ask chip reads the declaration, not the text", () => {
+  const m = (text: string, ask = false, st = "dispatched"): any => ({ id: "m1", role: "user", source: "user", client_message_id: "c", dispatch_state: st, text, task_uuid: null, reply_to_task_uuid: null, ask, dispatch_json: { action: "answer_directly", answer: "a" }, dispatch_error: null, chain_prev_id: null, created_at: 1 });
   const ctx = { projects: [], tasks: {} } as any;
-  expect(badgeParts(m(`${ASK_PREFIX}why did T-02 fail`), ctx).parts).toEqual(["ask", "answer_directly"]);
+  expect(badgeParts(m("why did T-02 fail", true), ctx).parts).toEqual(["ask", "answer_directly"]);
   expect(badgeParts(m("refactor auth"), ctx).parts).toEqual(["answer_directly"]);
-  expect(badgeParts(m(`${ASK_PREFIX}상태?`, "fastpath"), ctx).parts).toEqual(["ask", "fast-path"]);
-  // The rail that showed this is now the request ledger; the prefix is a keyboard gesture and must not reach it.
-  expect(requestRows([m(`${ASK_PREFIX}why did T-02 fail`)], {})[0].text).toBe("why did T-02 fail");
+  expect(badgeParts(m("상태?", true, "fastpath"), ctx).parts).toEqual(["ask", "fast-path"]);
+  expect(badgeParts(m("? please fix the parser"), ctx).parts).toEqual(["answer_directly"]);   // a body that merely starts with ? is not a question
+  // The rail that showed this is now the request ledger; a prefix left on an older row must not reach it.
+  expect(requestRows([m("? why did T-02 fail", true)], {})[0].text).toBe("why did T-02 fail");
 });

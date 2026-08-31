@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { ASK_PREFIX } from "@shared/ask.ts";
 import { buildTestApp, decide } from "../../helpers/app.ts";
 
-const textOf = (db: any, id: string) => (db.query("select text from messages where id=?").get(id) as any).text;
+const rowOf = (db: any, id: string) => db.query("select * from messages where id=?").get(id) as any;
+const textOf = (db: any, id: string) => rowOf(db, id).text;
 const post = async (req: any, body: unknown) => ((await (await req("POST", "/api/messages", body)).json()) as any).message_id as string;
 
 describe("Ask mode — POST /api/messages", () => {
@@ -10,8 +10,8 @@ describe("Ask mode — POST /api/messages", () => {
     const { req, db } = await buildTestApp();
     const a = await post(req, { text: "why did T-02 fail", ask: true, client_message_id: "c1" });
     const b = await post(req, { text: "? why did T-02 fail", client_message_id: "c2" });
-    expect(textOf(db, a)).toBe(`${ASK_PREFIX}why did T-02 fail`);
-    expect(textOf(db, b)).toBe(textOf(db, a));
+    expect(rowOf(db, a)).toMatchObject({ text: "why did T-02 fail", ask: 1 });   // the gesture is stripped; the declaration is the column
+    expect(rowOf(db, b)).toMatchObject({ text: "why did T-02 fail", ask: 1 });
   });
   test("a question never reaches the routing path, even when the model keeps returning new_task", async () => {
     const s = await buildTestApp(decide({ action: "new_task", project: "myapp", title: "auth", size: "normal", prompt: "p", confidence: "high" }));
@@ -24,13 +24,13 @@ describe("Ask mode — POST /api/messages", () => {
   test("ask is ignored on a reply — the answer reaches the worker verbatim", async () => {
     const { req, db, seedTask } = await buildTestApp(); const uuid = seedTask("waiting_input", { turn_state: "idle", question: { text: "a or b?", options: ["a", "b"], asked_at: 1, source: "marker" } });
     const id = await post(req, { text: "a", ask: true, reply_to_task_id: uuid, client_message_id: "r" });
-    expect(textOf(db, id)).toBe("a");
+    expect(rowOf(db, id)).toMatchObject({ text: "a", ask: 0 });
   });
   test("ask_task_id scopes the question to a task without answering it", async () => {
     const s = await buildTestApp(); const uuid = s.seedTask("running");
     const id = await post(s.req, { text: "why is it stuck", ask_task_id: uuid, client_message_id: "s1" }); await s.settle(120);
     const m = s.db.query("select * from messages where id=?").get(id) as any;
-    expect(m.text).toBe(`${ASK_PREFIX}why is it stuck`);
+    expect(m.text).toBe("why is it stuck"); expect(m.ask).toBe(1);
     expect(m.task_uuid).toBe(uuid);                                        // the target survives a restart
     expect(m.reply_to_task_uuid).toBeNull();                               // not a reply: nothing is delivered to the worker
     expect(m.dispatch_state).toBe("dispatched");                           // it went through the dispatcher, not into the task
@@ -47,14 +47,29 @@ describe("Ask mode — POST /api/messages", () => {
     await post(s.req, { text: "why is it stuck", ask_task_id: uuid, client_message_id: "s2" }); await s.settle(120);
     expect(s.db.query("select count(*) c from commands where task_uuid=?").get(uuid)).toEqual({ c: before });
   });
-  test("the ? prefix is a keyboard gesture: only a person typing gets it", async () => {
-    const { req, db } = await buildTestApp();
-    const gh = await post(req, { text: "? why does the build fail", source: "github", client_message_id: "g1" });
-    expect((db.query("select text from messages where id=?").get(gh) as any).text).toBe("? why does the build fail");   // stored verbatim, dispatched as work
-    const cli = await post(req, { text: "? why does the build fail", source: "cli", client_message_id: "g2" });
-    expect((db.query("select text from messages where id=?").get(cli) as any).text).toBe(`${ASK_PREFIX}why does the build fail`);
-    const declared = await post(req, { text: "why does the build fail", ask: true, source: "github", client_message_id: "g3" });
-    expect((db.query("select text from messages where id=?").get(declared) as any).text).toBe(`${ASK_PREFIX}why does the build fail`);   // an explicit declaration works from anywhere
+  // The rule this pins is what dispatch DID with the message, not just what was stored: the intent travels as
+  // `messages.ask`, so a body that merely starts with `?` cannot become a question anywhere downstream.
+  test("a ? body from a non-typing source is work: stored verbatim AND routed as work", async () => {
+    const s = await buildTestApp(decide({ action: "new_task", project: "myapp", title: "auth", size: "normal", prompt: "p", confidence: "high" }));
+    for (const source of ["github", "slack", "cron", "mcp"] as const) {
+      const id = await post(s.req, { text: "? please fix the parser", source, client_message_id: `w-${source}` }); await s.settle(120);
+      const m = rowOf(s.db, id);
+      expect(m).toMatchObject({ text: "? please fix the parser", ask: 0, dispatch_state: "dispatched" });   // verbatim, and never a question
+      expect(JSON.parse(m.dispatch_json).action).toBe("new_task");
+    }
+    expect(s.db.query("select count(*) c from tasks").get()).toEqual({ c: 4 });   // the work reached the routing path from every source
+  });
+  test("a declared question is answered, from a typed ? or an explicit ask on any source", async () => {
+    const s = await buildTestApp(decide({ answer: "the parser build is fine." }));
+    const cli = await post(s.req, { text: "? why does the build fail", source: "cli", client_message_id: "g2" });
+    const declared = await post(s.req, { text: "why does the build fail", ask: true, source: "github", client_message_id: "g3" });
+    await s.settle(150);
+    for (const id of [cli, declared]) {
+      const m = rowOf(s.db, id);
+      expect(m).toMatchObject({ text: "why does the build fail", ask: 1, dispatch_state: "dispatched" });   // an explicit declaration works from anywhere
+      expect(JSON.parse(m.dispatch_json).action).toBe("answer_directly");
+    }
+    expect(s.db.query("select count(*) c from tasks").get()).toEqual({ c: 0 });
   });
   test("a bare ? is not a question", async () => {
     const { req } = await buildTestApp();

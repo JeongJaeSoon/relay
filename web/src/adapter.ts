@@ -35,11 +35,11 @@ export function toDemoForeign(f: ForeignSession): DemoForeign {
     kind: f.kind === "bg" ? "background" : f.kind ?? "", pid: f.pid, startedAt: f.started_at ? new Date(f.started_at) : null, firstSeen: new Date(f.first_seen), lastSeen: new Date(f.last_seen) };
 }
 const demoOf = (uuid: string | null | undefined): DemoTask | undefined => { if (!uuid) return undefined; const t = store.state.tasks[uuid]; return t ? D.S?.tasks?.get(t.display_id) ?? undefined : undefined; };
-/** The question text as the user typed it: the Ask marker is the wire's business, not the reader's. */
+/** The question as the user typed it. New rows are stored without the `?`; rows written before it moved into `ask` still carry one. */
 const plain = (text: string) => (isAsk(text) ? stripAsk(text) : text);
 export function badgeParts(m: Message, ctx: Ctx): { kind: string; parts: string[]; task?: DemoTask; retry?: boolean; judging: boolean } {
   const b = stateBadges(m, ctx);
-  return isAsk(m.text) ? { ...b, parts: ["ask", ...b.parts] } : b;               // Ask mode stays visible on the row it produced
+  return m.ask ? { ...b, parts: ["ask", ...b.parts] } : b;                       // the same field the dispatcher reads, not a re-read of the text
 }
 function stateBadges(m: Message, ctx: Ctx): { kind: string; parts: string[]; task?: DemoTask; retry?: boolean; judging: boolean } {
   const st = m.task_uuid ? ctx.tasks[m.task_uuid] : null; const task: DemoTask | undefined = st ? ((D.S?.tasks?.get(st.display_id) as DemoTask | undefined) ?? { ...toDemoTask(st, ctx), events: [], timers: [], x: 0, y: 0 }) : undefined; const d = m.dispatch_json;

@@ -4,8 +4,8 @@ import type { Message, MessageSource, Task, TaskStatus } from "@shared/types.ts"
 import { isAsk, stripAsk } from "@shared/ask.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
 
-/** The `?` prefix is a keyboard gesture, not part of what the user asked — the composer strips it before POSTing,
- *  but the CLI and the API accept it inline, so a stored request can still carry it. */
+/** The `?` prefix is a keyboard gesture, not part of what the user asked — the gateway strips it before storing,
+ *  but rows written before the declaration moved into `ask` still carry one. */
 const plain = (text: string) => (isAsk(text) ? stripAsk(text) : text);
 
 /** What happened to the request. Read off dispatch_state and the dispatcher's recorded decision — nothing is guessed. */

@@ -14,7 +14,7 @@ export function rowToTask(r: any): Task {
   return { ...rest, paused: !!r.paused, qhead: !!r.qhead, question: J(question_json), summary_json: J(summary_json) };
 }
 export const loadTask = (db: Database, uuid: string): Task | null => { const r = db.query("select * from tasks where uuid=?").get(uuid); return r ? rowToTask(r) : null; };
-export const rowToMessage = (r: any): Message => ({ ...r, dispatch_json: J(r.dispatch_json) });
+export const rowToMessage = (r: any): Message => ({ ...r, ask: !!r.ask, dispatch_json: J(r.dispatch_json) });
 export const loadMessage = (db: Database, id: string): Message | null => { const r = db.query("select * from messages where id=?").get(id); return r ? rowToMessage(r) : null; };
 export const rowToProject = (r: any): Project => ({ ...r, keywords: J(r.keywords_json) ?? [], is_git: !!r.is_git });
 export const loadProjects = (db: Database): Project[] => db.query("select * from projects order by name").all().map(rowToProject);
@@ -96,8 +96,8 @@ export function applyProjection(db: Database, ev: EventEnvelope, cfg: Config): F
     case ev.type === "permit.rebound": db.run("update permit_leases set holder_id=? where holder_id=? and released_at is null", [p.to, p.from]); break;
     case ev.type === "message.received": {
       const m = p as Message;
-      db.run("insert into messages(id,role,source,client_message_id,dispatch_state,text,task_uuid,reply_to_task_uuid,dispatch_json,dispatch_error,chain_prev_id,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?)",
-        [m.id, m.role, m.source, m.client_message_id, m.dispatch_state, m.text, m.task_uuid, m.reply_to_task_uuid, m.dispatch_json ? JSON.stringify(m.dispatch_json) : null, m.dispatch_error, m.chain_prev_id ?? null, m.created_at]);
+      db.run("insert into messages(id,role,source,client_message_id,dispatch_state,text,task_uuid,reply_to_task_uuid,ask,dispatch_json,dispatch_error,chain_prev_id,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [m.id, m.role, m.source, m.client_message_id, m.dispatch_state, m.text, m.task_uuid, m.reply_to_task_uuid, m.ask ? 1 : 0, m.dispatch_json ? JSON.stringify(m.dispatch_json) : null, m.dispatch_error, m.chain_prev_id ?? null, m.created_at]);
       frames.push({ type: "chat.message", message: loadMessage(db, m.id)! }); if (m.role === "user") frames.push({ type: "dispatch.updated", message: loadMessage(db, m.id)! }); break;
     }
     case ev.type.startsWith("dispatch."): { if (p.patch) patchMessage(db, p.message_id, p.patch); msgFrame(p.message_id, !!p.chat); break; }

@@ -1,7 +1,7 @@
 // Regressions for defects the plan-02 Task 1-4 code shipped with (found in review of PR #1).
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { migrate } from "../../../src/db/db.ts";
+import { migrate, SCHEMA_VERSION } from "../../../src/db/db.ts";
 import { EventLog } from "../../../src/core/events.ts";
 import { capPayload, redact } from "../../../src/core/redact.ts";
 
@@ -82,8 +82,8 @@ test("settings.changed cannot write meta keys the runtime owns", () => {
   const log = new EventLog(db);
   log.emit({ type: "settings.changed", payload: { schema_version: 99, kill_switch: "1", max_concurrent_agents: 4 } });
   const meta = (k: string) => (db.query("select value from meta where key=?").get(k) as any)?.value ?? null;
-  expect(meta("schema_version")).toBe("1");
+  expect(meta("schema_version")).toBe(String(SCHEMA_VERSION));
   expect(meta("kill_switch")).toBeNull();
   expect(meta("max_concurrent_agents")).toBe("4");
-  expect(migrate(db)).toEqual({ from: 1, to: 1 });                          // still migratable
+  expect(migrate(db)).toEqual({ from: SCHEMA_VERSION, to: SCHEMA_VERSION });   // still migratable
 });
