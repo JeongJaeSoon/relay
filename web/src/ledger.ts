@@ -86,28 +86,65 @@ const replyKindOf = (m: Message): ReplyKind | null =>
 /** Which reply a request is owed. `answered` counts even when the decision already carries the answer text: the row
  *  was still emitted, so it has to be consumed here or it shifts onto the next request. */
 const awaitedBy = (d: Disposition): ReplyKind | null => (d === "needs_confirm" ? "prompt" : d === "answered" || d === "fastpath" ? "answer" : null);
+/** A reply aimed at a task, which TaskService answers inside the HTTP handler instead of handing to the dispatcher.
+ *  routes.ts:61 records one as `direct` with its target in reply_to_task_uuid and never enqueues it, and it is the
+ *  only writer of that field — so this separates an off-chain request from a chain one exactly. */
+const offChain = (m: Message) => m.reply_to_task_uuid !== null;
 
 /**
- * Links each dispatcher reply to the request it answers. Not by position: the dispatcher decides one message at a
- * time on a global chain (Dispatcher.enqueue), while a message is recorded the moment it arrives — and a decision is
- * a `claude -p` call plus a possible retry, so it takes seconds. A second request sent inside that window is
- * therefore recorded *before* the first request's reply, and "everything up to the next request" hands request B the
- * answer to A. That is the default with two requests in flight, not a rare race.
+ * Links each dispatcher reply to the request it answers.
  *
- * A reply row carries no task_uuid and no causation id, so nothing in the snapshot links it back. What does hold is
- * the order: a serial chain replies in the order the requests were made. So replies are claimed in order — the k-th
- * reply of a kind goes to the k-th request still awaiting that kind. A reply nothing is waiting for is dropped
- * (needsConfirm() also fires for a follow-up that never was a chat row), and a request whose reply never came keeps
- * its fallback — the snapshot is the newest 200 messages by created_at, so a request in it has its later reply too.
+ * Not by position: the dispatcher decides one message at a time on a global chain (Dispatcher.enqueue), while a
+ * message is recorded the moment it arrives — and a decision is a `claude -p` call plus a possible retry, so it takes
+ * seconds. A second request sent inside that window is recorded *before* the first request's reply, and "everything
+ * up to the next request" hands request B the answer to A. That is the default with two requests in flight, not a
+ * rare race. A reply row carries no task_uuid and no causation id, so nothing on it links it back.
+ *
+ * What does hold is the order — but only for the replies the chain produces, so there are two passes:
+ *
+ *  1. The one confirmation that never touches the chain: an answer aimed at a task in the error state. routes.ts
+ *     records the message and TaskService.answer() runs through to needsConfirm() synchronously in the same HTTP
+ *     handler, so this prompt is written while chain requests are still inside `claude -p` — ahead of prompts for
+ *     requests made long before it. In the shared queue it would take the oldest waiting request's prompt and shift
+ *     every later claim, which is worse than the positional bug it replaces: instead of one row degrading to its own
+ *     candidate, every row confidently shows someone else's reason. So it is matched on adjacency and kept out of
+ *     the queue. Adjacency is sound here and nowhere else — needsConfirm() emits the prompt in the same tick as the
+ *     message, with no other message row between them.
+ *  2. Everything the chain produced, claimed in order: the k-th reply of a kind goes to the k-th request still
+ *     awaiting that kind. A reply nothing is waiting for is dropped.
+ *
+ * Both passes rest on a request in an awaiting state always having its reply row — which holds because needsConfirm(),
+ * applyDecision() and the fast path each emit the state patch and the reply row through one emitMany, and because the
+ * snapshot is the newest 200 messages by created_at, so a request inside that window has its later reply inside it
+ * too. That is a property of those emitters, not something this file can enforce: a new one that patches the state
+ * and emits its reply separately would strand a request at the head of the queue and shift every later claim.
  */
 function claimReplies(ordered: Message[]): Map<string, Message> {
-  const waiting: Record<ReplyKind, Message[]> = { answer: [], prompt: [] };
   const claimed = new Map<string, Message>();
+  const taken = new Set<string>();                                             // reply rows already spoken for
+  for (let i = 0; i < ordered.length; i++) {                                   // 1 — off-chain confirmations, on adjacency
+    const m = ordered[i];
+    if (m.role !== "user" || !offChain(m) || awaitedBy(dispositionOf(m)) !== "prompt") continue;
+    // Strictly the neighbouring row, never a scan: nothing is emitted between the message and its prompt, so a
+    // prompt further along belongs to the chain and taking it would be the misattribution this pass exists to avoid.
+    const free = (n: Message | undefined): n is Message => !!n && replyKindOf(n) === "prompt" && !taken.has(n.id);
+    // The prompt goes out in the same tick, so it sorts right after the message — unless the two share a millisecond
+    // and ulid()'s non-monotonic tiebreak flips them, which is why the row before is checked first and only when it
+    // shares that millisecond. Missing it only degrades this row to its fallback; it never mislabels it.
+    const next = ordered[i + 1]; const prev = ordered[i - 1];
+    const near = free(prev) && prev.created_at === m.created_at ? prev : free(next) ? next : null;
+    if (near) { claimed.set(m.id, near); taken.add(near.id); }
+  }
+  const waiting: Record<ReplyKind, Message[]> = { answer: [], prompt: [] };    // 2 — the chain's replies, in order
   for (const m of ordered) {
-    if (m.role === "user") { const k = awaitedBy(dispositionOf(m)); if (k) waiting[k].push(m); continue; }
-    const kind = replyKindOf(m); if (!kind) continue;
+    if (m.role === "user") {
+      if (offChain(m)) continue;                                               // claimed above, and never queued
+      const k = awaitedBy(dispositionOf(m)); if (k) waiting[k].push(m);
+      continue;
+    }
+    const kind = replyKindOf(m); if (!kind || taken.has(m.id)) continue;
     const req = waiting[kind].shift();
-    if (req) claimed.set(req.id, m);
+    if (req) { claimed.set(req.id, m); taken.add(m.id); }
   }
   return claimed;
 }

@@ -235,3 +235,39 @@ test("a split's failed piece answers with its own outcome, not the first piece's
   expect(r).toMatchObject({ taskId: "T-02", state: "Error", st: "err", answerKind: "error" });
   expect(r.answer).toBe("✖ T-02 라이프사이클 — Session ended (other) — use Restart to --resume");
 });
+
+// Not every needs_confirm comes off the dispatcher chain. POST /api/messages with reply_to_task_id records the
+// message as `direct` and calls TaskService.answer() synchronously in the same handler (routes.ts:61-62); if the
+// target task is in the error state that runs through to needsConfirm(), so the prompt is written while chain
+// requests are still inside `claude -p`. Feeding it to the shared FIFO is worse than the positional bug it replaces:
+// one row degrading to its own candidate becomes every row confidently showing someone else's reason.
+test("a reply to an errored task keeps its own reason and takes nothing from the chain", () => {
+  const chain = (id: string, at: number, tid: string) => msg({ id, created_at: at, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: tid, confidence: "high" } });
+  const sys = (at: number, text: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text });
+  const reply = (id: string, at: number) => msg({ id, created_at: at, dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
+  const ERR = "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 relay";
+  const rows = (ms: any[]) => Object.fromEntries(requestRows(ms, {}).map((r) => [r.id, r.answer]));
+
+  const by = rows([chain("A", 1000, "T-01"), chain("B", 2000, "T-02"), chain("C", 3000, "T-03"), reply("M", 4000), sys(4001, ERR),
+    sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay"),
+    sys(6000, "Routing needs confirmation (task T-02 not found, candidate: route_to_task T-02). Which task? T-05 relay"),
+    sys(7000, "Routing needs confirmation (task T-03 not found, candidate: route_to_task T-03). Which task? T-05 relay")]);
+  expect(by.M).toBe(ERR);                             // the off-chain row keeps its own reason …
+  expect(by.A).toContain("task T-01 not found");      // … and the chain rows are untouched by it
+  expect(by.B).toContain("task T-02 not found");
+  expect(by.C).toContain("task T-03 not found");
+
+  // ulid() is not monotonic and created_at is milliseconds, so the prompt can sort just ahead of its own message
+  const tied = rows([chain("A", 1000, "T-01"), sys(4000, ERR), reply("zM", 4000),
+    sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay")]);
+  expect(tied.zM).toBe(ERR);
+  expect(tied.A).toContain("task T-01 not found");
+});
+
+test("a reply to an errored task, on its own, reads its reason off the adjacent prompt", () => {
+  const m = msg({ text: "그럼 이걸로 진행해줘", dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
+  const prompt = msg({ role: "system", dispatch_state: "direct", text: "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 relay" });
+  const r = one(m, {}, [prompt]);
+  expect(r).toMatchObject({ disposition: "needs_confirm", bucket: "needs_you", answerKind: "question", actions: ["redispatch"] });
+  expect(r.answer).toContain("T-09 is in the error state");
+});
