@@ -308,3 +308,48 @@ test("an unnameable off-chain prompt degrades its own row and no other", () => {
   expect(by.M).toBe("Routing needs confirmation.");                 // degraded, not someone else's reason
   expect(by.A).toContain("task T-01 not found");                    // the chain row keeps its own
 });
+
+// A snapshot from a database written before the 0.1.1 English migration. Nothing here is malformed — only the prose
+// changed — but matching the prompt on its English opening made every Korean row unrecognisable, and the two oldest
+// requests then sat at the head of the claim queue and took the prompts belonging to the two newest. Both of those
+// rows displayed a reason from a request they had nothing to do with, on the user's own data.
+test("a pre-0.1.1 snapshot: every request keeps its own reason, in either language", () => {
+  const NT = { action: "new_task", confidence: "low" };
+  const ko = (id: string, at: number) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text: "라우팅 확인 필요 (confidence=low, 후보: new_task). 어느 작업인가요? T-02 relay / T-03 myapp" });
+  const en = (id: string, at: number) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text: "Routing needs confirmation (T-02 is in the error state — restart it first). Which task? T-02 relay" });
+  const by = Object.fromEntries(requestRows([
+    msg({ id: "R1", created_at: 1000, text: "myapp refactor auth", dispatch_state: "needs_confirm", dispatch_json: NT }), ko("K1", 1100),
+    msg({ id: "R2", created_at: 2000, text: "myapp task with a question", dispatch_state: "needs_confirm", dispatch_json: NT }), ko("K2", 2100),
+    msg({ id: "R3", created_at: 3000, text: "아 그리고 프롬프트가 입력될때", dispatch_state: "needs_confirm" }),
+    msg({ id: "R4", created_at: 4000, text: "어디에 던지면 좋을지 모르겠을때", dispatch_state: "needs_confirm" }),
+    en("E1", 5000), en("E2", 6000),
+  ], {}).map((r) => [r.id, r.answer]));
+  expect(by.R1).toContain("라우팅 확인 필요");        // its own, unreadable to the old matcher
+  expect(by.R2).toContain("라우팅 확인 필요");
+  expect(by.R3).toContain("T-02 is in the error state");
+  expect(by.R4).toContain("T-02 is in the error state");
+});
+
+// The property, independent of why a row went unmatched: a request that cannot be matched must not take a reply from
+// a request after it. Here the two oldest simply have no prompt row at all — the same shape an unreadable prompt, an
+// unknown future row, or a lost write would produce.
+test("requests whose reply is missing degrade, and do not shift the requests after them", () => {
+  const req = (id: string, at: number, tid: string) => msg({ id, created_at: at, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: tid, confidence: "high" } });
+  const prm = (at: number, tid: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text: `Routing needs confirmation (task ${tid} not found). Which task? T-05` });
+  const by = Object.fromEntries(requestRows([req("A", 1000, "T-01"), req("B", 2000, "T-02"), req("C", 3000, "T-03"), req("D", 4000, "T-04"), prm(5000, "T-03"), prm(6000, "T-04")], {}).map((r) => [r.id, r.answer]));
+  expect(by.C).toContain("task T-03 not found");                        // the matchable ones are right …
+  expect(by.D).toContain("task T-04 not found");
+  expect(by.A).toBe("Routing needs confirmation — candidate: route_to_task T-01");   // … and the deficit degrades
+  expect(by.B).toBe("Routing needs confirmation — candidate: route_to_task T-02");
+});
+
+// The surplus direction: a redispatch leaves the prompt from the previous attempt in the table, so there are more
+// prompts than requests awaiting one. Pairing from the newest end takes the current prompt, not the stale one.
+test("a stale prompt left by a redispatch is absorbed, and the row reads its newest one", () => {
+  const by = Object.fromEntries(requestRows([
+    msg({ id: "A", created_at: 1000, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-01", confidence: "high" } }),
+    msg({ role: "system", dispatch_state: "direct", created_at: 2000, text: "Routing needs confirmation (stale attempt). Which task? T-05" }),
+    msg({ role: "system", dispatch_state: "direct", created_at: 3000, text: "Routing needs confirmation (task T-01 not found). Which task? T-05" }),
+  ], {}).map((r) => [r.id, r.answer]));
+  expect(by.A).toContain("task T-01 not found");
+});

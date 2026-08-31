@@ -78,16 +78,22 @@ function bucketOf(d: Disposition, m: Message, task: Task | null): Bucket {
 }
 
 /** The two dispatcher replies that arrive as bare chat rows: the fast-path or direct answer, and the prompt
- *  TaskService.needsConfirm() promotes. The prompt is matched on its opening words because the same decision also
- *  emits the `dispatcher · …` badge row, and that one says nothing about why the request stalled. */
-/** The reason sendTo() gives a reply aimed at a task that is in the error state (tasks.ts:166). */
-const ERR_STATE = /^Routing needs confirmation \(.+ is in the error state/;
+ *  TaskService.needsConfirm() promotes.
+ *
+ *  The prompt is recognised by exclusion, not by its opening words. Every system row with no task_uuid is either that
+ *  prompt or one of the marker-led rows below — the `dispatcher · …` badges (tasks.ts:48, 104, dispatcher.ts:46) and
+ *  the usage banners (usage.ts:37, 43). Those markers are built from code, so they outlive a rewording; the prompt is
+ *  prose, and a database written before the 0.1.1 English migration holds it in Korean. Matching the prompt's words
+ *  made every such row unrecognisable, and an unrecognised reply is not a neutral loss — see claimReplies. */
 type ReplyKind = "answer" | "prompt";
+const MARKED = /^(dispatcher · |⛔|⏱)/;
 const replyKindOf = (m: Message): ReplyKind | null =>
-  m.role === "dispatcher_answer" ? "answer" : m.role === "system" && m.text.startsWith("Routing needs confirmation") ? "prompt" : null;
+  m.role === "dispatcher_answer" ? "answer" : m.role === "system" && !m.task_uuid && !MARKED.test(m.text) ? "prompt" : null;
 /** Which reply a request is owed. `answered` counts even when the decision already carries the answer text: the row
  *  was still emitted, so it has to be consumed here or it shifts onto the next request. */
 const awaitedBy = (d: Disposition): ReplyKind | null => (d === "needs_confirm" ? "prompt" : d === "answered" || d === "fastpath" ? "answer" : null);
+/** The reason sendTo() gives a reply aimed at a task that is in the error state (tasks.ts:166). */
+const ERR_STATE = /^Routing needs confirmation \(.+ is in the error state/;
 /** A reply aimed at a task, which TaskService answers inside the HTTP handler instead of handing to the dispatcher.
  *  routes.ts:61 records one as `direct` with its target in reply_to_task_uuid and never enqueues it, and it is the
  *  only writer of that field — so this separates an off-chain request from a chain one exactly. */
@@ -149,16 +155,23 @@ function claimReplies(ordered: Message[], tasks: Record<string, Task>): Map<stri
     const stray = ordered.find((n) => free(n) && ERR_STATE.test(n.text));
     if (stray) taken.add(stray.id);
   }
-  const waiting: Record<ReplyKind, Message[]> = { answer: [], prompt: [] };    // 2 — the chain's replies, in order
-  for (const m of ordered) {
-    if (m.role === "user") {
-      if (offChain(m)) continue;                                               // claimed above, and never queued
-      const k = awaitedBy(dispositionOf(m)); if (k) waiting[k].push(m);
-      continue;
+  // 2 — the chain's replies, paired from the newest end. Claiming from the oldest end (a FIFO whose head takes the
+  // next reply) assumes no request is ever skipped, and one that is skipped never leaves the head: it takes the reply
+  // belonging to a later request, and every claim after it shifts by one. That is not hypothetical — a database from
+  // before the 0.1.1 English migration holds prompts this file could not read, and two such requests silently
+  // rewrote every row after them. Pairing the last k of each list instead puts any deficit or surplus on the OLDEST
+  // rows, which degrade: a request that cannot be matched cannot take a reply from a request after it, whatever the
+  // reason it went unmatched — an unreadable prompt, a row this file has not learned yet, a stale prompt left behind
+  // by a redispatch. That property is the point; recognising any particular wording is not.
+  const at = new Map(ordered.map((m, i) => [m.id, i]));
+  for (const kind of ["answer", "prompt"] as ReplyKind[]) {
+    const reqs = ordered.filter((m) => m.role === "user" && !offChain(m) && awaitedBy(dispositionOf(m)) === kind);
+    const reps = ordered.filter((m) => !taken.has(m.id) && replyKindOf(m) === kind);
+    const k = Math.min(reqs.length, reps.length);
+    for (let i = 0; i < k; i++) {
+      const req = reqs[reqs.length - k + i]; const rep = reps[reps.length - k + i];
+      if (at.get(rep.id)! > at.get(req.id)!) claimed.set(req.id, rep);       // a reply never precedes its own request
     }
-    const kind = replyKindOf(m); if (!kind || taken.has(m.id)) continue;
-    const req = waiting[kind].shift();
-    if (req) { claimed.set(req.id, m); taken.add(m.id); }
   }
   return claimed;
 }
