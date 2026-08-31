@@ -246,7 +246,8 @@ test("a reply to an errored task keeps its own reason and takes nothing from the
   const sys = (at: number, text: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text });
   const reply = (id: string, at: number) => msg({ id, created_at: at, dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
   const ERR = "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 relay";
-  const rows = (ms: any[]) => Object.fromEntries(requestRows(ms, {}).map((r) => [r.id, r.answer]));
+  const errored = byId(task("u9", "T-09", "error"));                // the snapshot carries every task that is not closed
+  const rows = (ms: any[]) => Object.fromEntries(requestRows(ms, errored).map((r) => [r.id, r.answer]));
 
   const by = rows([chain("A", 1000, "T-01"), chain("B", 2000, "T-02"), chain("C", 3000, "T-03"), reply("M", 4000), sys(4001, ERR),
     sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay"),
@@ -264,10 +265,46 @@ test("a reply to an errored task keeps its own reason and takes nothing from the
   expect(tied.A).toContain("task T-01 not found");
 });
 
-test("a reply to an errored task, on its own, reads its reason off the adjacent prompt", () => {
+test("a reply to an errored task, on its own, reads its reason and offers the restart", () => {
   const m = msg({ text: "그럼 이걸로 진행해줘", dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
   const prompt = msg({ role: "system", dispatch_state: "direct", text: "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 relay" });
-  const r = one(m, {}, [prompt]);
-  expect(r).toMatchObject({ disposition: "needs_confirm", bucket: "needs_you", answerKind: "question", actions: ["redispatch"] });
+  const r = one(m, byId(task("u9", "T-09", "error")), [prompt]);
+  // the target is in error, so the row offers Restart alongside the redispatch
+  expect(r).toMatchObject({ disposition: "needs_confirm", state: "Waiting for you", bucket: "needs_you", answerKind: "question", actions: ["redispatch", "restart"] });
   expect(r.answer).toContain("T-09 is in the error state");
+});
+
+// Adjacency cannot carry this: created_at is milliseconds and ulid() is not monotonic, so a chain prompt sharing the
+// millisecond can sort ahead of the off-chain message or between it and its own prompt, and nothing tells them apart
+// by position. Matching the prompt's text removes position from the question entirely. A miss is not neutral either —
+// an unclaimed off-chain prompt flows into the shared pool and lands on a chain row, so H3 pins that too.
+test("the off-chain prompt is found by its text, wherever it sorts", () => {
+  const errored = byId(task("u9", "T-09", "error"));
+  const M = (id: string, at: number) => msg({ id, created_at: at, dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
+  const A = (at: number) => msg({ id: "A", created_at: at, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-01", confidence: "high" } });
+  const sys = (id: string, at: number, text: string) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text });
+  const pA = (id: string, at: number) => sys(id, at, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05");
+  const pM = (id: string, at: number) => sys(id, at, "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05");
+  const ok = (ms: any[], mid: string) => {
+    const by = Object.fromEntries(requestRows(ms, errored).map((r) => [r.id, r.answer]));
+    expect(by[mid]).toContain("T-09 is in the error state");
+    expect(by.A).toContain("task T-01 not found");
+  };
+  ok([A(1000), pA("a", 2000), M("b", 2000), pM("c", 2000)], "b");   // H1 chain prompt sorts before the message
+  ok([A(1000), M("a", 2000), pA("b", 2000), pM("c", 2000)], "a");   // H2 chain prompt sorts between the two
+  ok([A(1000), M("M", 2000), sys("x", 3000, "dispatcher · route_to_task · T-01"), pM("y", 4000), pA("z", 5000)], "M");   // H3 a badge sits between
+});
+
+// The target is always in the snapshot for this path — it is in the error state, and the snapshot carries every task
+// that is not closed. If it somehow is not, the prompt cannot be named; retiring it unclaimed costs this row its
+// reason, where leaving it in the pool would have put it on a chain row instead.
+test("an unnameable off-chain prompt degrades its own row and no other", () => {
+  const M = msg({ id: "M", created_at: 2000, dispatch_state: "needs_confirm", task_uuid: "gone", reply_to_task_uuid: "gone" });
+  const A = msg({ id: "A", created_at: 1000, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-01", confidence: "high" } });
+  const sys = (at: number, text: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text });
+  const by = Object.fromEntries(requestRows([A, M,
+    sys(3000, "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05"),
+    sys(4000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05")], {}).map((r) => [r.id, r.answer]));
+  expect(by.M).toBe("Routing needs confirmation.");                 // degraded, not someone else's reason
+  expect(by.A).toContain("task T-01 not found");                    // the chain row keeps its own
 });

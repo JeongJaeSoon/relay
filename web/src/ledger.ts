@@ -80,6 +80,8 @@ function bucketOf(d: Disposition, m: Message, task: Task | null): Bucket {
 /** The two dispatcher replies that arrive as bare chat rows: the fast-path or direct answer, and the prompt
  *  TaskService.needsConfirm() promotes. The prompt is matched on its opening words because the same decision also
  *  emits the `dispatcher · …` badge row, and that one says nothing about why the request stalled. */
+/** The reason sendTo() gives a reply aimed at a task that is in the error state (tasks.ts:166). */
+const ERR_STATE = /^Routing needs confirmation \(.+ is in the error state/;
 type ReplyKind = "answer" | "prompt";
 const replyKindOf = (m: Message): ReplyKind | null =>
   m.role === "dispatcher_answer" ? "answer" : m.role === "system" && m.text.startsWith("Routing needs confirmation") ? "prompt" : null;
@@ -102,17 +104,28 @@ const offChain = (m: Message) => m.reply_to_task_uuid !== null;
  *
  * What does hold is the order — but for one exception, which is worth stating flatly because it is not derivable
  * from this file: EVERY claimable reply is emitted on the dispatcher chain, in the order the requests were made,
- * EXCEPT the reply-to-errored-task path, which is matched by adjacency instead. Hence two passes:
+ * EXCEPT the reply-to-errored-task path, which is identified by its text instead. Hence two passes:
  *
  *  1. That exception. routes.ts records the message and TaskService.answer() runs through to needsConfirm()
  *     synchronously in the same HTTP handler, so its prompt is written while chain requests are still inside
  *     `claude -p` — ahead of prompts for requests made long before it. In the shared queue it would take the oldest
  *     waiting request's prompt and shift every later claim, which is worse than the positional bug it replaces:
- *     instead of one row degrading to its own candidate, every row confidently shows someone else's reason. So it is
- *     matched on adjacency and kept out of the queue. Adjacency is sound here and nowhere else — needsConfirm()
- *     emits the prompt in the same tick as the message, with no other message row between them.
+ *     instead of one row degrading to its own candidate, every row confidently shows someone else's reason.
+ *     It is matched on content, not on position. sendTo() is the only producer of this reason and it names the task
+ *     the request replied to, so the prompt is found wherever it sits — position is not consulted at all. Adjacency
+ *     would not do: `created_at` is milliseconds and ulid() is not monotonic, so a chain prompt sharing that
+ *     millisecond can sort between the message and its own prompt, or ahead of both, and nothing distinguishes it by
+ *     position. Leaving this prompt unclaimed is not neutral either — it flows into pass 2 and lands on a chain row.
  *  2. Everything the chain produced, claimed in order: the k-th reply of a kind goes to the k-th request still
  *     awaiting that kind. A reply nothing is waiting for is dropped.
+ *
+ * The chain emits the same reason for a route_to_task at tasks.ts:59, but that request has a null reply_to_task_uuid
+ * and so never reaches pass 1; were both to name one task the two texts would be equal anyway, so no row can show
+ * words that are not its own. A target missing from `tasks` is the one case that cannot be named — it should not
+ * arise, since the snapshot carries every task that is not closed (snapshot.ts:9) and an errored one never is — and
+ * there the prompt is retired unclaimed rather than left in the pool, so that row degrades and no other row is
+ * wrong. Degrading is always preferred to guessing here: a wrong reason reads as authoritative, a missing one does
+ * not.
  *
  * Both passes rest on a request in an awaiting state always having its reply row — which holds because needsConfirm(),
  * applyDecision() and the fast path each emit the state patch and the reply row through one emitMany, and because the
@@ -120,21 +133,21 @@ const offChain = (m: Message) => m.reply_to_task_uuid !== null;
  * too. That is a property of those emitters, not something this file can enforce: a new one that patches the state
  * and emits its reply separately would strand a request at the head of the queue and shift every later claim.
  */
-function claimReplies(ordered: Message[]): Map<string, Message> {
+function claimReplies(ordered: Message[], tasks: Record<string, Task>): Map<string, Message> {
   const claimed = new Map<string, Message>();
   const taken = new Set<string>();                                             // reply rows already spoken for
-  for (let i = 0; i < ordered.length; i++) {                                   // 1 — off-chain confirmations, on adjacency
-    const m = ordered[i];
+  for (const m of ordered) {                                                   // 1 — off-chain confirmations, on content
     if (m.role !== "user" || !offChain(m) || awaitedBy(dispositionOf(m)) !== "prompt") continue;
-    // Strictly the neighbouring row, never a scan: nothing is emitted between the message and its prompt, so a
-    // prompt further along belongs to the chain and taking it would be the misattribution this pass exists to avoid.
-    const free = (n: Message | undefined): n is Message => !!n && replyKindOf(n) === "prompt" && !taken.has(n.id);
-    // The prompt goes out in the same tick, so it sorts right after the message — unless the two share a millisecond
-    // and ulid()'s non-monotonic tiebreak flips them, which is why the row before is checked first and only when it
-    // shares that millisecond. Missing it only degrades this row to its fallback; it never mislabels it.
-    const next = ordered[i + 1]; const prev = ordered[i - 1];
-    const near = free(prev) && prev.created_at === m.created_at ? prev : free(next) ? next : null;
-    if (near) { claimed.set(m.id, near); taken.add(near.id); }
+    const free = (n: Message) => !taken.has(n.id) && replyKindOf(n) === "prompt";
+    // The exact opening needsConfirm() builds from sendTo()'s reason (tasks.ts:139, 166). Two replies to one errored
+    // task produce identical prompts, so first-free keeps them in request order.
+    const target = tasks[m.reply_to_task_uuid!];
+    const hit = target && ordered.find((n) => free(n) && n.text.startsWith(`Routing needs confirmation (${target.display_id} is in the error state`));
+    if (hit) { claimed.set(m.id, hit); taken.add(hit.id); continue; }
+    // Target absent from the snapshot, so the prompt cannot be named. Leaving it in the pool is not neutral — pass 2
+    // would hand it to a chain request — so retire one unclaimed instead: this row degrades, no other row is wrong.
+    const stray = ordered.find((n) => free(n) && ERR_STATE.test(n.text));
+    if (stray) taken.add(stray.id);
   }
   const waiting: Record<ReplyKind, Message[]> = { answer: [], prompt: [] };    // 2 — the chain's replies, in order
   for (const m of ordered) {
@@ -184,7 +197,7 @@ export function requestRows(messages: Message[], tasks: Record<string, Task>): R
   // A task's outcome is linked by task_uuid, never by position: the summary lands long after the request, usually after other requests.
   const outcome = new Map<string, string>();
   for (const m of ordered) if (m.task_uuid && (m.role === "worker_summary" || m.role === "error")) outcome.set(m.task_uuid, m.text);
-  const replies = claimReplies(ordered);
+  const replies = claimReplies(ordered, tasks);
   const rows: RequestRow[] = [];
   for (const m of ordered) {
     if (m.role !== "user") continue;
