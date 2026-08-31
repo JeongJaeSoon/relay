@@ -90,8 +90,11 @@ export class TaskService {
       // C.2, and the only guard that holds when the model is wrong: two worktrees on one repository can edit
       // overlapping files, leaving a merge for a human. "Ships separately" and "different lifetimes" both read as
       // splittable for same-repo work, so the criterion enforced here is the structural one — one project per split.
-      const clash = plans.find((p) => p.project_id === plan.project_id);
-      if (clash) return this.needsConfirm(msg, dec, `${at}: same project (${this.d.projectNameOf(plan.project_id)}) as ${clash.display_id} — work sharing one repository stays a single task`);
+      const j = plans.findIndex((p) => p.project_id === plan.project_id);
+      if (j >= 0) {
+        const other = plans[j].created.length ? `split item ${j + 1}` : plans[j].display_id;   // a task this split only planned has no id the user can see; a route target already does
+        return this.needsConfirm(msg, dec, `${at}: same project (${this.d.projectNameOf(plan.project_id)}) as ${other} — work sharing one repository stays a single task`);
+      }
       plans.push(plan);
     }
     const ids = plans.map((p) => p.display_id);

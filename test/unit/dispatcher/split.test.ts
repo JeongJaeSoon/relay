@@ -14,6 +14,7 @@ import { Dispatcher, type RunClaude } from "../../../src/dispatcher/dispatcher.t
 import { DecisionSchema, dispatchJsonSchema, lowConfidence, splitGuard } from "../../../src/dispatcher/schema.ts";
 import { DISPATCH_SYSTEM_PROMPT, dispatchSystemPrompt } from "../../../src/dispatcher/system-prompt.ts";
 import { ingestHook } from "../../../src/hooks/ingest.ts";
+import { buildContext } from "../../../src/dispatcher/context.ts";
 import { ulid } from "../../../src/core/ids.ts";
 import corpus from "../../fixtures/dispatch-cases.json";
 
@@ -80,7 +81,9 @@ describe("dispatch corpus", () => {
     });
   }
 
-  test("single-decision accuracy: all five single cases reach their recorded action", async () => {
+  // NOT an accuracy test: the model is stubbed, so this shows the five single-decision paths still carry a recorded
+  // decision through to the same action. Whether a live model still PRODUCES those decisions is unmeasured here.
+  test("replay: every single-decision case still reaches its recorded action", async () => {
     const singles = corpus.cases.filter((c) => c.kind === "single");
     expect(singles.length).toBe(5);
     for (const c of singles) {
@@ -138,6 +141,15 @@ describe("dispatch corpus", () => {
     const id = s.say("T-01 은 계속 가고, meterly 핫픽스는 따로 올려줘"); await settle();
     expect(loadMessage(s.db, id)!.dispatch_state as string).toBe("dispatched");
     expect(created(s.db)).toEqual(["T-02"]); expect(routed(s.db)).toEqual(["T-01"]);
+  });
+
+  test("the next decision's context names every task the split made, not a bare `split`", async () => {
+    const c = corpus.cases.find((x) => x.name.startsWith("split/mixed projects"))!;
+    const s = setup(stub(c.model_output)); await seed(s);
+    s.say(c.message); await settle();
+    const ctx = buildContext(s.db);
+    expect(ctx).toContain("→ split T-02 T-03");                                              // a follow-up ("cancel that") can still resolve the targets
+    expect(ctx).not.toContain("→ split\n");
   });
 
   test("an unknown project in one item aborts the whole split before anything is emitted", async () => {

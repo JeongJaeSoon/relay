@@ -2,6 +2,8 @@ import type { Database } from "bun:sqlite";
 import { loadProjects, rowToMessage, rowToTask } from "../core/projections.ts";
 import { now } from "../core/clock.ts";
 
+/** A split names its tasks in `task_ids`, not `task_id` — without this a follow-up ("cancel that") sees a bare `split`. */
+const ids = (d: { task_id?: string; task_ids?: string[] }) => (d.task_ids?.length ? " " + d.task_ids.join(" ") : d.task_id ? " " + d.task_id : "");
 const ago = (t: number) => { const m = Math.round((now() - t) / 60_000); return m < 1 ? "just now" : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`; };
 
 /** Projects, active tasks and the last five chat lines — everything the judge sees besides the message itself. */
@@ -12,6 +14,6 @@ export function buildContext(db: Database): string {
   return [
     "[projects]", ...(projects.length ? projects.map((p) => `- ${p.name} (${p.path}) — ${p.description}; keywords: ${p.keywords.join(", ")}`) : ["- (none registered)"]),
     "[active tasks]", ...(tasks.length ? tasks.map((t) => `- ${t.display_id} "${t.title}" project=${projects.find((p) => p.id === t.project_id)?.name ?? t.project_id} status=${t.status} last_active=${ago(t.updated_at)}\n  summary: ${t.last_summary ?? "(none yet)"}${t.question ? `\n  waiting on question: ${t.question.text}` : ""}`) : ["- (none)"]),
-    "[recent chat]", ...recent.map((m) => `- ${m.role}: ${m.text.slice(0, 200)}${m.dispatch_json ? ` → ${m.dispatch_json.action}${m.dispatch_json.task_id ? " " + m.dispatch_json.task_id : ""}` : ""}`),
+    "[recent chat]", ...recent.map((m) => `- ${m.role}: ${m.text.slice(0, 200)}${m.dispatch_json ? ` → ${m.dispatch_json.action}${ids(m.dispatch_json)}` : ""}`),
   ].join("\n");
 }
