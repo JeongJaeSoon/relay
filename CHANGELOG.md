@@ -1,5 +1,100 @@
 # Changelog
 
+## 0.1.3
+
+Every defect in this release was found by reviewing v0.1.2 after it shipped, and most of
+them were introduced by v0.1.2 itself: the Ask text sniffing, the ledger's reply
+attribution, three of the four scheduler failures, and a `close` that claimed a cleanup
+it had not achieved. Two were older — the exemption covering relay's own stops, and the
+session leak that v0.1.2 was written to fix and did not.
+
+### The zombie sessions, again — and why v0.1.2 barely helped
+
+v0.1.2 claimed to stop sessions leaking. Measured afterwards, it mostly did not, and the
+reason is a rule nobody had checked: **`claude rm` refuses to remove a session whose
+worktree holds commits that exist nowhere else.** Not uncommitted changes — *unpushed*
+ones. And relay's own worker convention produces exactly that shape: `agents/relay-worker.md`
+tells every worker to commit locally and leave the tree clean, while `src/runner/settings.ts`
+denies `Bash(git push*)` whenever `allow_push` is false, which is the default. A worker
+that succeeds cannot push, so any task that made a commit is refused, without exception.
+Re-measured against the CLI: dirty → refused; commit it so the tree is clean → still
+refused, only the reason changes.
+
+So the leak is not something relay can fix — the refusal is correct, protecting work that
+exists in one place. What relay was doing wrong was *not saying so*.
+
+- **`close` no longer claims a cleanup it did not achieve.** The terminal state is now
+  projected from the `rm` result: applied means `closed`, refused means the task stays
+  visible in `error` with the worktree path on it. Previously it wrote `closed`
+  regardless, so the leak became invisible at the moment it happened.
+- **`relay doctor` counts what is left**, in two lines that answer different questions:
+  sessions whose disposal was refused, and sessions relay never attempted to dispose of
+  at all — the second being an orphan that has no `rm` command to find it by.
+- **Each refusal is reported in the CLI's own words**, with the kept worktree path.
+  All three were previously flattened into "uncommitted work remains", which is false for
+  the common one and sends the user looking for a dirty file that is not there.
+- **A locked worktree is transient and is now treated that way** — held rather than
+  failed, retried, and promoted to a visible failure only after 15 minutes. The bound is
+  what makes "a lock clears itself" something the code enforces rather than assumes.
+
+### Recovery paths that could not recover
+
+- **Restarting a spawn-stranded task leaked the slot it was meant to return**, permanently
+  and invisibly: the `unknown` spawn stayed at the queue head, so the resume behind it
+  never ran, and the task sat at `starting` holding its permit. Neither the watchdog,
+  nor recovery, nor a relay restart could clear it. Restart now re-runs the spawn, which
+  adopts an already-started session when the owner stamp proves one is ours — and
+  **refuses** rather than spawning over a live session it cannot place, because the
+  alternative is two agents in one working tree.
+- **A message stranded in `deciding` was unrecoverable.** `claude -p` is a child of the
+  relay process, so a crash mid-decision left the message with no task, no answer and no
+  button. Recovery now resets it, and a dispatcher that cannot even start marks it failed.
+- **A permission question no longer loses its slot.** Invariant I6 says a task waiting on
+  a permission request keeps its lease; three places encoded that rule as three shorter
+  approximations, and two of them were wrong. There is now one predicate, `holdsSlot`.
+- **relay's own `pause` could look like a crash.** The exemption covering relay's own
+  stops had no generation scope, so a fork that came up afterwards and then genuinely
+  crashed was recorded as expected — leaving a `running` task over a dead process that
+  nothing recovers.
+
+### The request ledger, corrected twice
+
+The reply-attribution fix in this release went in, regressed on a real database, and was
+fixed again before shipping. Both rounds are worth recording because the second was found
+only by running the merged code against the user's own data rather than a fixture.
+
+The claim queue paired replies to requests from the oldest end, which assumes every
+waiting request eventually gets one. A database with history from before the 0.1.1
+English migration breaks that: its oldest requests are answered by Korean prompts the
+matcher does not recognise, so they wait forever at the head and take the later English
+prompts instead. Pairing from the **newest** end removes the assumption's load-bearing
+role rather than trying to enforce it — a shortfall now lands on the oldest rows, which
+degrade, and an unmatched request cannot take a reply belonging to a request after it,
+whatever the reason it went unmatched. A prompt is now recognised by exclusion, so those
+Korean rows are read correctly rather than merely tolerated.
+
+### The request ledger
+
+- **Replies attach to the request they answer**, not the one they follow. The dispatcher
+  decides one message at a time while messages are recorded on arrival, so any second
+  request sent during a decision was recorded before the first request's answer — and the
+  answer landed on the wrong row. With two stalled requests outstanding, each showed the
+  other's reason.
+- **A split reports the piece that needs reading**, and its failure reason comes from the
+  piece that failed rather than from the first one.
+
+### Ask
+
+- **Ask intent travels as data, not as a `?` in the text.** The gateway already refused to
+  read a leading `?` from github, slack, cron or MCP as a question; the dispatcher then
+  re-read the stored text and undid that, so a work request from those sources became one
+  line of chat and no task. Intent is now a column, set once at the boundary.
+- **The model gets a second turn.** The structured output arrives as a tool call, so
+  `--max-turns 1` cut off any turn that thought first. This was never only an Ask bug —
+  routing shares the same call and had been failing the same way, silently.
+- `relay_send` accepts `ask`, so a question can be asked through MCP at all.
+
+
 ## 0.1.2
 
 Sessions stop leaking, a bare message dispatches, and every request you send is now
