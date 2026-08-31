@@ -184,6 +184,37 @@ describe("TaskService", () => {
     expect(loadTask(s.db, (s.db.query("select uuid from tasks where title='b'").get() as any).uuid)!.status).toBe("queued");
     expect(assertInvariants(s.db, 1)).toEqual([]);
   });
+  test("closing a queued task does not let the pump inside close grant it a slot", async () => {
+    const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid;
+    s.log.emit({ type: "task.status_changed", task_uuid: t, payload: { status: "queued", patch: { status: "queued", queued_at: 1, qhead: true, ended_at: null } } });
+    s.permits.releaseTask(t, "test"); expect(s.permits.active()).toBe(0);
+    s.svc.close(t);
+    // synchronous on purpose: pump() acquires before its first await, so a task still `queued` when close pumps takes
+    // a slot that a waiting task needed — at max_concurrent_agents=1 that is a real stall, not just an ugly frame
+    expect(s.permits.active()).toBe(0);
+    await s.settle(); expect(s.permits.active()).toBe(0); expect(loadTask(s.db, t)!.status).toBe("closed");
+  });
+  test("a close whose rm is refused is not reported as closed — the session is still registered, so the task stays visible", async () => {
+    const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid; s.hook(t, { hook_event_name: "SessionStart", source: "startup" });
+    s.log.emit({ type: "task.patched", task_uuid: t, payload: { patch: { worktree_path: "/tmp/myapp/.claude/worktrees/relay-abc" } } });
+    // Measured on CLI 2.1.251 (2026-08-31): a worktree with a local commit that was never pushed — the shape
+    // `agents/relay-worker.md` tells every worker to leave behind — gets `kept <id> — worktree has commits that are
+    // not pushed anywhere`, exit 1, and the row stays in `agents --json --all`.
+    s.runner.keepWorktree = { reason: "worktree has commits that are not pushed anywhere", keptPath: "/tmp/myapp/.claude/worktrees/relay-abc" };
+    s.svc.close(t); await s.settle();
+    const after = loadTask(s.db, t)!;
+    expect(after.status).toBe("error");                                                    // NOT closed: nothing was deregistered
+    expect(after.closed_at).toBeNull();
+    // the CLI's own reason, not a guess: a clean-but-unpushed worktree is not "uncommitted work"
+    expect(after.last_summary).toContain("commits that are not pushed anywhere");
+    expect(after.last_summary).toContain("relay-abc");                                     // which worktree to resolve
+    expect(s.runner.rows.size).toBe(1);                                                    // still in `claude agents`
+    const kept = s.db.query("select payload_json from events where type='worktree.kept' and task_uuid=?").all(t) as any[];
+    expect(kept.length).toBe(1);
+    expect(JSON.parse(kept[0].payload_json)).toMatchObject({ worktree_path: "/tmp/myapp/.claude/worktrees/relay-abc", reason: expect.stringContaining("commits that are not pushed anywhere") });
+  });
   test("closing a task that ran three generations disposes of all three, stopping each before removing it", async () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
     const t = (s.db.query("select uuid from tasks").get() as any).uuid;

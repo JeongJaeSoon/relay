@@ -11,7 +11,14 @@ export class FakeRunner implements AgentRunner {
    *  source "fork" (Phase 0 ④). Only the supervisor's own respawn keeps the id. */
   async resume(p: { sessionId: string; cwd: string; name: string; prompt: string }) { this.calls.push({ kind: "resume", args: p }); return { short_id: this.mk(p.name, p.cwd) }; }
   async stop(shortId: string) { this.calls.push({ kind: "stop", args: shortId }); const r = this.rows.get(shortId); if (r) { r.alive = false; r.pid = null; r.busy = null; } }
-  async rm(shortId: string) { this.calls.push({ kind: "rm", args: shortId }); this.rows.delete(shortId); return { worktreeKept: false }; }
+  /** Set to make `rm` refuse the way the CLI does — the session stays in `rows`, exactly as its row stays in
+   *  `agents --json --all`. Without this the refusal path, which is the COMMON one in a real install, is untestable. */
+  keepWorktree: { reason: string; keptPath?: string } | null = null;
+  async rm(shortId: string) {
+    this.calls.push({ kind: "rm", args: shortId });
+    if (this.keepWorktree) return { worktreeKept: true, ...this.keepWorktree };
+    this.rows.delete(shortId); return { worktreeKept: false };
+  }
   async list(all = false) { return [...this.rows.values()].filter((r) => all || r.alive); }
   /** Test helper: simulate the session's hooks. */
   hooks(short: string, taskUuid: string, events: Record<string, unknown>[]) { const r = this.rows.get(short)!; for (const e of events) this.ingest({ session_id: r.session_id, transcript_path: "/dev/null", cwd: r.cwd, ...e }, taskUuid); }

@@ -7,7 +7,7 @@ import type { Command, CommandKind, DeliveryMethod, SendOutcome, Task } from "@s
 import { now } from "../core/clock.ts";
 import { EventLog, loadTask, type EmitInput } from "../core/events.ts";
 import { commandId } from "../core/ids.ts";
-import type { AgentRow, AgentRunner, SpawnSpec } from "../runner/runner.ts";
+import type { AgentRow, AgentRunner, RmOutcome, SpawnSpec } from "../runner/runner.ts";
 import { log as slog } from "../log.ts";
 
 export type CommandPayload =
@@ -18,11 +18,18 @@ export type CommandPayload =
   // the CLI. A reap never touches the task's process state — the process it names is already dead.
   | { kind: "stop"; reason: string; target?: ReapTarget }
   | { kind: "resume"; prompt: string; marker: string }
+  // An rm with no `target` is the task's OWN disposal, and its outcome — not the caller — decides whether the task
+  // ends up `closed`: `claude rm` refuses a worktree that still holds work, and for a finished relay task that
+  // refusal is the normal outcome, so a caller that projected `closed` up front would claim a disposal that did not
+  // happen.
   | { kind: "rm"; target?: ReapTarget };
 /** A superseded session. `short_id` is what `claude stop`/`claude rm` take, but the hook path does not learn it until
  *  after the fork's SessionStart is projected, so it is often null and resolved from the roster at reap time. */
 export interface ReapTarget { session_id: string; short_id: string | null }
 export interface OutboxDeps { delivery: () => DeliveryMethod; isPaused: () => boolean; settingsJson: (t: Task, gen: number) => string; env: (t: Task, gen: number) => Record<string, string>; socketPathFor: (row: AgentRow) => string; instanceId: () => string }
+/** The CLI's own words for why it kept the session, plus the path to look at — the path is the actionable half, since
+ *  the user's next move is to look at the commits in it. `reason` is only ever missing if the wording changes. */
+const keptReason = (r: RmOutcome, fallbackPath: string | null) => `${r.reason ?? "its worktree still holds work"}${r.keptPath ?? fallbackPath ? ` (${r.keptPath ?? fallbackPath})` : ""}`;
 /** Thrown by apply() when the command must stay pending and the task queue must stop for now (inbox held, turn busy). */
 class HeldError extends Error {}
 const rowToCommand = (r: any): Command => ({ ...r, payload: JSON.parse(r.payload_json) });
@@ -205,8 +212,9 @@ export class Outbox {
         // visible and retryable; `unknown` would be dishonest (the refusal is known, not ambiguous) and would wedge
         // every reap queued behind it, since an unknown head blocks the task's queue (I8).
         if (r.worktreeKept) {
-          this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: shortId, worktree_path: t.worktree_path, reason: "kept the superseded session — its worktree still holds uncommitted work" } });
-          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "claude rm kept the session — its worktree still holds uncommitted work" } }); return;
+          const why = keptReason(r, t.worktree_path);
+          this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: shortId, worktree_path: r.keptPath ?? t.worktree_path, reason: `kept the superseded session — ${why}` } });
+          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: `claude rm kept the superseded session — ${why}` } }); return;
         }
       }
     } catch (e) { slog.warn(`reap ${kind} failed — leaving the session in place`, { task: t.uuid, short_id: shortId, e: String(e) }); }
@@ -307,10 +315,19 @@ export class Outbox {
         // does not wedge the queue behind it (I8); the user retries once the worktree is clean.
         this.patch(t, { process_state: "stopped" }, cmd);
         if (r.worktreeKept) {
-          this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: t.worktree_path, reason: "kept the worktree — uncommitted work remains" } });
-          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "claude rm kept the session — its worktree still holds uncommitted work" } }); return;
+          const error = `claude rm kept the session — ${keptReason(r, t.worktree_path)}`;
+          this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: r.keptPath ?? t.worktree_path, reason: `kept the worktree — ${keptReason(r, t.worktree_path)}` } });
+          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error } });
+          // A close that could not deregister anything must not read as `closed`, or the leak becomes invisible: a
+          // closed task is filtered out of every list the user looks at. `error` is where a task that needs a person
+          // goes, and `last_summary` says which worktree to resolve.
+          this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "error", patch: { status: "error", ended_at: t.ended_at ?? now(), last_summary: error } } });
+          return;
         }
-        this.applied(cmd, t, { worktreeKept: false }); return;
+        this.applied(cmd, t, { worktreeKept: false });
+        // After `applied`, so the task is never `closed` while its own rm is still running (I5).
+        this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "closed", patch: { status: "closed", closed_at: now(), ended_at: t.ended_at ?? now(), question: null, qhead: false } } });
+        return;
       }
     }
   }

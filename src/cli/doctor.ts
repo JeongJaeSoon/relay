@@ -2,12 +2,17 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
 import { homedir } from "node:os"; import { join } from "node:path";
 import { loadConfig, paths } from "../config.ts";
+import type { Database } from "bun:sqlite";
 import { openDb } from "../db/db.ts";
 import { NativeSessionRunner } from "../runner/native.ts";
 import { driftWarns, loadCapabilities, showVersion, versionDrift, versionOk, type DriftLevel } from "../runner/capabilities.ts";
 import { has, relayBin } from "./client.ts";
 export interface Check { name: string; ok: boolean; detail: string; fix?: string }
 export const checkPerms = (p: string, mode: number): Check => { if (!existsSync(p)) return { name: p, ok: false, detail: "missing" }; const m = statSync(p).mode & 0o777; return { name: p, ok: m === mode, detail: m.toString(8), fix: m === mode ? undefined : `chmod ${mode.toString(8)} ${p}` }; };
+/** Tasks whose disposal `claude rm` refused and nothing has since removed: the worktree still holds work that exists
+ *  nowhere else — uncommitted, or committed and never pushed. Relay records the refusal and stops there, so this is the
+ *  only place these can be counted. */
+export const keptSessions = (db: Database) => db.query("select t.display_id, t.worktree_path from tasks t where exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state='failed' and json_extract(c.payload_json,'$.target') is null) and not exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state='applied' and json_extract(c.payload_json,'$.target') is null)").all() as { display_id: string; worktree_path: string | null }[];
 export const parseDaemonStatus = (t: string) => ({ pid: Number(t.match(/pid:\s*(\d+)/)?.[1] ?? 0), version: t.match(/version:\s*(\S+)/)?.[1] ?? "" });
 export const summarize = (r: Check[]) => r.map((c) => `${c.ok ? "✔" : "✖"} ${c.name}${c.detail ? " — " + c.detail : ""}${!c.ok && c.fix ? `\n    → ${c.fix}` : ""}`).join("\n");
 const probeEnv = (): Record<string, string> => Object.fromEntries(Object.entries(process.env).filter(([k, v]) => k !== "ANTHROPIC_API_KEY" && v != null)) as Record<string, string>;
@@ -47,8 +52,11 @@ export async function runChecks(opts: { service?: boolean; probe?: boolean } = {
     // Registration refuses a non-git root now, but a project registered before that rule still runs tasks in a shared
     // tree with no worktree and a guard boundary the size of the directory.
     const legacy = db.query("select name, path from projects where is_git = 0").all() as { name: string; path: string }[];
+    const kept = keptSessions(db);
     db.close();
     r.push({ name: "DB integrity", ok: ic === "ok", detail: String(ic), fix: "relay db restore <backup>" });
+    r.push({ name: "sessions relay could not deregister", ok: kept.length === 0, detail: kept.length ? kept.map((k) => `${k.display_id} ${k.worktree_path ?? "?"}`).join(", ") : "none",
+      fix: kept.length ? `claude rm keeps a session whose worktree holds work that exists nowhere else. Push or discard the branch in each worktree above, then close the task again (or set worker.allow_push = true so workers push before they finish)` : undefined });
     if (legacy.length) r.push({ name: "project roots are git repositories", ok: false, detail: legacy.map((p) => `${p.name} (${p.path})`).join(", "),
       fix: `these were registered before the rule and get no worktree isolation — remove and re-add them: ${legacy.map((p) => `relay open → settings → remove "${p.name}"`).join("; ")}` });
   }

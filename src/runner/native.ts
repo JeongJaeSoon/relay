@@ -5,6 +5,18 @@ import { log } from "../log.ts";
 
 export const parseBg = (stdout: string) => { const m = stdout.match(/backgrounded · (\S+) · (.+)/); return m ? { short: m[1], name: m[2].trim() } : null; };
 
+/** `claude rm` has more than one refusal and each needs a different move from the user. Measured on CLI 2.1.251
+ *  (2026-08-31), one line each, all beginning `kept <id> — `:
+ *    · `worktree has commits that are not pushed anywhere`  ← the shape a SUCCESSFUL relay worker leaves behind
+ *      (`agents/relay-worker.md`: commit locally, never push, leave the tree clean; `allow_push` defaults to false)
+ *    · `worktree has uncommitted changes`
+ *    · `worktree is locked — in use by another live session, or locked by hand`
+ *  followed by `  worktree kept at <path>`. A removal prints `removed <id>` and exits 0. */
+export function parseRm(out: string) {
+  const kept = /kept|uncommitted|preserv/i.test(out);
+  if (!kept) return { worktreeKept: false };
+  return { worktreeKept: true, reason: out.match(/^\s*kept\s+\S+\s+[—–-]\s*(.+?)\s*$/m)?.[1], keptPath: out.match(/^\s*worktree kept at\s+(.+?)\s*$/m)?.[1] };
+}
 const DEAD_STATES = ["stopped", "done", "failed"];
 /** Accepts both the documented vocabulary (state working|blocked|done|failed|stopped, status working|waiting) and the
  *  observed one (state working|done, status busy|idle). Phase 0 measured that `agents --json` carries **no `pid` for
@@ -50,7 +62,7 @@ export class NativeSessionRunner implements AgentRunner {
     return { short_id: bg.short };
   }
   async stop(shortId: string) { const r = await this.run(["stop", shortId], process.cwd(), this.baseEnv(), 20_000); if (r.code !== 0) log.warn("claude stop non-zero", { shortId, stderr: r.stderr.slice(0, 200) }); }
-  async rm(shortId: string) { const r = await this.run(["rm", shortId], process.cwd(), this.baseEnv(), 30_000); return { worktreeKept: /kept|uncommitted|preserv/i.test(r.stdout + r.stderr) }; }
+  async rm(shortId: string) { const r = await this.run(["rm", shortId], process.cwd(), this.baseEnv(), 30_000); return parseRm(r.stdout + r.stderr); }
   /** Throws on failure: callers (watchdog, recovery) must treat "unknown" differently from "no sessions". */
   async list(all = false) {
     const r = await this.run(["agents", "--json", ...(all ? ["--all"] : [])], process.cwd(), this.baseEnv(), 20_000);
