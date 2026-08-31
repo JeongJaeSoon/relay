@@ -186,8 +186,13 @@ export class TaskService {
   close(taskUuid: string) {
     const t = loadTask(this.d.db, taskUuid)!; if (t.status === "closed") return;
     this.d.outbox.cancelPending(taskUuid, ["spawn", "send", "resume"], "close"); if (t.session_id) cancelPermissions(this.d.pendingPermissions, t.session_id);
+    // Disposal covers EVERY generation the task ran, not just the one it is bound to — the forks left the rest
+    // registered. Enqueued stops-then-removes, because the generations share one worktree: nothing may be removed
+    // while anything is still running in it.
     if (t.process_state === "alive" || t.process_state === "starting") this.d.outbox.enqueue(taskUuid, `close-stop:${now()}`, { kind: "stop", reason: "close" });
+    this.d.outbox.reapStops(t, "close");
     this.d.outbox.enqueue(taskUuid, `close-rm:${now()}`, { kind: "rm" });
+    this.d.outbox.reapRms(t);
     this.d.permits.releaseTask(taskUuid, "close"); this.status(t, "closed", { closed_at: now(), ended_at: t.ended_at ?? now(), question: null, qhead: false }); void this.d.scheduler.pump();
   }
   attachLease(taskUuid: string, by: string) {

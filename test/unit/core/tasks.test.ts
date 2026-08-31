@@ -21,7 +21,9 @@ function setup(max = 2) {
   const userMsg = (text: string, reply: string | null = null) => { const id = ulid(); log.emit({ type: "message.received", payload: { id, role: "user", source: "user", client_message_id: id, dispatch_state: "pending", text, task_uuid: null, reply_to_task_uuid: reply, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: 1 } }); return { id, role: "user", source: "user", client_message_id: id, dispatch_state: "pending", text, task_uuid: null, reply_to_task_uuid: reply, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: 1 } as any; };
   const settle = () => new Promise((r) => setTimeout(r, 20));
   const hook = (task: string, body: Record<string, unknown>) => { const t = loadTask(db, task)!; const row = [...runner.rows.values()].find((r) => r.short_id === t.short_id)!; return ingestHook({ ...body, session_id: row.session_id, transcript_path: "/t", cwd: row.cwd }, { "x-relay-task": task }, svc.ingestDeps); };   // the fixture's own session_id must not override
-  return { db, log, cfg, permits, runner, outbox, scheduler, svc, userMsg, settle, hook };
+  /** The last session relay STARTED. Reaping a superseded session issues stop/rm after a resume, so the raw last call is no longer the resume. */
+  const lastStart = () => [...runner.calls].reverse().find((c) => c.kind === "spawn" || c.kind === "resume")?.kind;
+  return { db, log, cfg, permits, runner, outbox, scheduler, svc, userMsg, settle, hook, lastStart };
 }
 describe("TaskService", () => {
   test("new_task → queued → slot → spawn → SessionStart makes it running; Stop(done) promotes summary and frees the permit", async () => {
@@ -41,10 +43,10 @@ describe("TaskService", () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
     const t = s.db.query("select uuid from tasks").get() as any; s.hook(t.uuid, { hook_event_name: "SessionStart", source: "startup" });
     s.svc.applyDecision(s.userMsg("테스트도"), { action: "route_to_task", task_id: "T-01", prompt: "테스트도 추가해", confidence: "high" }); await s.settle();
-    expect(s.runner.calls.map((c) => c.kind)).toEqual(["spawn", "stop", "resume"]);
+    expect(s.runner.calls.map((c) => c.kind)).toEqual(["spawn", "stop", "resume", "stop"]);   // the trailing stop reaps the superseded session; removing it waits for close, since the fork shares its worktree
     s.hook(t.uuid, { hook_event_name: "SessionStart", source: "resume" }); s.hook(t.uuid, { ...(stopDone as any) }); expect(loadTask(s.db, t.uuid)!.status).toBe("done");
     s.svc.applyDecision(s.userMsg("하나 더"), { action: "route_to_task", task_id: "T-01", prompt: "하나 더", confidence: "high" }); await s.settle();
-    expect(loadTask(s.db, t.uuid)!.status).toBe("starting"); expect(s.runner.calls.at(-1)!.kind).toBe("resume"); expect(s.permits.active()).toBe(1);
+    expect(loadTask(s.db, t.uuid)!.status).toBe("starting"); expect(s.lastStart()).toBe("resume"); expect(s.permits.active()).toBe(1);
   });
   test("question → waiting_input frees permit; answer re-acquires and sends", async () => {
     const s = setup(1); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); s.svc.applyDecision(s.userMsg("b"), { action: "new_task", project: "myapp", title: "b", size: "normal", prompt: "b", confidence: "high" }); await s.settle();
@@ -66,14 +68,32 @@ describe("TaskService", () => {
     s.svc.answer(t, "허용", null); expect((await (r as any).wait).hookSpecificOutput.decision.behavior).toBe("allow");
     await s.settle(); expect(loadTask(s.db, t)!.status).toBe("running"); expect(s.runner.calls.map((c) => c.kind)).toEqual(["spawn"]);   // no stop/resume flapping
     s.hook(t, { hook_event_name: "Stop", last_assistant_message: "working…", background_tasks: [], session_crons: [], prompt_id: "p1" });   // needs_review after a marker-less turn
-    s.svc.answer(t, "계속해", null); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("starting"); expect(s.runner.calls.at(-1)!.kind).toBe("resume");
+    s.svc.answer(t, "계속해", null); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("starting"); expect(s.lastStart()).toBe("resume");
   });
   test("interrupt → stop → cancelled; retry → resume; close needs the confirmed API and rm's", async () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
     const t = (s.db.query("select uuid from tasks").get() as any).uuid; s.hook(t, { hook_event_name: "SessionStart", source: "startup" });
     s.svc.interrupt(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("cancelled"); expect(s.permits.active()).toBe(0);
-    s.svc.retry(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("starting"); expect(s.runner.calls.at(-1)!.kind).toBe("resume");
+    s.svc.retry(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("starting"); expect(s.lastStart()).toBe("resume");
     s.svc.close(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("closed"); expect(s.runner.calls.at(-1)!.kind).toBe("rm");
+  });
+  test("closing a task that ran three generations disposes of all three, stopping each before removing it", async () => {
+    const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid;
+    s.runner.rows.clear();
+    // three forks: each one rebound tasks.session_id, so only process_instances still knows the earlier two
+    for (const [g, short] of [[1, "g1"], [2, "g2"], [3, "g3"]] as [number, string][]) {
+      s.runner.rows.set(short, { short_id: short, session_id: `s-${short}`, name: "relay:T-01 a", cwd: "/tmp/myapp", pid: g, alive: true, busy: false, waiting_for: null, raw: {} });
+      s.log.emit({ type: "process.started", task_uuid: t, process_generation: g, payload: { generation: g, session_id: `s-${short}` } });   // ingest's payload shape: no short id
+      s.log.emit({ type: "task.patched", task_uuid: t, payload: { patch: { short_id: short } } });                                          // the outbox stamps it afterwards, on the task only
+    }
+    expect(s.db.query("select count(*) c from process_instances where task_uuid=? and short_id is not null").get(t)).toEqual({ c: 0 });
+    s.runner.calls.length = 0;
+    s.svc.close(t); await s.outbox.run(t);
+    expect(loadTask(s.db, t)!.status).toBe("closed");
+    expect(s.runner.calls.map((c) => `${c.kind} ${c.args}`)).toEqual(["stop g3", "stop g1", "stop g2", "rm g3", "rm g1", "rm g2"]);   // every session stopped before any is removed — they share one worktree
+    expect([...s.runner.rows.keys()]).toEqual([]);                                                    // none left registered with the CLI
+    expect(s.db.query("select count(*) c from commands where state<>'applied'").get()).toEqual({ c: 0 });   // I5: a closed task keeps no pending commands
   });
   test("close_task decision only posts a confirmation message", () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" });
@@ -85,7 +105,7 @@ describe("TaskService", () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
     const t = (s.db.query("select uuid from tasks").get() as any).uuid; s.hook(t, { hook_event_name: "SessionStart", source: "startup" });
     s.svc.pause(); await s.settle(); expect(loadTask(s.db, t)!.paused).toBe(true); expect(loadTask(s.db, t)!.status).toBe("running"); expect(s.runner.calls.at(-1)!.kind).toBe("stop");
-    s.svc.resumeAll(); await s.settle(); expect(loadTask(s.db, t)!.paused).toBe(false); expect(s.runner.calls.at(-1)!.kind).toBe("resume");
+    s.svc.resumeAll(); await s.settle(); expect(loadTask(s.db, t)!.paused).toBe(false); expect(s.lastStart()).toBe("resume");
   });
   test("attach lease holds sends and yields the right terminal command", async () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();

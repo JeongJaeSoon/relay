@@ -189,9 +189,19 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
       cancelPermissions(d.permissions, body.session_id);
       for (const c of d.db.query("select uuid, agent_id from tasks where parent_uuid=? and status='running'").all(task.uuid) as any[]) { d.log.emit({ type: "task.status_changed", task_uuid: c.uuid, payload: { status: "done", patch: { status: "done", ended_at: now() } } }); d.permits.release(`agent:${c.agent_id}`); }
       for (const l of d.db.query("select holder_id from permit_leases where task_uuid=? and holder_kind='subagent' and released_at is null").all(task.uuid) as any[]) d.permits.release(l.holder_id);   // provisional Agent leases die with the process
-      const ours = !!d.db.query("select 1 from commands where task_uuid=? and kind='stop' and (state='running' or (state='applied' and applied_at>=?))").get(task.uuid, now() - 60_000);
+      const endGen = headerGen ?? gen;                                       // which generation ended: the projection is generation-scoped (I7)
+      // Relay's own doing covers `resume` as well as `stop`: the outbox stops the live session before `--bg --resume`
+      // forks a new one (Phase 0 ④), so the SessionEnd that follows is expected, not a crash. But that command stays
+      // `running` until the fork is on the roster, and by then the FORK IS ALREADY ALIVE — so the exemption is scoped
+      // to the one generation the resume interrupted, the one stamped on its `command.running`. A newer generation's
+      // death is a real crash: swallowing it strands the task holding its slot, which nothing recovers from.
+      // A reap names a long-dead session and says nothing about the live one, so it never exempts anything.
+      const ours = !!d.db.query(`select 1 from commands c where c.task_uuid=? and json_extract(c.payload_json,'$.target') is null and (
+          (c.kind='stop' and (c.state='running' or (c.state='applied' and c.applied_at>=?)))
+          or (c.kind='resume' and c.state='running' and exists (select 1 from events e where e.causation_id=c.id and e.type='command.running' and e.process_generation=?)))`)
+        .get(task.uuid, now() - 60_000, endGen);
       const unexpected = ["starting", "running"].includes(task.status) && !task.paused && !ours;
-      d.log.emit({ type: "process.ended", task_uuid: task.uuid, payload: { reason: body.reason ?? "other", crashed: unexpected } });
+      d.log.emit({ type: "process.ended", task_uuid: task.uuid, process_generation: endGen, payload: { generation: endGen, reason: body.reason ?? "other", crashed: unexpected } });
       if (unexpected) d.onCrash(loadTask(d.db, task.uuid)!, `SessionEnd(${body.reason ?? "other"}) while running`);
       return { status: 200, json: {} };
     }

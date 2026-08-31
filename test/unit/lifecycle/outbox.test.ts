@@ -136,6 +136,64 @@ describe("Outbox", () => {
     expect(s.runner.calls.map((c) => c.kind)).toEqual(["stop", "rm"]); expect(s.states()).toEqual(["applied", "applied"]);
     expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
   });
+  test("a stop whose process.ended lands after a newer generation is alive leaves the live process alone; a stop of the current generation still ends it", async () => {
+    const s = setup(); s.mk("u1", "running", { session_id: "sid", short_id: "fake1", process_state: "alive", process_generation: 1 }); s.live("u1");
+    const stop = s.runner.stop.bind(s.runner);
+    // The fork's SessionStart lands while `claude stop` is still being awaited: generation 2 is alive before the stop
+    // gets to emit its process.ended for generation 1.
+    s.runner.stop = async (short: string) => { await stop(short); s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: 2, payload: { generation: 2, session_id: "sid2", short_id: "fake2" } }); };
+    s.ob.enqueue("u1", "s", { kind: "stop", reason: "interrupt" }); await s.ob.run("u1");
+    const t = loadTask(s.db, "u1")!;
+    expect(t.process_state).toBe("alive"); expect(t.process_generation).toBe(2); expect(t.status).toBe("running");
+    expect(s.db.query("select count(*) c from process_instances where task_uuid='u1' and ended_at is null").get()).toEqual({ c: 1 });   // I4
+    s.runner.stop = stop;
+    s.ob.enqueue("u1", "s2", { kind: "stop", reason: "interrupt" }); await s.ob.run("u1");
+    expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
+    expect(s.db.query("select count(*) c from process_instances where task_uuid='u1' and ended_at is null").get()).toEqual({ c: 0 });
+  });
+  test("a fork-resume reaps the session it superseded and never the one it just bound to", async () => {
+    const s = setup("resume"); s.mk("u1", "starting", { process_generation: 0 });
+    s.runner.rows.set("gen1", { short_id: "gen1", session_id: "sid-1", name: "relay:T-01 t", cwd: "/p", pid: 5, alive: true, busy: false, waiting_for: null, raw: {} });
+    // exactly what ingest.ts emits for a SessionStart: a session id and no short id, which is why the reap set is keyed by session
+    s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: 1, payload: { generation: 1, session_id: "sid-1" } });
+    expect(s.db.query("select short_id from process_instances where task_uuid='u1'").get()).toEqual({ short_id: null });
+    s.ob.enqueue("u1", "r1", { kind: "resume", prompt: "continue", marker: "0000cafe" }); await s.ob.run("u1");
+    expect(loadTask(s.db, "u1")!.short_id).toBe("fake1");                                             // `--bg --resume` forked to a new session
+    // stop only. The fork is alive in the SAME worktree, and `claude rm` on a superseded session can take that
+    // worktree with it, so deregistering waits for close.
+    expect(s.runner.calls.filter((c) => c.kind === "stop" || c.kind === "rm").map((c) => `${c.kind} ${c.args}`)).toEqual(["stop gen1", "stop gen1"]);
+    expect(s.runner.rows.get("gen1")!.alive).toBe(false); expect(s.runner.rows.get("fake1")!.alive).toBe(true);
+    expect(s.states()).toEqual(["applied", "applied"]);
+  });
+  test("a reap refused because the shared worktree still holds work keeps the session and still applies", async () => {
+    const s = setup(); s.mk("u1", "running", { process_generation: 0, worktree_path: "/p/wt" });
+    for (const [g, short] of [[1, "gen1"], [2, "gen2"]] as [number, string][]) {
+      s.runner.rows.set(short, { short_id: short, session_id: `sid-${short}`, name: "relay:T-01 t", cwd: "/p", pid: g, alive: true, busy: false, waiting_for: null, raw: {} });
+      s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: g, payload: { generation: g, session_id: `sid-${short}` } });
+      s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { short_id: short } } });                     // the outbox stamps the short id after the fork's SessionStart
+    }
+    s.runner.rm = async (short: string) => { s.runner.calls.push({ kind: "rm", args: short }); return { worktreeKept: true }; };   // the generations share one worktree and gen2's work is still in it
+    s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { process_state: "stopped" } } });   // close stops everything before anything is removed
+    expect(s.ob.reapStops(loadTask(s.db, "u1")!, "test")).toEqual(["sid-gen1"]);
+    s.ob.reapRms(loadTask(s.db, "u1")!); await s.ob.run("u1");
+    expect(s.runner.calls.filter((c) => c.kind === "rm").map((c) => c.args)).toEqual(["gen1"]);
+    expect(s.states()).toEqual(["applied", "failed"]);                                                 // a kept worktree means the session is still registered — never "applied" (Phase 0 capabilities.json:448)
+    expect(s.runner.rows.has("gen1")).toBe(true);
+    expect(s.db.query("select count(*) c from events where type='worktree.kept'").get()).toEqual({ c: 1 });
+  });
+  test("a reap never removes a session while a generation of the task is still alive in the shared worktree", async () => {
+    const s = setup(); s.mk("u1", "running", { process_generation: 0, worktree_path: "/p/wt" });
+    for (const [g, short] of [[1, "gen1"], [2, "gen2"]] as [number, string][]) {
+      s.runner.rows.set(short, { short_id: short, session_id: `sid-${short}`, name: "relay:T-01 t", cwd: "/p", pid: g, alive: true, busy: false, waiting_for: null, raw: {} });
+      s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: g, payload: { generation: g, session_id: `sid-${short}` } });
+      s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { short_id: short } } });
+    }
+    expect(loadTask(s.db, "u1")!.process_state).toBe("alive");
+    s.ob.reapRms(loadTask(s.db, "u1")!); await s.ob.run("u1");
+    expect(s.runner.calls.filter((c) => c.kind === "rm").length).toBe(0);                              // gen2 is editing in that worktree — `claude rm` on gen1 could delete it underneath
+    expect(s.runner.rows.has("gen1")).toBe(true);
+    expect(s.states()).toEqual(["failed"]);                                                            // refused, visible, retryable — never silently "applied"
+  });
   test("cancelPending fails the listed kinds so a closed task never keeps a pending spawn/send", async () => {
     const s = setup(); s.mk("u1", "queued", { queued_at: 1 });
     s.ob.enqueue("u1", "sp", { kind: "spawn", spec: spec("u1") }); s.ob.enqueue("u1", "se", { kind: "send", text: "x", marker: "00000009" });

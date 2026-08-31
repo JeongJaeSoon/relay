@@ -13,9 +13,15 @@ import { log as slog } from "../log.ts";
 export type CommandPayload =
   | { kind: "spawn"; spec: SpawnSpec }
   | { kind: "send"; text: string; marker: string; message_id?: string }
-  | { kind: "stop"; reason: string }
+  // `target` on stop/rm names a SUPERSEDED generation's session instead of the task's own (a reap): `--bg --resume`
+  // forks, so `tasks.session_id` names only the LAST session a task has run while the earlier ones stay registered with
+  // the CLI. A reap never touches the task's process state — the process it names is already dead.
+  | { kind: "stop"; reason: string; target?: ReapTarget }
   | { kind: "resume"; prompt: string; marker: string }
-  | { kind: "rm" };
+  | { kind: "rm"; target?: ReapTarget };
+/** A superseded session. `short_id` is what `claude stop`/`claude rm` take, but the hook path does not learn it until
+ *  after the fork's SessionStart is projected, so it is often null and resolved from the roster at reap time. */
+export interface ReapTarget { session_id: string; short_id: string | null }
 export interface OutboxDeps { delivery: () => DeliveryMethod; isPaused: () => boolean; settingsJson: (t: Task, gen: number) => string; env: (t: Task, gen: number) => Record<string, string>; socketPathFor: (row: AgentRow) => string; instanceId: () => string }
 /** Thrown by apply() when the command must stay pending and the task queue must stop for now (inbox held, turn busy). */
 class HeldError extends Error {}
@@ -49,6 +55,34 @@ export class Outbox {
     return rowToCommand(this.db.query("select * from commands where id=?").get(id));
   }
   kick(taskUuid: string) { queueMicrotask(() => this.run(taskUuid).catch((e) => slog.error("outbox run failed", { taskUuid, e: String(e) }))); }
+  /** Every session this task has ever run except the one it is bound to NOW. `process_instances` is the only record of
+   *  the fork chain — `tasks.session_id` is overwritten on every `--bg --resume` — and it is the same table
+   *  `resolveTask` reads to place a superseded session's late hooks, so reaping leaves it alone. Keyed by SESSION id,
+   *  never by short id: the hook path learns a session's short id only after the outbox patches it, which happens
+   *  AFTER the fork's SessionStart is projected, so `process_instances.short_id` is null for nearly every generation
+   *  (9 of 11 rows in the incident database) and a short-id key finds nothing at all. The name is never identity —
+   *  Phase 0 ⑦ measured two live sessions sharing one. */
+  supersededSessions(t: Task): ReapTarget[] {
+    return (this.db.query("select session_id, max(short_id) short_id from process_instances where task_uuid=? and session_id is not null and session_id is not ? and (short_id is null or short_id is not ?) group by session_id order by max(generation)").all(t.uuid, t.session_id, t.short_id) as any[])
+      .map((r) => ({ session_id: r.session_id as string, short_id: (r.short_id ?? null) as string | null }));
+  }
+  /** Stop every generation the task no longer runs. Safe at any time — the processes are dead or dying and a stop
+   *  touches nothing on disk. Idempotent by session id. */
+  reapStops(t: Task, reason: string): string[] {
+    const olds = this.supersededSessions(t);
+    for (const target of olds) this.enqueue(t.uuid, `reap-stop:${target.session_id}`, { kind: "stop", reason, target });
+    return olds.map((o) => o.session_id);
+  }
+  /** Deregister them. NOT safe while any generation is alive: the generations SHARE one worktree, so `claude rm` on a
+   *  superseded session can take the live one's working directory with it — only its refusal on uncommitted work
+   *  stands in the way, and that is a regex over `rm` output, not a barrier. So this belongs to a task that is
+   *  finished: `close`, never a fork-resume. Callers must have queued `reapStops` first — every session stopped before
+   *  any is removed — and `reapOne` re-checks liveness at run time regardless. */
+  reapRms(t: Task): string[] {
+    const olds = this.supersededSessions(t);
+    for (const target of olds) this.enqueue(t.uuid, `reap-rm:${target.session_id}`, { kind: "rm", target });
+    return olds.map((o) => o.session_id);
+  }
   async runAll() { for (const r of this.db.query("select distinct task_uuid from commands where state='pending'").all() as any[]) await this.run(r.task_uuid); }
   confirm(id: string) { const c = rowToCommand(this.db.query("select * from commands where id=?").get(id)); this.log.emit({ type: "command.applied", task_uuid: c.task_uuid, payload: { id } }); this.kick(c.task_uuid); }
   retry(id: string) { const c = rowToCommand(this.db.query("select * from commands where id=?").get(id)); this.log.emit({ type: "command.requeued", task_uuid: c.task_uuid, payload: { id } }); this.kick(c.task_uuid); }
@@ -102,12 +136,12 @@ export class Outbox {
   private async loop(taskUuid: string): Promise<"empty" | "blocked" | "held" | "error"> {
     for (;;) {
       this.again.delete(taskUuid);
-      const row = this.db.query("select * from commands where task_uuid=? and state in ('pending','unknown') order by (case when kind in ('stop','rm') and state='pending' then 0 else 1 end), rowid limit 1").get(taskUuid) as any;   // stop/rm jump the queue
+      const row = this.db.query("select * from commands where task_uuid=? and state in ('pending','unknown') order by (case when state='pending' and (kind='stop' or (kind='rm' and json_extract(payload_json,'$.target') is null)) then 0 else 1 end), rowid limit 1").get(taskUuid) as any;   // stop/rm jump the queue; a reap rm goes last so every session is stopped before any is removed, and a detach-blocked one never sits in front of a real stop
       if (!row) return "empty";
       if (row.state === "unknown") return "blocked";                          // I8: an unknown head blocks the queue until the user confirms/retries
       const cmd = rowToCommand(row); const task = loadTask(this.db, taskUuid)!;
       if (!this.canRun(cmd, task)) return "blocked";                          // stays pending (I3, B1)
-      this.log.emit({ type: "command.running", task_uuid: taskUuid, causation_id: cmd.id, payload: { id: cmd.id } });
+      this.log.emit({ type: "command.running", task_uuid: taskUuid, causation_id: cmd.id, process_generation: task.process_generation, payload: { id: cmd.id } });   // the generation this command acts on: a resume names the one it is about to interrupt
       try { await this.apply(cmd, task); }
       catch (e) {
         if (e instanceof HeldError) { this.log.emit({ type: "command.requeued", task_uuid: taskUuid, payload: { id: cmd.id } }); return "held"; }
@@ -125,6 +159,8 @@ export class Outbox {
   /** B1 gate. A slot is only ever granted by the scheduler (status=starting), so spawn/resume never run for a merely `queued` task. `stop`/`rm` always run (kill switch and close win over attach; the API refuses user-initiated interrupt/close while attached). */
   private canRun(cmd: Command, t: Task): boolean {
     const k = cmd.kind;
+    // A reap has no urgency and may take the shared worktree with it, so unlike a real stop/rm it waits for detach.
+    if (k === "rm" && (cmd.payload as CommandPayload & { target?: ReapTarget }).target) return t.attach_state === "none";   // a reap rm may take the shared worktree: never while the user is inside it
     if (k === "stop" || k === "rm") return true;
     if (t.attach_state !== "none") return false;
     if (this.deps.isPaused()) return false;
@@ -140,6 +176,42 @@ export class Outbox {
   }
   private applied(cmd: Command, t: Task, extra: Record<string, unknown> = {}) { this.log.emit({ type: "command.applied", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, ...extra } }); }
   private patch(t: Task, patch: Record<string, unknown>, cmd: Command) { this.log.emit({ type: "task.patched", task_uuid: t.uuid, causation_id: cmd.id, payload: { patch } }); }
+  /** One superseded session, stopped or removed. Never touches the task's process state — the process it names is a
+   *  dead one — and never deletes `.relay-owner`: that stamp belongs to the TASK, and the live generation is still
+   *  working under it. The stored short id is treated as a hint only; identity is re-established against a fresh
+   *  roster by session id, the way `ForeignSessions.stop` re-classifies before acting on a 5s-old poll. */
+  private async reapOne(cmd: Command, t: Task, target: ReapTarget, kind: "stop" | "rm") {
+    const live = loadTask(this.db, t.uuid);
+    if (live && (live.session_id === target.session_id || (target.short_id && live.short_id === target.short_id))) {
+      slog.info("reap skipped — the task is bound to this session now", { task: t.uuid, session: target.session_id }); this.applied(cmd, t, { reaped: null }); return;
+    }
+    // The generations share a worktree, so removing a dead one can delete the live one's working directory. Ordering
+    // is supposed to prevent this; liveness is checked again here because ordering is a property of the queue and this
+    // is a property of the moment.
+    if (kind === "rm" && live && ["alive", "starting"].includes(live.process_state)) {
+      slog.warn("reap rm refused — a generation of this task is still alive in the shared worktree", { task: t.uuid, session: target.session_id });
+      this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "a generation of this task is still alive in the shared worktree" } }); return;
+    }
+    let shortId: string | null = null;
+    try { shortId = (await this.runner.list(true)).find((r) => r.session_id === target.session_id)?.short_id ?? null; }
+    catch (e) { slog.warn("reap could not read the roster — leaving the session in place", { task: t.uuid, e: String(e) }); this.applied(cmd, t, { reaped: null }); return; }
+    if (!shortId || (live && shortId === live.short_id)) { this.applied(cmd, t, { reaped: null }); return; }   // gone from the roster is the state a reap is trying to reach
+    try {
+      if (kind === "stop") await this.runner.stop(shortId);
+      else {
+        const r = await this.runner.rm(shortId);
+        // Phase 0 (`capabilities.json:448`): a kept worktree means the SESSION is still registered, so recording this
+        // as applied is relay believing a cleanup that did not happen — the third root of the leak. `failed` keeps it
+        // visible and retryable; `unknown` would be dishonest (the refusal is known, not ambiguous) and would wedge
+        // every reap queued behind it, since an unknown head blocks the task's queue (I8).
+        if (r.worktreeKept) {
+          this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: shortId, worktree_path: t.worktree_path, reason: "kept the superseded session — its worktree still holds uncommitted work" } });
+          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "claude rm kept the session — its worktree still holds uncommitted work" } }); return;
+        }
+      }
+    } catch (e) { slog.warn(`reap ${kind} failed — leaving the session in place`, { task: t.uuid, short_id: shortId, e: String(e) }); }
+    this.applied(cmd, t, { reaped: shortId }); return;
+  }
   private async waitGone(shortId: string, ms = 10_000) { const t0 = now(); while (now() - t0 < ms) { const r = (await this.runner.list()).find((x) => x.short_id === shortId); if (!r || !r.alive) return true; await Bun.sleep(300); } return false; }
   private async waitRow(shortId: string, ms = 10_000): Promise<AgentRow | undefined> { const t0 = now(); for (;;) { const r = (await this.runner.list(true)).find((x) => x.short_id === shortId); if (r?.cwd && r.session_id) return r; if (now() - t0 > ms) return r; await Bun.sleep(300); } }
   /** Where this session's `.relay-owner` belongs. For a git project the row's cwd is the PROJECT ROOT, shared by every
@@ -201,22 +273,34 @@ export class Outbox {
         const fresh = await this.waitRow(r.short_id);
         this.patch(t, { short_id: r.short_id, process_state: "starting", paused: false, ...(fresh?.session_id ? { session_id: fresh.session_id } : {}) }, cmd);
         outcome("accepted", "resume");                                       // B3: applied at `backgrounded ·` parse time; SessionStart(gen) confirms, watchdog fills a gap
+        this.reapStops(loadTask(this.db, t.uuid)!, "superseded by resume");   // stop only: the fork is alive in the shared worktree, so removing anything here can delete the work it is doing (close rm's)
         this.applied(cmd, t, { short_id: r.short_id }); return;
       }
       case "stop": {
+        if (p.target) { await this.reapOne(cmd, t, p.target, "stop"); return; }
         if (t.short_id) { await this.runner.stop(t.short_id); if (!(await this.waitGone(t.short_id))) throw new Error("stop not confirmed"); }
-        if (t.process_state === "alive" || t.process_state === "starting") this.log.emit({ type: "process.ended", task_uuid: t.uuid, causation_id: cmd.id, payload: { reason: p.reason, crashed: false } });
+        // Stamped with the generation we stopped, not with whatever is current after the wait: if a newer one came up
+        // meanwhile, this end is about a superseded process and the projection must ignore it.
+        if (t.process_state === "alive" || t.process_state === "starting") this.log.emit({ type: "process.ended", task_uuid: t.uuid, causation_id: cmd.id, process_generation: t.process_generation, payload: { generation: t.process_generation, reason: p.reason, crashed: false } });
         this.applied(cmd, t); return;
       }
       case "rm": {
+        if (p.target) { await this.reapOne(cmd, t, p.target, "rm"); return; }
         // Drop our own stamp first: `claude rm` keeps a worktree that has uncommitted changes, and an untracked
         // `.relay-owner` would be exactly that (measured 2026-08-31). Reconcile no longer needs it once we are removing.
         if (t.worktree_path) { try { unlinkSync(join(t.worktree_path, OWNER_FILE)); } catch {} }
         const r = t.short_id ? await this.runner.rm(t.short_id) : { worktreeKept: false };
-        // `claude rm` keeps the session when its worktree has uncommitted or unpushed work (Phase 0 ④). B3: still
-        // applied, but the user has to be told the worktree is still on disk.
-        if (r.worktreeKept) this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: t.worktree_path, reason: "kept the worktree — uncommitted work remains" } });
-        this.patch(t, { process_state: "stopped" }, cmd); this.applied(cmd, t, { worktreeKept: r.worktreeKept }); return;
+        // `claude rm` keeps the SESSION, not just the worktree, when that worktree has uncommitted or unpushed work
+        // (Phase 0 ④). Recording that as applied is what let close report success while leaving a session registered
+        // forever — `capabilities.json:448` called it: "B3's rm row must treat this as NOT applied … otherwise
+        // close/cleanup silently leaks sessions and worktrees". `failed` is the honest state and, unlike `unknown`,
+        // does not wedge the queue behind it (I8); the user retries once the worktree is clean.
+        this.patch(t, { process_state: "stopped" }, cmd);
+        if (r.worktreeKept) {
+          this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: t.worktree_path, reason: "kept the worktree — uncommitted work remains" } });
+          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "claude rm kept the session — its worktree still holds uncommitted work" } }); return;
+        }
+        this.applied(cmd, t, { worktreeKept: false }); return;
       }
     }
   }
