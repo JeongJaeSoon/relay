@@ -47,6 +47,8 @@ export const MIGRATIONS: string[] = [
   alter table messages add column ask integer not null default 0;
   -- Ask mode used to be stored as a '? ' prefix on the text. Keep what those rows meant; the only case this cannot
   -- tell apart is the bug the column fixes — a github/slack/cron body that merely started with '? '.
+  -- The same rule lives as an upcaster in projections.ts (message.received), so a projection rebuild lands here
+  -- too; a backfill without one is undone by the next replay. See the note at the top of replay.ts.
   update messages set ask=1 where role='user' and text like '? %';
   `,
 ];

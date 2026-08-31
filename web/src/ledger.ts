@@ -1,12 +1,12 @@
 // web/src/ledger.ts — the request ledger: one row per user message, what relay did with it, and whether anything came back.
 // Pure derivation over the snapshot the dashboard already holds (messages + tasks); the rail in app.js is only a view of it.
 import type { Message, MessageSource, Task, TaskStatus } from "@shared/types.ts";
-import { isAsk, stripAsk } from "@shared/ask.ts";
+import { stripAsk } from "@shared/ask.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
 
-/** The `?` prefix is a keyboard gesture, not part of what the user asked — the gateway strips it before storing,
- *  but rows written before the declaration moved into `ask` still carry one. */
-const plain = (text: string) => (isAsk(text) ? stripAsk(text) : text);
+/** The `?` prefix is a keyboard gesture, not part of what the user asked — but only when it WAS one, which is what
+ *  `ask` says. A `?` body from github/slack/cron/mcp is work, and renders whole. Only pre-`ask` rows carry a prefix. */
+const plain = (m: Message) => (m.ask ? stripAsk(m.text) : m.text);
 
 /** What happened to the request. Read off dispatch_state and the dispatcher's recorded decision — nothing is guessed. */
 export type Disposition = "deciding" | "new_task" | "split" | "routed" | "delivered" | "answered" | "fastpath" | "close_request" | "needs_confirm" | "failed";
@@ -125,7 +125,7 @@ export function requestRows(messages: Message[], tasks: Record<string, Task>): R
     const d = dispositionOf(m); const taskId = task?.display_id ?? null;
     const taskIds = own.length ? m.dispatch_json!.task_ids! : taskId ? [taskId] : [];
     rows.push({
-      id: m.id, text: plain(m.text), createdAt: m.created_at, source: m.source,
+      id: m.id, text: plain(m), createdAt: m.created_at, source: m.source,
       disposition: d, dispositionLabel: labelOf(d, taskId),
       taskUuid: m.task_uuid, taskId, taskIds, taskStatus: task?.status ?? null,
       ...stateOf(d, m, task), bucket: bucketOf(d, m, task),

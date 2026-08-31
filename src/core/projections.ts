@@ -1,5 +1,6 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { EventEnvelope, Message, Project, SystemState, Task, WsFrame } from "@shared/types.ts";
+import { isAsk } from "@shared/ask.ts";
 import type { Config } from "../config.ts";
 import { now } from "./clock.ts";
 
@@ -96,8 +97,12 @@ export function applyProjection(db: Database, ev: EventEnvelope, cfg: Config): F
     case ev.type === "permit.rebound": db.run("update permit_leases set holder_id=? where holder_id=? and released_at is null", [p.to, p.from]); break;
     case ev.type === "message.received": {
       const m = p as Message;
+      // Upcast: events emitted before `ask` existed carried Ask mode as a "? " prefix on the text. Deriving it here
+      // is what lets a projection rebuild land where migration 2's backfill did — see replay.ts. New events always
+      // carry the field, so this reads no text that a gateway did not already rule on.
+      const ask = m.ask ?? (m.role === "user" && isAsk(m.text));
       db.run("insert into messages(id,role,source,client_message_id,dispatch_state,text,task_uuid,reply_to_task_uuid,ask,dispatch_json,dispatch_error,chain_prev_id,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        [m.id, m.role, m.source, m.client_message_id, m.dispatch_state, m.text, m.task_uuid, m.reply_to_task_uuid, m.ask ? 1 : 0, m.dispatch_json ? JSON.stringify(m.dispatch_json) : null, m.dispatch_error, m.chain_prev_id ?? null, m.created_at]);
+        [m.id, m.role, m.source, m.client_message_id, m.dispatch_state, m.text, m.task_uuid, m.reply_to_task_uuid, ask ? 1 : 0, m.dispatch_json ? JSON.stringify(m.dispatch_json) : null, m.dispatch_error, m.chain_prev_id ?? null, m.created_at]);
       frames.push({ type: "chat.message", message: loadMessage(db, m.id)! }); if (m.role === "user") frames.push({ type: "dispatch.updated", message: loadMessage(db, m.id)! }); break;
     }
     case ev.type.startsWith("dispatch."): { if (p.patch) patchMessage(db, p.message_id, p.patch); msgFrame(p.message_id, !!p.chat); break; }

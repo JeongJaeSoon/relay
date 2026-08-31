@@ -47,6 +47,8 @@ test("the ask chip reads the declaration, not the text", () => {
   expect(badgeParts(m("refactor auth"), ctx).parts).toEqual(["answer_directly"]);
   expect(badgeParts(m("상태?", true, "fastpath"), ctx).parts).toEqual(["ask", "fast-path"]);
   expect(badgeParts(m("? please fix the parser"), ctx).parts).toEqual(["answer_directly"]);   // a body that merely starts with ? is not a question
-  // The rail that showed this is now the request ledger; a prefix left on an older row must not reach it.
+  // The rail that showed this is now the request ledger; a prefix left on an older row must not reach it...
   expect(requestRows([m("? why did T-02 fail", true)], {})[0].text).toBe("why did T-02 fail");
+  // ...but a `?` body from a non-typing source is the request, and the reader must show what was actually sent.
+  expect(requestRows([{ ...m("? please fix the parser"), source: "github" }], {})[0].text).toBe("? please fix the parser");
 });

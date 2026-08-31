@@ -1,6 +1,6 @@
 // web/src/adapter.ts — the only place that knows both worlds: server Task/Message/SystemState (store) and the demo engine's S/N/LEDGER/chat globals (app.js).
 import type { EventEnvelope, ForeignSession, Message, Project, Task } from "@shared/types.ts";
-import { isAsk, stripAsk } from "@shared/ask.ts";
+import { stripAsk } from "@shared/ask.ts";
 import * as api from "./api.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
 import { requestRows } from "./ledger.ts";
@@ -35,8 +35,9 @@ export function toDemoForeign(f: ForeignSession): DemoForeign {
     kind: f.kind === "bg" ? "background" : f.kind ?? "", pid: f.pid, startedAt: f.started_at ? new Date(f.started_at) : null, firstSeen: new Date(f.first_seen), lastSeen: new Date(f.last_seen) };
 }
 const demoOf = (uuid: string | null | undefined): DemoTask | undefined => { if (!uuid) return undefined; const t = store.state.tasks[uuid]; return t ? D.S?.tasks?.get(t.display_id) ?? undefined : undefined; };
-/** The question as the user typed it. New rows are stored without the `?`; rows written before it moved into `ask` still carry one. */
-const plain = (text: string) => (isAsk(text) ? stripAsk(text) : text);
+/** The question as the user typed it — gated on the declaration, never on the text: a `?` a non-typing source sent
+ *  is part of the request and must render. Only rows written before `ask` existed still carry a prefix to strip. */
+const plain = (m: Message) => (m.ask ? stripAsk(m.text) : m.text);
 export function badgeParts(m: Message, ctx: Ctx): { kind: string; parts: string[]; task?: DemoTask; retry?: boolean; judging: boolean } {
   const b = stateBadges(m, ctx);
   return m.ask ? { ...b, parts: ["ask", ...b.parts] } : b;                       // the same field the dispatcher reads, not a re-read of the text
@@ -142,7 +143,7 @@ export function installAdapter() {
       if (isDispatcherBadgeRow(m)) { drawn.add(id); continue; }                   // the badge chips under the user message already say this
       if (drawn.has(id)) { const old = badgeRows.get(id); if (old && m.role === "user") { const fresh = badgeRow(m); old.replaceWith(fresh); badgeRows.set(id, fresh); } continue; }
       drawn.add(id); const task = demoOf(m.task_uuid);
-      if (m.role === "user") { D.chatUser(plain(m.text)); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
+      if (m.role === "user") { D.chatUser(plain(m)); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
       else if (m.role === "question" && task) D.chatQuestion(task);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
       else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(task ?? null, m.text); }
       else D.chatMsg(task ?? null, m.text);                                    // worker_summary | error | dispatcher_answer
