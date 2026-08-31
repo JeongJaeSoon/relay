@@ -22,7 +22,7 @@ const marker = () => randomBytes(4).toString("hex");
 const markerFor = (key: string) => createHash("sha256").update(key).digest("hex").slice(0, 8);
 /** One item of a decision, planned but not yet emitted: `created` must be emitted before `rest` (task rows are a FK for the chat rows and commands that follow). */
 type TaskPlan = { uuid: string; display_id: string; project_id: string; created: EmitInput[]; rest: EmitInput[]; kick: boolean };
-const sysMsg = (text: string, taskUuid: string | null = null): MessageInput => ({ id: ulid(), role: "system", source: "user", client_message_id: null, dispatch_state: "direct", text, task_uuid: taskUuid, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() });
+const sysMsg = (text: string, taskUuid: string | null = null): MessageInput => ({ id: ulid(), role: "system", source: "user", client_message_id: null, dispatch_state: "direct", text, task_uuid: taskUuid, reply_to_task_uuid: null, ask: false, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() });
 
 export class TaskService {
   ingestDeps: IngestDeps;

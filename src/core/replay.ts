@@ -1,4 +1,8 @@
 // src/core/replay.ts — rebuild every projection table from the event log (§3.2: the log is the source of truth; projections are a cache).
+// Consequence for migrations: a rebuild wipes the projections and replays raw events, so anything a migration writes
+// INTO a projection is undone unless applyProjection can derive it from the event alone — and `relay db rebuild` runs
+// migrate() and this in one command, so on an upgrading db it would be applied and undone in the same breath. A
+// backfill therefore needs a matching upcaster in projections.ts; migration 2 (`messages.ask`) is the worked example.
 import type { Database } from "bun:sqlite";
 import type { EventEnvelope } from "@shared/types.ts";
 import type { Config } from "../config.ts";

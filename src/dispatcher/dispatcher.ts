@@ -2,7 +2,6 @@ import type { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { DispatchDecision, Message } from "@shared/types.ts";
-import { isAsk, stripAsk } from "@shared/ask.ts";
 import { paths, type Config } from "../config.ts";
 import { now } from "../core/clock.ts";
 import { EventLog, loadMessage } from "../core/events.ts";
@@ -40,26 +39,30 @@ export class Dispatcher {
   /** Re-enqueue every pending message (startup, resume-all). */
   drainPending() { for (const r of this.db.query("select id from messages where role='user' and dispatch_state in ('pending','deciding') order by created_at").all() as any[]) this.enqueue(r.id); }
   private patch(id: string, patch: Partial<Message>, type = "dispatch.completed") { this.log.emit({ type, payload: { message_id: id, patch } }); }
-  /** The dispatcher badge row (crosswalk §4): `dispatcher · action · size · project`, or the failure reason. */
+  /** The dispatcher badge row (crosswalk §4): `dispatcher · action · size · project`, or the failure reason.
+   *  This and the fast-path answer below write the payload as a literal rather than through MessageInput, so nothing
+   *  makes them set `ask`. Safe only because neither is role='user': that is the role the projection upcasts from the
+   *  text when the field is missing. A role='user' emitter must set it — see the upcast in projections.ts. */
   private badge(text: string) { this.log.emit({ type: "message.received", payload: { id: ulid(), role: "system", source: "user", client_message_id: null, dispatch_state: "direct", text, task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } }); }
   private async process(id: string) {
     const msg = loadMessage(this.db, id); if (!msg || msg.dispatch_state !== "pending") return;
     if (this.opts.isPaused()) return;                                    // stays pending; resume-all calls drainPending()
     await this.rateLimit();
-    // Ask mode was declared at submission and marked on the text by the gateway; the marker is the dispatcher's only
-    // input from it, so it survives a restart (drainPending) and a replay. The fast path is tried first: declaring a
-    // status question must never make it more expensive than the same words without the marker.
-    const ask = isAsk(msg.text); const text = ask ? stripAsk(msg.text) : msg.text;
+    // Ask mode was declared at submission and recorded by the gateway on the message itself; `ask` is the dispatcher's
+    // only input from it, so it survives a restart (drainPending) and a replay, and no message body can imitate it.
+    // The fast path is tried first: declaring a status question must never make it more expensive than the same words
+    // without the declaration.
+    const ask = msg.ask;
     // A message scoped to one task is not a system status query, however it is worded — the fast path's answer is the
     // whole system's. Same rule the reply path already has, same argument.
-    if (isStatusQuery(text, msg.reply_to_task_uuid ?? msg.task_uuid)) {
+    if (isStatusQuery(msg.text, msg.reply_to_task_uuid ?? msg.task_uuid)) {
       this.patch(id, { dispatch_state: "fastpath" }, "dispatch.fastpath");
       this.log.emit({ type: "message.received", payload: { id: ulid(), role: "dispatcher_answer", source: "user", client_message_id: null, dispatch_state: "direct", text: statusAnswer(this.db, this.cfg), task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
       return;
     }
     this.patch(id, { dispatch_state: "deciding" }, "dispatch.started");
     const prev = this.db.query("select id from messages where role='user' and dispatch_state in ('dispatched','failed','needs_confirm','fastpath') and id<>? order by created_at desc limit 1").get(id) as any;
-    if (ask) return this.answerQuestion(id, text, msg.task_uuid, prev?.id ?? null);
+    if (ask) return this.answerQuestion(id, msg.text, msg.task_uuid, prev?.id ?? null);
     const ctx = buildContext(this.db);
     let last: { decision: DispatchDecision | null; error: string } = { decision: null, error: "" };
     for (const effort of [this.cfg.dispatcher.effort, this.cfg.dispatcher.retry_effort]) {

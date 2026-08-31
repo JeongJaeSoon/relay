@@ -63,6 +63,7 @@ export interface Message {
   id: string; role: MessageRole; source: MessageSource;
   client_message_id: string | null; dispatch_state: DispatchState;
   text: string; task_uuid: string | null; reply_to_task_uuid: string | null;
+  ask: boolean;                                            // Ask mode, declared at submission — never inferred from the text (shared/ask.ts)
   dispatch_json: DispatchDecision | null; dispatch_error: string | null;
   chain_prev_id: string | null;                            // 직전 판단 메시지(문맥 체인, B6)
   created_at: number;

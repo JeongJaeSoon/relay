@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Task } from "@shared/types.ts";
-import { ASK_PREFIX, isAsk, markAsk } from "@shared/ask.ts";
+import { isAsk, stripAsk } from "@shared/ask.ts";
 import type { AppContext } from "./server.ts";
 import { snapshot } from "./snapshot.ts";
 import { loadTask } from "../core/projections.ts";
@@ -45,7 +45,8 @@ export function apiRoutes(ctx: AppContext) {
     const reply = b.data.reply_to_task_id ?? null;
     if (reply && !loadTask(ctx.db, reply)) return bad(c, "unknown task", 404);                 // validate before emit: messages.task_uuid is a foreign key
     // Ask mode: the client declares a question the way it declares a reply target. Both entry paths — the toggle's
-    // `ask` and the `?` the user typed — normalise to one marker on the stored text, which is what the dispatcher reads.
+    // `ask` and the `?` the user typed — resolve here into `messages.ask`, which is what the dispatcher reads. The
+    // declaration is stored as data, never re-derived from the text: only this layer knows the source it came from.
     // `ask_task_id` scopes the question to one task; it lands in messages.task_uuid, so the target survives a restart
     // too. It is a question ABOUT that task, never a message TO it — nothing is sent to the worker.
     const askTask = b.data.ask_task_id ?? null;
@@ -55,10 +56,10 @@ export function apiRoutes(ctx: AppContext) {
     // start with one is work, not a question. Those sources declare a question with `ask` like any other client.
     const typed = b.data.source === "user" || b.data.source === "cli";
     const ask = !reply && (b.data.ask || !!askTask || (typed && isAsk(b.data.text)));
-    const text = ask ? markAsk(b.data.text) : b.data.text;
-    if (ask && text === ASK_PREFIX) return bad(c, "empty question");
+    const text = ask ? stripAsk(b.data.text) : b.data.text;            // the `?` is the gesture, not part of the question
+    if (ask && !text) return bad(c, "empty question");
     const id = ulid();
-    ctx.log.emit({ type: "message.received", task_uuid: reply ?? askTask, payload: { id, role: "user", source: b.data.source, client_message_id: cid, dispatch_state: reply ? "direct" : "pending", text, task_uuid: reply ?? askTask, reply_to_task_uuid: reply, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
+    ctx.log.emit({ type: "message.received", task_uuid: reply ?? askTask, payload: { id, role: "user", source: b.data.source, client_message_id: cid, dispatch_state: reply ? "direct" : "pending", text, task_uuid: reply ?? askTask, reply_to_task_uuid: reply, ask, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
     if (reply) S.tasks.answer(reply, b.data.text, id); else S.dispatcher.enqueue(id);
     return c.json({ message_id: id }, 202);
   });
