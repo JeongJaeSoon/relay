@@ -102,6 +102,10 @@ test("unaccountedSessions finds the orphan close cannot reach, and leaves owned 
     row("new", "sid-new", t - 5_000),           // still inside the grace window the foreign list waits out
   ];
   expect(unaccountedSessions(db, rows, t).map((x) => x.short_id)).toEqual(["orph"]);
+  // NaN compares false against everything, so a naive `t - Number(x) >= grace` hides the row whose data is worst
+  const bad = [row("nostart", "sid-nostart", 0), row("badstart", "sid-badstart", 0)];
+  delete (bad[0] as any).raw.startedAt; (bad[1] as any).raw.startedAt = "not-a-number";
+  expect(unaccountedSessions(db, bad, t).map((x) => x.short_id)).toEqual(["nostart", "badstart"]);
   // a fork's earlier session ids live only in process_instances, and those are still sessions relay started
   db.run("insert into process_instances(task_uuid,generation,session_id,short_id,started_at) values('u1',0,'sid-orph','orph',1)");
   expect(unaccountedSessions(db, rows, t)).toEqual([]);

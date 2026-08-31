@@ -22,12 +22,18 @@ export const keptSessions = (db: Database) => db.query("select t.display_id, t.w
  *  find the session by. Ownership is `foreign.ts`'s, not a second notion of it: a name is never identity (B8), and
  *  `process_instances` carries the session ids a fork left behind. The grace window is the same one the foreign list
  *  waits out — a roster row exists before the outbox has recorded its short id — applied here to `startedAt`, since a
- *  one-shot check has no `first_seen` history; a row with no `startedAt` is reported rather than hidden.
- *  Inherited hole: for a NON-git project every task shares the launch cwd, so one `.relay-owner` there makes
- *  `stamped()` true for any row in it. A false negative, and narrow — the scheduler keeps a non-git project to one
- *  task at a time. */
+ *  one-shot check has no `first_seen` history. A `startedAt` that is missing OR unparseable is REPORTED, never hidden:
+ *  arithmetic on a bad value gives NaN, every comparison against which is false, so the naive filter would go quiet
+ *  exactly where the data is worst — the shape of the leaks this check exists to surface.
+ *  Inherited from `foreign.ts`, not this check: for a NON-git project every task shares the launch cwd, so one
+ *  `.relay-owner` there makes `stamped()` true for ANY row in it — hiding a genuinely external session someone started
+ *  by hand in that directory just as much as an orphan. A false negative, and narrow, because the scheduler keeps a
+ *  non-git project to one task at a time. */
 export function unaccountedSessions(db: Database, rows: AgentRow[], t = Date.now(), graceMs = FOREIGN_GRACE_MS): AgentRow[] {
-  return foreignRows(rows, ownership(db)).filter((r) => t - Number((r.raw as { startedAt?: number })?.startedAt ?? 0) >= graceMs);
+  return foreignRows(rows, ownership(db)).filter((r) => {
+    const startedAt = Number((r.raw as { startedAt?: unknown })?.startedAt);
+    return !Number.isFinite(startedAt) || t - startedAt >= graceMs;   // missing OR unparseable is reported, never silently hidden
+  });
 }
 export const parseDaemonStatus = (t: string) => ({ pid: Number(t.match(/pid:\s*(\d+)/)?.[1] ?? 0), version: t.match(/version:\s*(\S+)/)?.[1] ?? "" });
 export const summarize = (r: Check[]) => r.map((c) => `${c.ok ? "✔" : "✖"} ${c.name}${c.detail ? " — " + c.detail : ""}${!c.ok && c.fix ? `\n    → ${c.fix}` : ""}`).join("\n");
