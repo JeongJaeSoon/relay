@@ -39,7 +39,10 @@ export class Dispatcher {
   /** Re-enqueue every pending message (startup, resume-all). */
   drainPending() { for (const r of this.db.query("select id from messages where role='user' and dispatch_state in ('pending','deciding') order by created_at").all() as any[]) this.enqueue(r.id); }
   private patch(id: string, patch: Partial<Message>, type = "dispatch.completed") { this.log.emit({ type, payload: { message_id: id, patch } }); }
-  /** The dispatcher badge row (crosswalk §4): `dispatcher · action · size · project`, or the failure reason. */
+  /** The dispatcher badge row (crosswalk §4): `dispatcher · action · size · project`, or the failure reason.
+   *  This and the fast-path answer below write the payload as a literal rather than through MessageInput, so nothing
+   *  makes them set `ask`. Safe only because neither is role='user': that is the role the projection upcasts from the
+   *  text when the field is missing. A role='user' emitter must set it — see the upcast in projections.ts. */
   private badge(text: string) { this.log.emit({ type: "message.received", payload: { id: ulid(), role: "system", source: "user", client_message_id: null, dispatch_state: "direct", text, task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } }); }
   private async process(id: string) {
     const msg = loadMessage(this.db, id); if (!msg || msg.dispatch_state !== "pending") return;
