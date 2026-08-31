@@ -180,7 +180,17 @@ export class TaskService {
   }
   retry(taskUuid: string) {
     this.d.outbox.cancelPending(taskUuid, ["send", "resume"], "retry");
-    this.d.outbox.enqueue(taskUuid, `retry:${now()}`, { kind: "resume", prompt: "Continue from where you stopped. When you are finished, report with a RELAY: done block.", marker: marker() });
+    // A task parked in `error` by a spawn whose outcome relay could not read has a spawn command left at `unknown`,
+    // and an unknown head blocks the task's queue for good (I8) — so a resume queued behind it would never run, the
+    // task would sit at `starting` with no process, and it would hold its slot until relay was reinstalled (the
+    // watchdog only scans live processes, recovery's requeue branch wants a pending/running spawn, and reconcile
+    // reads `starting` as entitled). Cancelling that spawn is no better: the session it may have started is the only
+    // one this task has, so the resume behind it dies on `no session_id to resume` and leaks the slot the same way.
+    // Re-running the spawn is what "restart" means here — apply() adopts the session if it did come up after all
+    // (same name, our owner stamp) and otherwise spawns a fresh one.
+    const spawn = this.d.db.query("select id from commands where task_uuid=? and kind='spawn' and state in ('pending','unknown') order by rowid limit 1").get(taskUuid) as any;
+    if (spawn) this.d.log.emit({ type: "command.requeued", task_uuid: taskUuid, payload: { id: spawn.id } });
+    else this.d.outbox.enqueue(taskUuid, `retry:${now()}`, { kind: "resume", prompt: "Continue from where you stopped. When you are finished, report with a RELAY: done block.", marker: marker() });
     this.d.scheduler.enqueue(taskUuid, true); void this.d.scheduler.pump();
   }
   close(taskUuid: string) {

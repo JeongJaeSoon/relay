@@ -9,6 +9,7 @@ import { FakeRunner } from "../../../src/runner/fake.ts";
 import { TaskService } from "../../../src/core/tasks.ts";
 import { ulid } from "../../../src/core/ids.ts";
 import { ingestHook } from "../../../src/hooks/ingest.ts";
+import { assertInvariants } from "../../../src/core/state.ts";
 import stopDone from "../../fixtures/stop-done.json"; import stopQuestion from "../../fixtures/stop-question.json";
 
 function setup(max = 2) {
@@ -76,6 +77,48 @@ describe("TaskService", () => {
     s.svc.interrupt(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("cancelled"); expect(s.permits.active()).toBe(0);
     s.svc.retry(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("starting"); expect(s.lastStart()).toBe("resume");
     s.svc.close(t); await s.settle(); expect(loadTask(s.db, t)!.status).toBe("closed"); expect(s.runner.calls.at(-1)!.kind).toBe("rm");
+  });
+  test("retry on a task the outbox parked in `error` re-runs the spawn, and never leaves the slot on a task that cannot move", async () => {
+    const s = setup(1); let broken = true; let attempts = 0;
+    const spawn = s.runner.spawn.bind(s.runner);
+    s.runner.spawn = async (spec) => { attempts++; if (broken) throw new Error("could not read the `backgrounded ·` line"); return spawn(spec); };
+    s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid;
+    expect(loadTask(s.db, t)!.status).toBe("error"); expect(s.permits.active()).toBe(0);
+    // The spawn is left `unknown` — the session may or may not have come up. Retry used to cancel only send/resume,
+    // so that unknown command stayed at the queue head, blocked the queue (I8), and the task sat at `starting` with
+    // no process holding the only slot: nothing (watchdog, recovery, reconcile, a restart) ever gave it back.
+    s.svc.retry(t); await s.settle();
+    expect(s.permits.active()).toBe(0); broken = false;
+    s.svc.applyDecision(s.userMsg("b"), { action: "new_task", project: "myapp", title: "b", size: "normal", prompt: "b", confidence: "high" }); await s.settle();
+    const other = (s.db.query("select uuid from tasks where title='b'").get() as any).uuid;
+    expect(loadTask(s.db, other)!.status).toBe("starting");                    // not starved behind a task that will never run
+    // and retry is what actually restarts the task once the spawn can succeed — a resume could not: this task has no
+    // session_id to resume, so it would have thrown and leaked the slot all over again
+    s.svc.interrupt(other); await s.settle(); s.svc.retry(t); await s.settle();
+    expect(loadTask(s.db, t)!.status).toBe("starting"); expect(loadTask(s.db, t)!.process_state).toBe("starting");
+    expect(attempts).toBe(4);                                                 // t failed, t's first retry failed, b, t's retry that worked
+    expect((s.db.query("select count(*) c from commands where task_uuid=? and kind='spawn'").get(t) as any).c).toBe(1);   // one command, re-run — never a second spawn queued behind an unknown one
+  });
+  test("a permission question raised while onSlot is still working keeps the task's slot (I6)", async () => {
+    const s = setup(1); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid;
+    s.hook(t, { hook_event_name: "SessionStart", source: "startup" });
+    s.hook(t, { ...(stopQuestion as any) });                                    // marker question -> waiting_input, slot returned (I6)
+    expect(loadTask(s.db, t)!.status).toBe("waiting_input"); expect(s.permits.active()).toBe(0);
+    // Answering re-queues the task and the slot is granted again. startSlot drains the whole outbox queue and the
+    // resume path waits inside it (waitGone + waitRow, up to 20s) — a live worker's PermissionRequest lands there.
+    const resume = s.runner.resume.bind(s.runner);
+    s.runner.resume = async (p) => { s.hook(t, { hook_event_name: "PermissionRequest", prompt_id: "perm1", tool_name: "Bash", tool_input: { command: "rm -rf build" } }); return resume(p); };
+    s.svc.answer(t, "a.txt", null); await s.settle();
+    const after = loadTask(s.db, t)!;
+    expect(after.status).toBe("waiting_input"); expect(after.question!.source).toBe("permission");
+    // relay answers this one itself and the worker carries straight on, so the slot is still occupied. Handing it to
+    // the next task means max_concurrent_agents is exceeded the moment the answer lands.
+    expect(s.permits.active()).toBe(1);
+    s.svc.applyDecision(s.userMsg("b"), { action: "new_task", project: "myapp", title: "b", size: "normal", prompt: "b", confidence: "high" }); await s.settle();
+    expect(loadTask(s.db, (s.db.query("select uuid from tasks where title='b'").get() as any).uuid)!.status).toBe("queued");
+    expect(assertInvariants(s.db, 1)).toEqual([]);
   });
   test("closing a task that ran three generations disposes of all three, stopping each before removing it", async () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
