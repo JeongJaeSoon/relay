@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { ASK_PREFIX, isAsk, markAsk, stripAsk } from "@shared/ask.ts";
 import { sendMessage } from "../src/api.ts";
-import { badgeParts, dlogEntry } from "../src/adapter.ts";
+import { badgeParts } from "../src/adapter.ts";
+import { requestRows } from "../src/ledger.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -45,5 +46,6 @@ test("a question is shown as its question text with an ask chip", () => {
   expect(badgeParts(m(`${ASK_PREFIX}why did T-02 fail`), ctx).parts).toEqual(["ask", "answer_directly"]);
   expect(badgeParts(m("refactor auth"), ctx).parts).toEqual(["answer_directly"]);
   expect(badgeParts(m(`${ASK_PREFIX}상태?`, "fastpath"), ctx).parts).toEqual(["ask", "fast-path"]);
-  expect(dlogEntry(m(`${ASK_PREFIX}why did T-02 fail`), ctx).text).toBe("why did T-02 fail");
+  // The rail that showed this is now the request ledger; the prefix is a keyboard gesture and must not reach it.
+  expect(requestRows([m(`${ASK_PREFIX}why did T-02 fail`)], {})[0].text).toBe("why did T-02 fail");
 });
