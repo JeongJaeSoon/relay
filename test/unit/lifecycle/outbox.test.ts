@@ -47,7 +47,10 @@ describe("Outbox", () => {
     const launch = mkdtempSync(join(tmpdir(), "relay-proj-")); writeFileSync(join(launch, ".relay-owner"), JSON.stringify({ relay_instance_id: "inst", task_uuid: "u1", session_id: "sid" }));
     s.runner.rows.set("pre", { short_id: "pre", session_id: "sid", name: "relay:T-01 t", cwd: launch, pid: 5, alive: true, busy: true, waiting_for: null, raw: {} });
     s.ob.enqueue("u1", "k", { kind: "spawn", spec: spec("u1") }); await s.ob.run("u1");
-    expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(1);       // not adopted
+    expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(0);       // not adopted — and not spawned over either
+    // B8 is unchanged: a stamp in the shared launch cwd is not proof. What changed is what relay does about it — it
+    // used to spawn anyway, which is two agents in one worktree when that row IS this task's own earlier attempt.
+    expect(s.states()).toEqual(["unknown"]); expect(loadTask(s.db, "u1")!.status).toBe("error");
     expect(loadTask(s.db, "u1")!.worktree_path).toBeNull();                        // stamp deferred to the first hook
   });
   test("a non-git task stamps its launch cwd, which is its working directory", async () => {
@@ -57,10 +60,15 @@ describe("Outbox", () => {
     const row = [...s.runner.rows.values()].find((r) => r.short_id === "fake1")!;
     expect(readOwner(dir)).toMatchObject({ task_uuid: "u1", session_id: row.session_id }); expect(loadTask(s.db, "u1")!.worktree_path).toBe(dir);
   });
-  test("a same-named session without our owner stamp is NOT adopted — a fresh spawn happens", async () => {
+  test("a same-named session without our owner stamp is NOT adopted, and NOT spawned over either", async () => {
+    // Without a stamp the row is ambiguous, not absent: relay cannot tell this task's own unreported session from a
+    // stranger's. Spawning was the wrong half of that guess — `spec.worktree` comes from the task uuid, so a second
+    // spawn lands in the same working tree and takes `tasks.short_id`, hiding the first from the watchdog.
     const s = setup(); s.mk("u1", "starting"); s.runner.rows.set("pre", { short_id: "pre", session_id: "sid", name: "relay:T-01 t", cwd: "/p", pid: 5, alive: true, busy: true, waiting_for: null, raw: {} });
     s.ob.enqueue("u1", "k", { kind: "spawn", spec: spec("u1") }); await s.ob.run("u1");
-    expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(1); expect(loadTask(s.db, "u1")!.short_id).toBe("fake1");
+    expect(s.runner.calls.filter((c) => c.kind === "spawn").length).toBe(0);
+    expect(s.states()).toEqual(["unknown"]);                                       // surfaced for a person to resolve against `claude agents`
+    const t = loadTask(s.db, "u1")!; expect(t.status).toBe("error"); expect(t.short_id).toBeNull();
   });
   test("a spawn relay could not read the outcome of stays `unknown` (never a second spawn) and parks the task in `error`", async () => {
     const s = setup(); s.mk("u1", "starting");

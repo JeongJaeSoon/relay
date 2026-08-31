@@ -240,7 +240,17 @@ export class Outbox {
         const gen = t.process_generation + 1;
         const worktreeExpected = p.spec.worktree != null;
         // adopt only a session that is provably ours: same name AND our owner stamp in its WORKTREE (a crash between exec and record)
-        const existing = (await this.runner.list()).find((r) => r.name === p.spec.name && r.alive && readOwner(this.ownerDir(r, worktreeExpected, t.worktree_path))?.task_uuid === t.uuid);
+        const named = (await this.runner.list()).filter((r) => r.alive && r.name === p.spec.name);
+        const existing = named.find((r) => readOwner(this.ownerDir(r, worktreeExpected, t.worktree_path))?.task_uuid === t.uuid);
+        // A live session under this task's name that carries no stamp of ours is AMBIGUOUS, not absent — and it is
+        // exactly what B3's at-most-once rule is about. The stamp is written after `runner.spawn` returns, so a spawn
+        // that started the session and then failed to report leaves a live agent and no stamp; ingest writes one only
+        // once SessionStart has arrived, and had it arrived the task would not be here. Spawning over it puts two
+        // agents in one working tree — `spec.worktree` is `relay-<short8(task uuid)>`, the same name both times — and
+        // the second one takes `tasks.short_id`, so the watchdog (which looks the task up by its own ids) can never
+        // see the first again. Refuse instead: the command goes `unknown`, the task parks in `error` with the reason
+        // on it, and the scheduler takes its slot back. A person can then look at `claude agents` and decide.
+        if (!existing && named.length) throw new Error(`a live session is already registered as \`${p.spec.name}\` (${named.map((r) => r.short_id).join(", ")}) with no owner stamp for this task — refusing to start a second one in the same worktree`);
         const res = existing ? { short_id: existing.short_id!, name: existing.name! } : await this.runner.spawn({ ...p.spec, settingsJson: this.deps.settingsJson(t, gen), env: this.deps.env(t, gen) });
         const row = existing ?? (await this.waitRow(res.short_id));
         this.patch(t, { short_id: res.short_id, process_state: "starting", ...(row ? this.stampWorktree(t, row, worktreeExpected) : {}) }, cmd);

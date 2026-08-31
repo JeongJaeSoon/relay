@@ -74,7 +74,14 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
   // `deciding` when relay went down can ever finish or report — and while the row stays `deciding`, drainPending
   // re-enqueues it only for process() to return (the state is not `pending`) and redispatch refuses it as in flight.
   // The decision itself is safe to re-run: it has minted nothing yet — applyDecision stamps `dispatched` and creates
-  // the task in one transaction (A9).
+  // the task in one transaction (A9). What stops this from starting a SECOND `claude -p` for a decision that is
+  // genuinely in flight is three things together, not the `dispatch_state !== "pending"` guard on its own:
+  //   1. writes are refused with 503 while `recovering=1` (gateway/routes.ts), so no new decision can begin here;
+  //   2. the dispatcher chain is global and serial, so two process() calls for one id can never overlap;
+  //   3. only then does that guard see `dispatched`/`deciding` and return.
+  // Drop any one of them and this reopens — (2) in particular, because `await this.rateLimit()` runs before `deciding`
+  // is stamped, so a parallel dispatcher would leave a window with neither the guard nor the stamp holding. Anyone
+  // parallelising the dispatcher has to re-close this first; it breaks silently.
   for (const r of d.db.query("select id from messages where role='user' and dispatch_state='deciding'").all() as any[]) {
     d.log.emit({ type: "dispatch.requeued", payload: { message_id: r.id, patch: { dispatch_state: "pending", dispatch_error: null } } }); report.redeciding.push(r.id);
   }
