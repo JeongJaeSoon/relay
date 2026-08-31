@@ -15,6 +15,7 @@ import { cancelPermissions, type IngestDeps, type PendingPermission } from "../h
 import type { Dispatcher } from "../dispatcher/dispatcher.ts";
 import { getMeta } from "../db/db.ts";
 import { splitGuard } from "../dispatcher/schema.ts";
+import { holdsSlot } from "./state.ts";
 
 interface Deps { db: Database; log: EventLog; cfg: Config; permits: PermitPool; scheduler: Scheduler; outbox: Outbox; projectNameOf: (id: string) => string; pendingPermissions: Map<string, PendingPermission> }
 /** 8 hex chars embedded as `[relay #xxxxxxxx]`; the worker echoes it back through UserPromptSubmit so relay can confirm delivery. */
@@ -193,18 +194,32 @@ export class TaskService {
     else this.d.outbox.enqueue(taskUuid, `retry:${now()}`, { kind: "resume", prompt: "Continue from where you stopped. When you are finished, report with a RELAY: done block.", marker: marker() });
     this.d.scheduler.enqueue(taskUuid, true); void this.d.scheduler.pump();
   }
+  /** `closed` is projected by the rm, not here. `claude rm` KEEPS the session when its worktree still holds work that
+   *  exists nowhere else, and for a finished relay task that refusal is the normal outcome, not the exception: a worker
+   *  cannot push (`src/runner/settings.ts` denies `Bash(git push*)` unless `worker.allow_push`, which defaults to
+   *  false) and is told to commit locally and leave the tree clean, so any task that made a commit is refused. Writing
+   *  `closed` up front made relay claim a disposal that had not happened — and since a closed task is filtered out of
+   *  every list, that turned a leftover session from visible into invisible. */
   close(taskUuid: string) {
     const t = loadTask(this.d.db, taskUuid)!; if (t.status === "closed") return;
+    // A task that is occupying scheduler resources has to give them up HERE, not when the rm lands, because the rm may
+    // not land for a while (a locked worktree holds it) or at all (refused). Two ways that bites, both measured:
+    // `queued` lets the pump below grant a slot to the task being closed, and `holdsSlot` left true with the permit
+    // released is an I2 violation that recovery answers by acquiring the slot again — for a task on its way out.
+    // `cancelled` is the same exit `interrupt` gives, and the rm turns it into `closed` when it lands.
+    if (holdsSlot(t) || t.status === "queued") this.status(t, "cancelled", { ended_at: now(), qhead: false });
     this.d.outbox.cancelPending(taskUuid, ["spawn", "send", "resume"], "close"); if (t.session_id) cancelPermissions(this.d.pendingPermissions, t.session_id);
     // Disposal covers EVERY generation the task ran, not just the one it is bound to — the forks left the rest
     // registered. Enqueued stops-then-removes, because the generations share one worktree: nothing may be removed
     // while anything is still running in it.
-    if (t.process_state === "alive" || t.process_state === "starting") this.d.outbox.enqueue(taskUuid, `close-stop:${now()}`, { kind: "stop", reason: "close" });
+    const key = String(now());
+    if (t.process_state === "alive" || t.process_state === "starting") this.d.outbox.enqueue(taskUuid, `close-stop:${key}`, { kind: "stop", reason: "close" });
     this.d.outbox.reapStops(t, "close");
-    this.d.outbox.enqueue(taskUuid, `close-rm:${now()}`, { kind: "rm" });
+    this.d.outbox.enqueue(taskUuid, `close-rm:${key}`, { kind: "rm" });
     this.d.outbox.reapRms(t);
-    this.d.permits.releaseTask(taskUuid, "close"); this.status(t, "closed", { closed_at: now(), ended_at: t.ended_at ?? now(), question: null, qhead: false }); void this.d.scheduler.pump();
+    this.d.permits.releaseTask(taskUuid, "close"); void this.d.scheduler.pump();
   }
+
   attachLease(taskUuid: string, by: string) {
     const t = loadTask(this.d.db, taskUuid)!;
     this.d.log.emit({ type: "attach.acquired", task_uuid: taskUuid, payload: { by, patch: { attach_state: "leased", attached_by: by } } });

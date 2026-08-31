@@ -70,3 +70,44 @@ test("a probe with no capabilities.json to merge into claims no full measurement
   expect(fresh.delivery).toBe("resume");                                        // no print fallback (C9)
   expect(cliDriftCheck(fresh.cli_version ?? "unknown", "2.1.299").ok).toBe(true);   // "unknown" never warns
 });
+
+test("keptSessions lists the tasks whose `claude rm` was refused, and drops them once one succeeds", async () => {
+  const { keptSessions } = await import("../../../src/cli/doctor.ts");
+  const { openDb, migrate } = await import("../../../src/db/db.ts");
+  const db = openDb(":memory:"); migrate(db);
+  db.run("insert into projects(id,name,path,is_git,created_at) values('p','p','/p',1,1)");
+  const task = (uuid: string, display: string, num: number) => db.run("insert into tasks(uuid,num,display_id,project_id,title,status,size,effort,model,process_state,process_generation,turn_state,attach_state,paused,qhead,usage_tokens,worktree_path,created_at,updated_at) values(?,?,?,'p','t','done','normal','xhigh','m','stopped',1,'idle','none',0,0,0,?,1,1)", [uuid, num, display, `/p/.claude/worktrees/${display}`]);
+  const rm = (uuid: string, id: string, state: string, target: string | null) => db.run("insert into commands(id,task_uuid,kind,payload_json,state,created_at) values(?,?,'rm',?,?,1)", [id, uuid, JSON.stringify(target ? { kind: "rm", target: { session_id: target, short_id: null } } : { kind: "rm", close: true }), state]);
+  task("u1", "T-01", 1); rm("u1", "rm1", "failed", null);                    // refused: the worktree still holds work
+  task("u2", "T-02", 2); rm("u2", "rm2", "failed", null); rm("u2", "rm3", "applied", null);   // the user pushed and closed it again
+  task("u3", "T-03", 3); rm("u3", "rm4", "failed", "sid-old");              // a reap of a superseded session, not a task's own disposal
+  task("u4", "T-04", 4); rm("u4", "rm5", "unknown", null);                 // relay restarted mid-rm: it cannot tell whether the session is gone
+  task("u5", "T-05", 5); rm("u5", "rm6", "pending", null);                 // held on a lock that clears itself — not waiting on a person
+  expect(keptSessions(db).map((k) => k.display_id)).toEqual(["T-01", "T-04"]);
+  expect(keptSessions(db)[0].worktree_path).toBe("/p/.claude/worktrees/T-01");
+  db.close();
+});
+
+test("unaccountedSessions finds the orphan close cannot reach, and leaves owned and nascent rows alone", async () => {
+  const { unaccountedSessions } = await import("../../../src/cli/doctor.ts");
+  const { openDb, migrate } = await import("../../../src/db/db.ts");
+  const db = openDb(":memory:"); migrate(db);
+  db.run("insert into projects(id,name,path,is_git,created_at) values('p','p','/p',1,1)");
+  db.run("insert into tasks(uuid,num,display_id,project_id,title,status,size,effort,model,session_id,short_id,process_state,process_generation,turn_state,attach_state,paused,qhead,usage_tokens,created_at,updated_at) values('u1',1,'T-01','p','t','running','normal','xhigh','m','sid-mine','mine','alive',1,'busy','none',0,0,0,1,1)");
+  const row = (short: string, session: string, startedAt: number): any => ({ short_id: short, session_id: session, name: "n", cwd: "/p", pid: 1, alive: true, busy: false, waiting_for: null, raw: { startedAt } });
+  const t = 1_000_000;
+  const rows = [
+    row("mine", "sid-mine", t - 60_000),        // a task owns it
+    row("orph", "sid-orph", t - 60_000),        // spawn never recorded a short id: no stop, no rm, no commands row — invisible to keptSessions
+    row("new", "sid-new", t - 5_000),           // still inside the grace window the foreign list waits out
+  ];
+  expect(unaccountedSessions(db, rows, t).map((x) => x.short_id)).toEqual(["orph"]);
+  // NaN compares false against everything, so a naive `t - Number(x) >= grace` hides the row whose data is worst
+  const bad = [row("nostart", "sid-nostart", 0), row("badstart", "sid-badstart", 0)];
+  delete (bad[0] as any).raw.startedAt; (bad[1] as any).raw.startedAt = "not-a-number";
+  expect(unaccountedSessions(db, bad, t).map((x) => x.short_id)).toEqual(["nostart", "badstart"]);
+  // a fork's earlier session ids live only in process_instances, and those are still sessions relay started
+  db.run("insert into process_instances(task_uuid,generation,session_id,short_id,started_at) values('u1',0,'sid-orph','orph',1)");
+  expect(unaccountedSessions(db, rows, t)).toEqual([]);
+  db.close();
+});
