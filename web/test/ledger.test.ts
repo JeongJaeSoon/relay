@@ -114,3 +114,197 @@ test("a split names every task it made, and its state is the piece that most nee
   // every piece finished
   expect(one(m, byId(task("u1", "T-01", "done"), task("u2", "T-02", "done"), task("u3", "T-03", "done")))).toMatchObject({ bucket: "settled" });
 });
+
+// The dispatcher decides one message at a time (Dispatcher.enqueue) but a message is recorded the moment it arrives,
+// so a second request sent while the first is still deciding is recorded BEFORE the first request's reply. Reading
+// the trail as "everything up to the next request" therefore showed the newer row the older request's reason — the
+// default with two requests in flight, and exactly the pile-up this view exists to make legible.
+test("two requests in flight: each needs_confirm row shows its own reason, not the one before it", () => {
+  // arrival order: A, B, then A's decision (badge + prompt), then B's
+  const A = msg({ id: "A", text: "T-01 에 이어서 해줘", dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-01", confidence: "high" } });
+  const B = msg({ id: "B", text: "myapp 인증 리팩토링", dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-07", confidence: "high" } });
+  const sys = (text: string) => msg({ role: "system", dispatch_state: "direct", text });
+  const rows = requestRows([A, B,
+    sys("dispatcher · route_to_task · T-01"), sys("Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay / T-06 myapp"),
+    sys("dispatcher · route_to_task · T-07"), sys("Routing needs confirmation (task T-07 not found, candidate: route_to_task T-07). Which task? T-05 relay / T-06 myapp"),
+  ], {});
+  const by = Object.fromEntries(rows.map((r) => [r.id, r]));
+  expect(by.A.answer).toContain("task T-01 not found");
+  expect(by.B.answer).toContain("task T-07 not found");
+  expect(by.A.bucket).toBe("needs_you");
+  expect(by.B.bucket).toBe("needs_you");
+});
+
+test("two status queries in a row: each gets its own answer, not the other's", () => {
+  const s1 = msg({ id: "s1", text: "지금 뭐 돌아가?", dispatch_state: "fastpath" });
+  const s2 = msg({ id: "s2", text: "상태 알려줘", dispatch_state: "fastpath" });
+  const ans = (text: string) => msg({ role: "dispatcher_answer", dispatch_state: "direct", text });
+  const by = Object.fromEntries(requestRows([s1, s2, ans("Running 2 · Queued 0"), ans("Running 3 · Queued 1")], {}).map((r) => [r.id, r]));
+  expect(by.s1.answer).toBe("Running 2 · Queued 0");
+  expect(by.s2.answer).toBe("Running 3 · Queued 1");
+});
+
+// A direct answer records its text in the decision AND emits the chat row. The row still has to be consumed, or it is
+// left over and claimed by the next request that has only the row to read.
+test("an answer already in the decision still consumes its chat row", () => {
+  const a = msg({ id: "a", text: "relay 는 지금 몇 버전이야?", dispatch_json: { action: "answer_directly", answer: "0.1.2", confidence: "high" } });
+  const b = msg({ id: "b", text: "지금 뭐 돌아가?", dispatch_state: "fastpath" });
+  const ans = (text: string) => msg({ role: "dispatcher_answer", dispatch_state: "direct", text });
+  const by = Object.fromEntries(requestRows([a, b, msg({ role: "system", dispatch_state: "direct", text: "dispatcher · answer_directly" }), ans("0.1.2"), ans("Running 2 · Queued 0")], {}).map((r) => [r.id, r]));
+  expect(by.a.answer).toBe("0.1.2");
+  expect(by.b.answer).toBe("Running 2 · Queued 0");
+});
+
+// The cases that already worked, kept working: a row nobody is waiting for must not be claimed, and a request that
+// awaits no dispatcher reply must not consume one.
+test("a worker summary between two requests belongs to its task, and claims no reply", () => {
+  const t = task("u1", "T-01", "done", { last_summary: null });
+  const started = msg({ id: "a", text: "freee mcp 갱신", task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } });
+  const summary = msg({ role: "worker_summary", dispatch_state: "direct", task_uuid: "u1", text: "Updated freee-mcp to 1.4.0." });
+  const status = msg({ id: "b", text: "지금 뭐 돌아가?", dispatch_state: "fastpath" });
+  const ans = msg({ role: "dispatcher_answer", dispatch_state: "direct", text: "Running 0 · Queued 0" });
+  const by = Object.fromEntries(requestRows([started, summary, status, ans], byId(t)).map((r) => [r.id, r]));
+  expect(by.a).toMatchObject({ answer: "Updated freee-mcp to 1.4.0.", answerKind: "summary" });
+  expect(by.b.answer).toBe("Running 0 · Queued 0");
+});
+
+test("a route, a close request and an archived task claim nothing, so a later answer stays with its own request", () => {
+  const err = task("u2", "T-02", "error");
+  const closed = task("u3", "T-03", "closed");
+  const routed = msg({ id: "a", task_uuid: "u2", dispatch_json: { action: "route_to_task", task_id: "T-02", confidence: "high" } });
+  const archived = msg({ id: "b", task_uuid: "gone", dispatch_json: { action: "new_task", confidence: "high" } });
+  const close = msg({ id: "c", task_uuid: "u3", dispatch_json: { action: "close_task", task_id: "T-03", confidence: "high" } });
+  const noUuid = msg({ id: "d", dispatch_json: { action: "answer_directly", answer: "0.1.2", confidence: "high" } });
+  const ans = msg({ role: "dispatcher_answer", dispatch_state: "direct", text: "0.1.2" });
+  const by = Object.fromEntries(requestRows([routed, archived, close, noUuid, ans], byId(err, closed)).map((r) => [r.id, r]));
+  expect(by.a).toMatchObject({ disposition: "routed", state: "Error", answerKind: "error" });
+  expect(by.b).toMatchObject({ disposition: "new_task", state: "Archived", bucket: "settled", answer: null });
+  expect(by.c).toMatchObject({ disposition: "close_request", bucket: "settled", actions: [] });
+  expect(by.d).toMatchObject({ disposition: "answered", answer: "0.1.2" });
+});
+
+// `answer` renders the question's options as chips, and toDemoTask only fills question while the task is waiting, so a
+// question resolved by another path left the row in needs_you labelled "Needs input" with no chips and nothing to click.
+test("a waiting task whose question is gone offers no answer action", () => {
+  const t = task("u1", "T-01", "waiting_input");
+  const r = one(msg({ task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } }), byId(t));
+  expect(r).toMatchObject({ state: "Needs input", answer: null, actions: [] });
+});
+
+// requestRows sorts by created_at, so the arrival order lives in the timestamps, not in the array order — these two
+// cases differ only in when B was sent. Serialised was correct before the fix and has to stay correct.
+test("serialised and overlapped arrivals both keep each reason on its own request", () => {
+  const req = (id: string, at: number, text: string, tid: string) => msg({ id, created_at: at, text, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: tid, confidence: "high" } });
+  const prm = (at: number, tid: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text: `Routing needs confirmation (task ${tid} not found, candidate: route_to_task ${tid}). Which task? T-05 relay` });
+  const reasons = (ms: any[]) => Object.fromEntries(requestRows(ms, {}).map((r) => [r.id, r.answer]));
+
+  // A is answered before B is even sent
+  const serialised = reasons([req("A", 1000, "T-01 에 이어서", "T-01"), prm(2000, "T-01"), req("B", 3000, "myapp 인증", "T-09"), prm(4000, "T-09")]);
+  expect(serialised.A).toContain("task T-01 not found");
+  expect(serialised.B).toContain("task T-09 not found");
+
+  // B is sent while A is still deciding — both rows were wrong before the fix: B took A's reason and A lost its own
+  const overlapped = reasons([req("A", 1000, "T-01 에 이어서", "T-01"), req("B", 2000, "myapp 인증", "T-09"), prm(3000, "T-01"), prm(4000, "T-09")]);
+  expect(overlapped.A).toContain("task T-01 not found");
+  expect(overlapped.B).toContain("task T-09 not found");
+  expect(overlapped.A).not.toBe("Routing needs confirmation — candidate: route_to_task T-01");   // the generic fallback the row degraded to
+  expect(overlapped).toEqual(serialised);                                                        // the ordering must not change what a row says
+});
+
+// drainPending() re-queues every pending message at once (restart, POST /resume-all), so every request row precedes
+// every reply row. No timing luck: with N outstanding, the last row took the first answer and the other N−1 degraded.
+test("a drained backlog gives every request its own reply, in order", () => {
+  const ids = ["r1", "r2", "r3"];
+  const reqs = ids.map((id, i) => msg({ id, created_at: 1000 + i, text: `요청 ${i + 1}`, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: `T-0${i + 1}`, confidence: "high" } }));
+  const prompts = ids.map((_, i) => msg({ role: "system", dispatch_state: "direct", created_at: 2000 + i, text: `Routing needs confirmation (task T-0${i + 1} not found). Which task? T-05 relay` }));
+  const by = Object.fromEntries(requestRows([...reqs, ...prompts], {}).map((r) => [r.id, r]));
+  for (const [i, id] of ids.entries()) expect(by[id].answer).toContain(`task T-0${i + 1} not found`);
+  expect(needsYou(Object.values(by) as any)).toBe(3);
+});
+
+// The row names the piece lead() picked, but the outcome fallback was keyed on m.task_uuid — the FIRST piece of a
+// split (C.4.4). onCrash sets the status to error and emits the reason as a chat row, leaving last_summary null, so
+// the fallback is the live path for a failure: T-02's row printed T-01's success line as its failure reason, in red.
+test("a split's failed piece answers with its own outcome, not the first piece's", () => {
+  const m = msg({ text: "TUI 설계랑 라이프사이클 정리 같이", task_uuid: "u1", dispatch_json: { action: "split", task_ids: ["T-01", "T-02"], confidence: "high" } });
+  const ok = msg({ role: "worker_summary", dispatch_state: "direct", task_uuid: "u1", text: "✔ T-01 TUI 설계 — done" });
+  const bad = msg({ role: "error", dispatch_state: "direct", task_uuid: "u2", text: "✖ T-02 라이프사이클 — Session ended (other) — use Restart to --resume" });
+  const tasks = byId(task("u1", "T-01", "done", { last_summary: null }), task("u2", "T-02", "error", { last_summary: null }));
+  const r = one(m, tasks, [ok, bad]);
+  // both halves: the row must name the failing piece AND answer with that piece's outcome — they broke apart
+  expect(r).toMatchObject({ taskId: "T-02", state: "Error", st: "err", answerKind: "error" });
+  expect(r.answer).toBe("✖ T-02 라이프사이클 — Session ended (other) — use Restart to --resume");
+});
+
+// Not every needs_confirm comes off the dispatcher chain. POST /api/messages with reply_to_task_id records the
+// message as `direct` and calls TaskService.answer() synchronously in the same handler (routes.ts:61-62); if the
+// target task is in the error state that runs through to needsConfirm(), so the prompt is written while chain
+// requests are still inside `claude -p`. Feeding it to the shared FIFO is worse than the positional bug it replaces:
+// one row degrading to its own candidate becomes every row confidently showing someone else's reason.
+test("a reply to an errored task keeps its own reason and takes nothing from the chain", () => {
+  const chain = (id: string, at: number, tid: string) => msg({ id, created_at: at, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: tid, confidence: "high" } });
+  const sys = (at: number, text: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text });
+  const reply = (id: string, at: number) => msg({ id, created_at: at, dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
+  const ERR = "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 relay";
+  const errored = byId(task("u9", "T-09", "error"));                // the snapshot carries every task that is not closed
+  const rows = (ms: any[]) => Object.fromEntries(requestRows(ms, errored).map((r) => [r.id, r.answer]));
+
+  const by = rows([chain("A", 1000, "T-01"), chain("B", 2000, "T-02"), chain("C", 3000, "T-03"), reply("M", 4000), sys(4001, ERR),
+    sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay"),
+    sys(6000, "Routing needs confirmation (task T-02 not found, candidate: route_to_task T-02). Which task? T-05 relay"),
+    sys(7000, "Routing needs confirmation (task T-03 not found, candidate: route_to_task T-03). Which task? T-05 relay")]);
+  expect(by.M).toBe(ERR);                             // the off-chain row keeps its own reason …
+  expect(by.A).toContain("task T-01 not found");      // … and the chain rows are untouched by it
+  expect(by.B).toContain("task T-02 not found");
+  expect(by.C).toContain("task T-03 not found");
+
+  // ulid() is not monotonic and created_at is milliseconds, so the prompt can sort just ahead of its own message
+  const tied = rows([chain("A", 1000, "T-01"), sys(4000, ERR), reply("zM", 4000),
+    sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay")]);
+  expect(tied.zM).toBe(ERR);
+  expect(tied.A).toContain("task T-01 not found");
+});
+
+test("a reply to an errored task, on its own, reads its reason and offers the restart", () => {
+  const m = msg({ text: "그럼 이걸로 진행해줘", dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
+  const prompt = msg({ role: "system", dispatch_state: "direct", text: "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 relay" });
+  const r = one(m, byId(task("u9", "T-09", "error")), [prompt]);
+  // the target is in error, so the row offers Restart alongside the redispatch
+  expect(r).toMatchObject({ disposition: "needs_confirm", state: "Waiting for you", bucket: "needs_you", answerKind: "question", actions: ["redispatch", "restart"] });
+  expect(r.answer).toContain("T-09 is in the error state");
+});
+
+// Adjacency cannot carry this: created_at is milliseconds and ulid() is not monotonic, so a chain prompt sharing the
+// millisecond can sort ahead of the off-chain message or between it and its own prompt, and nothing tells them apart
+// by position. Matching the prompt's text removes position from the question entirely. A miss is not neutral either —
+// an unclaimed off-chain prompt flows into the shared pool and lands on a chain row, so H3 pins that too.
+test("the off-chain prompt is found by its text, wherever it sorts", () => {
+  const errored = byId(task("u9", "T-09", "error"));
+  const M = (id: string, at: number) => msg({ id, created_at: at, dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
+  const A = (at: number) => msg({ id: "A", created_at: at, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-01", confidence: "high" } });
+  const sys = (id: string, at: number, text: string) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text });
+  const pA = (id: string, at: number) => sys(id, at, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05");
+  const pM = (id: string, at: number) => sys(id, at, "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05");
+  const ok = (ms: any[], mid: string) => {
+    const by = Object.fromEntries(requestRows(ms, errored).map((r) => [r.id, r.answer]));
+    expect(by[mid]).toContain("T-09 is in the error state");
+    expect(by.A).toContain("task T-01 not found");
+  };
+  ok([A(1000), pA("a", 2000), M("b", 2000), pM("c", 2000)], "b");   // H1 chain prompt sorts before the message
+  ok([A(1000), M("a", 2000), pA("b", 2000), pM("c", 2000)], "a");   // H2 chain prompt sorts between the two
+  ok([A(1000), M("M", 2000), sys("x", 3000, "dispatcher · route_to_task · T-01"), pM("y", 4000), pA("z", 5000)], "M");   // H3 a badge sits between
+});
+
+// The target is always in the snapshot for this path — it is in the error state, and the snapshot carries every task
+// that is not closed. If it somehow is not, the prompt cannot be named; retiring it unclaimed costs this row its
+// reason, where leaving it in the pool would have put it on a chain row instead.
+test("an unnameable off-chain prompt degrades its own row and no other", () => {
+  const M = msg({ id: "M", created_at: 2000, dispatch_state: "needs_confirm", task_uuid: "gone", reply_to_task_uuid: "gone" });
+  const A = msg({ id: "A", created_at: 1000, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-01", confidence: "high" } });
+  const sys = (at: number, text: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text });
+  const by = Object.fromEntries(requestRows([A, M,
+    sys(3000, "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05"),
+    sys(4000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05")], {}).map((r) => [r.id, r.answer]));
+  expect(by.M).toBe("Routing needs confirmation.");                 // degraded, not someone else's reason
+  expect(by.A).toContain("task T-01 not found");                    // the chain row keeps its own
+});

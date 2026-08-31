@@ -70,8 +70,13 @@ export class Dispatcher {
     // A message scoped to one task is not a system status query, however it is worded — the fast path's answer is the
     // whole system's. Same rule the reply path already has, same argument.
     if (isStatusQuery(msg.text, msg.reply_to_task_uuid ?? msg.task_uuid)) {
-      this.patch(id, { dispatch_state: "fastpath" }, "dispatch.fastpath");
-      this.log.emit({ type: "message.received", payload: { id: ulid(), role: "dispatcher_answer", source: "user", client_message_id: null, dispatch_state: "direct", text: statusAnswer(this.db, this.cfg), task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
+      // One transaction, as needsConfirm() and applyDecision() already are for their replies. The ledger links a
+      // dispatcher reply to its request by order (nothing on the row links it back), so a message left at `fastpath`
+      // with no answer row would sit at the head of that queue and shift every later answer onto the wrong request.
+      this.log.emitMany([
+        { type: "dispatch.fastpath", payload: { message_id: id, patch: { dispatch_state: "fastpath" } } },
+        { type: "message.received", payload: { id: ulid(), role: "dispatcher_answer", source: "user", client_message_id: null, dispatch_state: "direct", text: statusAnswer(this.db, this.cfg), task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } },
+      ]);
       return;
     }
     this.patch(id, { dispatch_state: "deciding" }, "dispatch.started");
