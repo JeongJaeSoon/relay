@@ -77,26 +77,58 @@ function bucketOf(d: Disposition, m: Message, task: Task | null): Bucket {
   return ATTENTION.has(task.status) ? "needs_you" : ACTIVE.has(task.status) ? "in_flight" : "settled";
 }
 
-function answerOf(d: Disposition, m: Message, task: Task | null, trail: Message[], outcome: Map<string, string>): { answer: string | null; answerKind: AnswerKind | null } {
-  const trailText = (role: Message["role"]) => trail.find((t) => t.role === role)?.text ?? null;
+/** The two dispatcher replies that arrive as bare chat rows: the fast-path or direct answer, and the prompt
+ *  TaskService.needsConfirm() promotes. The prompt is matched on its opening words because the same decision also
+ *  emits the `dispatcher · …` badge row, and that one says nothing about why the request stalled. */
+type ReplyKind = "answer" | "prompt";
+const replyKindOf = (m: Message): ReplyKind | null =>
+  m.role === "dispatcher_answer" ? "answer" : m.role === "system" && m.text.startsWith("Routing needs confirmation") ? "prompt" : null;
+/** Which reply a request is owed. `answered` counts even when the decision already carries the answer text: the row
+ *  was still emitted, so it has to be consumed here or it shifts onto the next request. */
+const awaitedBy = (d: Disposition): ReplyKind | null => (d === "needs_confirm" ? "prompt" : d === "answered" || d === "fastpath" ? "answer" : null);
+
+/**
+ * Links each dispatcher reply to the request it answers. Not by position: the dispatcher decides one message at a
+ * time on a global chain (Dispatcher.enqueue), while a message is recorded the moment it arrives — and a decision is
+ * a `claude -p` call plus a possible retry, so it takes seconds. A second request sent inside that window is
+ * therefore recorded *before* the first request's reply, and "everything up to the next request" hands request B the
+ * answer to A. That is the default with two requests in flight, not a rare race.
+ *
+ * A reply row carries no task_uuid and no causation id, so nothing in the snapshot links it back. What does hold is
+ * the order: a serial chain replies in the order the requests were made. So replies are claimed in order — the k-th
+ * reply of a kind goes to the k-th request still awaiting that kind. A reply nothing is waiting for is dropped
+ * (needsConfirm() also fires for a follow-up that never was a chat row), and a request whose reply never came keeps
+ * its fallback — the snapshot is the newest 200 messages by created_at, so a request in it has its later reply too.
+ */
+function claimReplies(ordered: Message[]): Map<string, Message> {
+  const waiting: Record<ReplyKind, Message[]> = { answer: [], prompt: [] };
+  const claimed = new Map<string, Message>();
+  for (const m of ordered) {
+    if (m.role === "user") { const k = awaitedBy(dispositionOf(m)); if (k) waiting[k].push(m); continue; }
+    const kind = replyKindOf(m); if (!kind) continue;
+    const req = waiting[kind].shift();
+    if (req) claimed.set(req.id, m);
+  }
+  return claimed;
+}
+
+function answerOf(d: Disposition, m: Message, task: Task | null, reply: Message | null, outcome: Map<string, string>): { answer: string | null; answerKind: AnswerKind | null } {
   if (d === "failed") return { answer: m.dispatch_error, answerKind: "error" };
   if (d === "needs_confirm") {
-    // The prompt TaskService.needsConfirm() promotes — matched on its opening words, because the trail also holds
-    // the `dispatcher · …` badge row the same decision emits, and that one says nothing about why this stalled.
-    const dec = m.dispatch_json; const prompt = trail.find((t) => t.role === "system" && t.text.startsWith("Routing needs confirmation"))?.text;
-    return { answer: prompt ?? (dec ? `Routing needs confirmation — candidate: ${dec.action}${dec.task_id ? ` ${dec.task_id}` : ""}` : "Routing needs confirmation."), answerKind: "question" };
+    const dec = m.dispatch_json;
+    return { answer: reply?.text ?? (dec ? `Routing needs confirmation — candidate: ${dec.action}${dec.task_id ? ` ${dec.task_id}` : ""}` : "Routing needs confirmation."), answerKind: "question" };
   }
   if (task?.status === "waiting_input" && task.question) return { answer: task.question.text, answerKind: "question" };
   if (task && ENDED.has(task.status)) return { answer: task.last_summary ?? (m.task_uuid ? outcome.get(m.task_uuid) ?? null : null), answerKind: task.status === "error" ? "error" : "summary" };
-  if (d === "answered") return { answer: m.dispatch_json?.answer ?? trailText("dispatcher_answer"), answerKind: "answer" };
-  if (d === "fastpath") return { answer: trailText("dispatcher_answer"), answerKind: "answer" };
+  if (d === "answered") return { answer: m.dispatch_json?.answer ?? reply?.text ?? null, answerKind: "answer" };
+  if (d === "fastpath") return { answer: reply?.text ?? null, answerKind: "answer" };
   return { answer: null, answerKind: null };
 }
 
 function actionsOf(d: Disposition, task: Task | null): RequestAction[] {
   const a: RequestAction[] = [];
   if (d === "needs_confirm" || d === "failed") a.push("redispatch");
-  if (task?.status === "waiting_input") a.push("answer");
+  if (task?.status === "waiting_input" && task.question) a.push("answer");   // the chips are the question's options — without one the action renders nothing and the row is a dead end
   if (task && RETRYABLE.has(task.status)) a.push("restart");
   if (d === "close_request" && task && task.status !== "closed") a.push("close");
   return a;
@@ -111,12 +143,10 @@ export function requestRows(messages: Message[], tasks: Record<string, Task>): R
   // A task's outcome is linked by task_uuid, never by position: the summary lands long after the request, usually after other requests.
   const outcome = new Map<string, string>();
   for (const m of ordered) if (m.task_uuid && (m.role === "worker_summary" || m.role === "error")) outcome.set(m.task_uuid, m.text);
+  const replies = claimReplies(ordered);
   const rows: RequestRow[] = [];
-  for (let i = 0; i < ordered.length; i++) {
-    const m = ordered[i]; if (m.role !== "user") continue;
-    // Dispatcher replies (fast-path answer, needs-confirm prompt) carry no task_uuid, so they are linked by position: everything up to the next request belongs to this one.
-    const trail: Message[] = [];
-    for (let j = i + 1; j < ordered.length && ordered[j].role !== "user"; j++) trail.push(ordered[j]);
+  for (const m of ordered) {
+    if (m.role !== "user") continue;
     // A split records every task it made in dispatch_json.task_ids; every other decision names at most the one in task_uuid.
     const own = (m.dispatch_json?.task_ids ?? []).map((id) => Object.values(tasks).find((t) => t.display_id === id)).filter((t): t is Task => !!t);
     const first = m.task_uuid ? tasks[m.task_uuid] ?? null : null;
@@ -129,7 +159,7 @@ export function requestRows(messages: Message[], tasks: Record<string, Task>): R
       disposition: d, dispositionLabel: labelOf(d, taskId),
       taskUuid: m.task_uuid, taskId, taskIds, taskStatus: task?.status ?? null,
       ...stateOf(d, m, task), bucket: bucketOf(d, m, task),
-      ...answerOf(d, m, task, trail, outcome), actions: actionsOf(d, task),
+      ...answerOf(d, m, task, replies.get(m.id) ?? null, outcome), actions: actionsOf(d, task),
     });
   }
   return rows.sort((a, b) => ORDER[a.bucket] - ORDER[b.bucket] || b.createdAt - a.createdAt);

@@ -114,3 +114,79 @@ test("a split names every task it made, and its state is the piece that most nee
   // every piece finished
   expect(one(m, byId(task("u1", "T-01", "done"), task("u2", "T-02", "done"), task("u3", "T-03", "done")))).toMatchObject({ bucket: "settled" });
 });
+
+// The dispatcher decides one message at a time (Dispatcher.enqueue) but a message is recorded the moment it arrives,
+// so a second request sent while the first is still deciding is recorded BEFORE the first request's reply. Reading
+// the trail as "everything up to the next request" therefore showed the newer row the older request's reason — the
+// default with two requests in flight, and exactly the pile-up this view exists to make legible.
+test("two requests in flight: each needs_confirm row shows its own reason, not the one before it", () => {
+  // arrival order: A, B, then A's decision (badge + prompt), then B's
+  const A = msg({ id: "A", text: "T-01 에 이어서 해줘", dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-01", confidence: "high" } });
+  const B = msg({ id: "B", text: "myapp 인증 리팩토링", dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-07", confidence: "high" } });
+  const sys = (text: string) => msg({ role: "system", dispatch_state: "direct", text });
+  const rows = requestRows([A, B,
+    sys("dispatcher · route_to_task · T-01"), sys("Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay / T-06 myapp"),
+    sys("dispatcher · route_to_task · T-07"), sys("Routing needs confirmation (task T-07 not found, candidate: route_to_task T-07). Which task? T-05 relay / T-06 myapp"),
+  ], {});
+  const by = Object.fromEntries(rows.map((r) => [r.id, r]));
+  expect(by.A.answer).toContain("task T-01 not found");
+  expect(by.B.answer).toContain("task T-07 not found");
+  expect(by.A.bucket).toBe("needs_you");
+  expect(by.B.bucket).toBe("needs_you");
+});
+
+test("two status queries in a row: each gets its own answer, not the other's", () => {
+  const s1 = msg({ id: "s1", text: "지금 뭐 돌아가?", dispatch_state: "fastpath" });
+  const s2 = msg({ id: "s2", text: "상태 알려줘", dispatch_state: "fastpath" });
+  const ans = (text: string) => msg({ role: "dispatcher_answer", dispatch_state: "direct", text });
+  const by = Object.fromEntries(requestRows([s1, s2, ans("Running 2 · Queued 0"), ans("Running 3 · Queued 1")], {}).map((r) => [r.id, r]));
+  expect(by.s1.answer).toBe("Running 2 · Queued 0");
+  expect(by.s2.answer).toBe("Running 3 · Queued 1");
+});
+
+// A direct answer records its text in the decision AND emits the chat row. The row still has to be consumed, or it is
+// left over and claimed by the next request that has only the row to read.
+test("an answer already in the decision still consumes its chat row", () => {
+  const a = msg({ id: "a", text: "relay 는 지금 몇 버전이야?", dispatch_json: { action: "answer_directly", answer: "0.1.2", confidence: "high" } });
+  const b = msg({ id: "b", text: "지금 뭐 돌아가?", dispatch_state: "fastpath" });
+  const ans = (text: string) => msg({ role: "dispatcher_answer", dispatch_state: "direct", text });
+  const by = Object.fromEntries(requestRows([a, b, msg({ role: "system", dispatch_state: "direct", text: "dispatcher · answer_directly" }), ans("0.1.2"), ans("Running 2 · Queued 0")], {}).map((r) => [r.id, r]));
+  expect(by.a.answer).toBe("0.1.2");
+  expect(by.b.answer).toBe("Running 2 · Queued 0");
+});
+
+// The cases that already worked, kept working: a row nobody is waiting for must not be claimed, and a request that
+// awaits no dispatcher reply must not consume one.
+test("a worker summary between two requests belongs to its task, and claims no reply", () => {
+  const t = task("u1", "T-01", "done", { last_summary: null });
+  const started = msg({ id: "a", text: "freee mcp 갱신", task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } });
+  const summary = msg({ role: "worker_summary", dispatch_state: "direct", task_uuid: "u1", text: "Updated freee-mcp to 1.4.0." });
+  const status = msg({ id: "b", text: "지금 뭐 돌아가?", dispatch_state: "fastpath" });
+  const ans = msg({ role: "dispatcher_answer", dispatch_state: "direct", text: "Running 0 · Queued 0" });
+  const by = Object.fromEntries(requestRows([started, summary, status, ans], byId(t)).map((r) => [r.id, r]));
+  expect(by.a).toMatchObject({ answer: "Updated freee-mcp to 1.4.0.", answerKind: "summary" });
+  expect(by.b.answer).toBe("Running 0 · Queued 0");
+});
+
+test("a route, a close request and an archived task claim nothing, so a later answer stays with its own request", () => {
+  const err = task("u2", "T-02", "error");
+  const closed = task("u3", "T-03", "closed");
+  const routed = msg({ id: "a", task_uuid: "u2", dispatch_json: { action: "route_to_task", task_id: "T-02", confidence: "high" } });
+  const archived = msg({ id: "b", task_uuid: "gone", dispatch_json: { action: "new_task", confidence: "high" } });
+  const close = msg({ id: "c", task_uuid: "u3", dispatch_json: { action: "close_task", task_id: "T-03", confidence: "high" } });
+  const noUuid = msg({ id: "d", dispatch_json: { action: "answer_directly", answer: "0.1.2", confidence: "high" } });
+  const ans = msg({ role: "dispatcher_answer", dispatch_state: "direct", text: "0.1.2" });
+  const by = Object.fromEntries(requestRows([routed, archived, close, noUuid, ans], byId(err, closed)).map((r) => [r.id, r]));
+  expect(by.a).toMatchObject({ disposition: "routed", state: "Error", answerKind: "error" });
+  expect(by.b).toMatchObject({ disposition: "new_task", state: "Archived", bucket: "settled", answer: null });
+  expect(by.c).toMatchObject({ disposition: "close_request", bucket: "settled", actions: [] });
+  expect(by.d).toMatchObject({ disposition: "answered", answer: "0.1.2" });
+});
+
+// `answer` renders the question's options as chips, and toDemoTask only fills question while the task is waiting, so a
+// question resolved by another path left the row in needs_you labelled "Needs input" with no chips and nothing to click.
+test("a waiting task whose question is gone offers no answer action", () => {
+  const t = task("u1", "T-01", "waiting_input");
+  const r = one(msg({ task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } }), byId(t));
+  expect(r).toMatchObject({ state: "Needs input", answer: null, actions: [] });
+});
