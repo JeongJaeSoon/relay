@@ -155,14 +155,24 @@ function claimReplies(ordered: Message[], tasks: Record<string, Task>): Map<stri
     const stray = ordered.find((n) => free(n) && ERR_STATE.test(n.text));
     if (stray) taken.add(stray.id);
   }
-  // 2 — the chain's replies, paired from the newest end. Claiming from the oldest end (a FIFO whose head takes the
-  // next reply) assumes no request is ever skipped, and one that is skipped never leaves the head: it takes the reply
-  // belonging to a later request, and every claim after it shifts by one. That is not hypothetical — a database from
-  // before the 0.1.1 English migration holds prompts this file could not read, and two such requests silently
-  // rewrote every row after them. Pairing the last k of each list instead puts any deficit or surplus on the OLDEST
-  // rows, which degrade: a request that cannot be matched cannot take a reply from a request after it, whatever the
-  // reason it went unmatched — an unreadable prompt, a row this file has not learned yet, a stale prompt left behind
-  // by a redispatch. That property is the point; recognising any particular wording is not.
+  // 2 — the chain's replies, paired from the newest end.
+  //
+  // Claiming from the oldest end (a FIFO whose head takes the next reply) assumes no request is ever skipped, and a
+  // request that is skipped never leaves the head: it takes the reply belonging to a later request, and every claim
+  // after it shifts by one. That is not hypothetical — a database written before the 0.1.1 English migration holds
+  // prompts this file could not read, and two such requests silently rewrote every row after them.
+  //
+  // ENFORCED, whatever the reason a request goes unmatched: pairing the last k of each list leaves the unmatched
+  // requests as the OLDEST ones, by construction. An unmatched request is therefore older than every matched one and
+  // cannot hold a reply belonging to a request after it. Nothing here depends on why it went unmatched — an
+  // unreadable prompt, a lost write, a disposition this file does not classify.
+  //
+  // ASSUMED, and worth stating because nothing here checks it: every prompt row has an owner among these requests.
+  // The producers are enumerable — needsConfirm() is the only one (tasks.ts:139), reached from applyDecision, from
+  // splitGuard, and from sendTo for a reply to an errored task, which pass 1 removes first. A row that is counted as
+  // a prompt but belongs to none of them is a surplus, and a surplus newer than the requests' own replies would be
+  // taken by the newest request. So a NEW kind of system row with no task_uuid and no leading marker must either
+  // carry a marker or be excluded in replyKindOf — otherwise it will be read as somebody's reason.
   const at = new Map(ordered.map((m, i) => [m.id, i]));
   for (const kind of ["answer", "prompt"] as ReplyKind[]) {
     const reqs = ordered.filter((m) => m.role === "user" && !offChain(m) && awaitedBy(dispositionOf(m)) === kind);
