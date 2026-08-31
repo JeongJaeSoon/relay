@@ -112,6 +112,12 @@ export class Outbox {
       catch (e) {
         if (e instanceof HeldError) { this.log.emit({ type: "command.requeued", task_uuid: taskUuid, payload: { id: cmd.id } }); return "held"; }
         this.log.emit({ type: "command.unknown", task_uuid: taskUuid, causation_id: cmd.id, payload: { id: cmd.id, error: String(e).slice(0, 300) } });   // B3: retries are manual (confirm/retry)
+        // A spawn is at-most-once (B3): the session may have started even though relay could not read the
+        // `backgrounded ·` line, so the command stays `unknown` and relay never respawns on its own. What must not
+        // survive is the task sitting at `starting` with no process — it would hold its scheduler slot forever and
+        // look like it were still coming up. Park it in `error`: visible, and the scheduler takes the slot back.
+        if (cmd.kind === "spawn" && loadTask(this.db, taskUuid)?.process_state === "none")
+          this.log.emit({ type: "task.status_changed", task_uuid: taskUuid, causation_id: cmd.id, payload: { status: "error", patch: { status: "error", ended_at: now(), last_summary: `spawn failed, outcome unknown — ${String(e).slice(0, 200)}` } } });
         slog.warn("command failed", { id: cmd.id, e: String(e) }); return "error";
       }
     }
