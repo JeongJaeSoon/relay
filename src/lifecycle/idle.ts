@@ -13,7 +13,11 @@ export class IdleReaper {
       this.log.emit({ type: "idle.deadline", task_uuid: r.uuid, payload: { action: "stop", patch: {} } });
       this.outbox.enqueue(r.uuid, `idle:${t}`, { kind: "stop", reason: "idle" });
     }
-    for (const r of this.db.query("select uuid from tasks where parent_uuid is null and status in ('done','cancelled') and updated_at<?").all(closeBefore) as any[]) {
+    // `error` belongs here even though it is the state a user is most likely to return to: `close` is the ONLY path that
+    // disposes of a session, so leaving it out kept an errored task's session registered in `claude agents` forever.
+    // `retry` stays available right up to the deadline. `waiting_input`/`needs_review` are still excluded — those wait on
+    // a person, and closing one would discard a question nobody has answered yet.
+    for (const r of this.db.query("select uuid from tasks where parent_uuid is null and status in ('done','cancelled','error') and updated_at<?").all(closeBefore) as any[]) {
       this.log.emit({ type: "idle.deadline", task_uuid: r.uuid, payload: { action: "close", patch: {} } }); this.tasks.close(r.uuid);
     }
   }
