@@ -128,7 +128,7 @@ function togglePause(){relay.pause()}                                           
 function runningCount(){return S.running??tasksArr().filter(t=>t.status==="run").length}  /* server count is authoritative */
 
 /* ================= lifecycle ================= */
-/* 대기열 순서: 답변 후 permit 재획득 대기(qhead)가 선두, 나머지는 큐 진입 시각 FIFO */
+/* queue order: a task waiting to re-acquire a permit after it was answered (qhead) goes first, the rest FIFO by the time they entered the queue */
 const queueOrder=(a,b)=>(b.qhead?1:0)-(a.qhead?1:0)||(a.queuedAt||0)-(b.queuedAt||0);
 const queuedTasks=()=>tasksArr().filter(t=>t.status==="queue").sort(queueOrder);
 /* ================= layout & graph ================= */
@@ -139,7 +139,7 @@ function layout(){
   const queued=notSub.filter(t=>t.status==="queue").sort(queueOrder);
   const kidsOf=t=>t.children.map(id=>S.tasks.get(id)).filter(c=>c&&c.status!=="closed");
   if(S.layout==="tree"){
-    /* 계단: 게이트웨이 좌상단 고정, 태스크는 아래로 적층, 서브는 부모 행에서 시작해 적층 */
+    /* steps: the gateway is pinned top-left, tasks stack downwards, subs stack from their parent's row */
     gwEl.style.left="32px";gwEl.style.top=ROW_Y0+"px";
     let cursor=ROW_Y0;
     active.forEach(t=>{
@@ -154,7 +154,7 @@ function layout(){
       }
     });
   }else{
-    /* 방사: 게이트웨이가 세로 중앙에서 곡선으로 퍼져나가는 형태 */
+    /* radial: the gateway sits at the vertical centre and everything curves outwards from it */
     active.forEach((t,i)=>{t.x=COL_TASK;t.y=ROW_Y0+i*ROW_H});
     active.forEach(t=>{
       kidsOf(t).forEach((c,i)=>{c.x=COL_SUB;c.y=t.y+(i===0?-58:66)});
@@ -163,7 +163,7 @@ function layout(){
     const gy=ys.length?ys.reduce((a,b)=>a+b,0)/ys.length+22:ROW_Y0;
     gwEl.style.left="40px";gwEl.style.top=gy+"px";
   }
-  /* 대기열 레인: 게이트웨이 아래 FIFO 스택 */
+  /* queue lane: a FIFO stack below the gateway */
   const laneX=parseFloat(gwEl.style.left)||32;
   const laneY0=(parseFloat(gwEl.style.top)||ROW_Y0)+gwEl.offsetHeight+40;
   queued.forEach((t,i)=>{t.x=laneX;t.y=laneY0+i*76});
@@ -194,7 +194,7 @@ function nodeEl(t){
       if(e.key==="Enter"||e.key===" "){e.preventDefault();select(t.id)}
     });
     nodesBox.append(n);
-    n.dataset.fresh="1"; /* 첫 프레임: 이동 트랜지션 없이 페이드-인 */
+    n.dataset.fresh="1"; /* first frame: fade in, with no move transition */
     requestAnimationFrame(()=>requestAnimationFrame(()=>{delete n.dataset.fresh;n.classList.remove("fresh")}));
   }
   return n;
@@ -272,7 +272,7 @@ function edgeCls(t){
   if(t.status==="queue")return"edge queue";
   return"edge";
 }
-function drawIn(path,t){ /* 새 노드의 엣지를 부모→자식 방향으로 그려 넣기 */
+function drawIn(path,t){ /* draw a new node's edge in, parent → child */
   if(S.reduce)return;
   const p=Math.min(1,(Date.now()-t.bornAt)/450);
   if(p>=1)return;
@@ -282,10 +282,10 @@ function drawIn(path,t){ /* 새 노드의 엣지를 부모→자식 방향으로
 }
 function renderEdges(){
   edgesSvg.textContent="";const fam=famOf(S.sel);
-  const tree=S.layout==="tree", A=22; /* tree: 노드 상단(제목 행) 기준 앵커 — 첫 행은 수평선 */
+  const tree=S.layout==="tree", A=22; /* tree: anchored on the node's top (its title row) — the first row comes out horizontal */
   tasksArr().forEach(t=>{
     if(t.status==="closed")return;
-    if(!t.sub&&t.status==="queue")return; /* 대기열은 아래 체인으로 */
+    if(!t.sub&&t.status==="queue")return; /* queued tasks are chained below instead */
     const n=document.getElementById("node-"+t.id);if(!n)return;
     let x1,y1;
     if(t.sub){
@@ -300,12 +300,12 @@ function renderEdges(){
     const x2=n.offsetLeft;
     const y2=tree?n.offsetTop+A:n.offsetTop+n.offsetHeight/2;
     const path=document.createElementNS("http://www.w3.org/2000/svg","path");
-    const cx=Math.round((x1+x2)/2); /* 두 레이아웃 모두 S-베지어 곡선 — 첫 행은 y1==y2라 자연히 수평선 */
+    const cx=Math.round((x1+x2)/2); /* the same S-bezier in both layouts — the first row has y1==y2, so it falls out horizontal */
     path.setAttribute("d","M"+x1+" "+y1+" C"+cx+" "+y1+" "+cx+" "+y2+" "+x2+" "+y2);
     path.setAttribute("class",edgeCls(t)+(fam.has(t.id)?" rel":""));
     edgesSvg.append(path);drawIn(path,t);
   });
-  /* 대기열 체인: 게이트웨이 아래로 FIFO 세로 연결 */
+  /* queue chain: vertical FIFO links running down from the gateway */
   const qs=queuedTasks().filter(t=>!t.sub);
   qs.forEach((t,i)=>{
     const n=document.getElementById("node-"+t.id);if(!n)return;
@@ -322,7 +322,7 @@ function renderEdges(){
   });
 }
 let edgeAnimUntil=0;
-function animateEdges(){ /* 노드 위치 전환(300ms) 동안 엣지가 따라붙도록 */
+function animateEdges(){ /* keeps the edges glued to the nodes through the 300ms position transition */
   edgeAnimUntil=performance.now()+650;
   requestAnimationFrame(function loop(){
     renderEdges();
@@ -392,7 +392,7 @@ function renderDetail(){
   const body=$("#dBody"),t=S.sel?S.tasks.get(S.sel):null,f=S.fsel?S.foreign.get(S.fsel):null;
   $("#detail").classList.toggle("open",!!(t||f));
   $("#dHead").textContent=f?"Session detail · outside relay":"Task detail";
-  const st=body.scrollTop,openSet=new Set([...body.querySelectorAll("details[open]")].map(d=>d.dataset.i)); /* 재구성 후 복원 */
+  const st=body.scrollTop,openSet=new Set([...body.querySelectorAll("details[open]")].map(d=>d.dataset.i)); /* restored after the rebuild */
   body.textContent="";
   if(f){renderForeignDetail(body,f);body.scrollTop=st;return}
   if(!t){body.append(el("div","d-empty","Pick a task in the graph or the sidebar to see its detail."));return}
@@ -417,7 +417,7 @@ function renderDetail(){
   row("Started",t.startedAt?clock(t.startedAt):"—",true);
   row("Elapsed",elapsedText(t)||"—",true).dataset.el=t.id;
   const kin=(t.sub?[t.parent]:t.children).filter(id=>{const r=S.tasks.get(id);return r&&r.status!=="closed"});
-  if(kin.length){ /* 같은 작업 단위 — 클릭하면 그쪽으로 이동 */
+  if(kin.length){ /* the same unit of work — click to jump there */
     const chips=el("div","chips");
     kin.forEach(id=>{const r=S.tasks.get(id);const b=el("button","chip",id+" · "+r.title);b.addEventListener("click",()=>{select(id);centerOn(r)});chips.append(b)});
     row(t.sub?"Parent":"Children",chips);
@@ -455,7 +455,7 @@ function renderDetail(){
       b.addEventListener("click",()=>restartTask(t));acts.append(b);
     }
     if(["done","err","cancelled"].includes(t.status)||t.statusLabel==="Needs review"){
-      const b=el("button","act","Archive");let armed=false; /* 2단계 확인 — worktree 정리는 되돌릴 수 없다 */
+      const b=el("button","act","Archive");let armed=false; /* two-step confirm — cleaning the worktree cannot be undone */
       b.addEventListener("click",()=>{
         if(!armed){armed=true;b.textContent="Confirm archive (clean worktree)";b.classList.add("danger");return}
         archiveTask(t);
@@ -502,7 +502,7 @@ function renderForeignDetail(body,f){
   });
   acts.append(b);body.append(acts);
 }
-function famOf(id){ /* 작업 단위 = 최상위 태스크 + 그 서브에이전트 */
+function famOf(id){ /* a unit of work = the top-level task plus its subagents */
   const s=new Set();const t=id&&S.tasks.get(id);if(!t||t.status==="closed")return s;
   const r=(t.sub&&S.tasks.get(t.parent))||t;s.add(r.id);r.children.forEach(c=>s.add(c));return s;
 }
@@ -521,7 +521,7 @@ document.addEventListener("keydown",e=>{
 
 /* ================= pan / zoom ================= */
 const MINZ=.2,MAXZ=2;
-const view={x:24,y:20,k:1,manual:false}; /* manual: 사용자가 뷰를 만진 뒤엔 자동 맞춤 보류, ⤢(맞춤)으로 재개 */
+const view={x:24,y:20,k:1,manual:false}; /* manual: once the user moves the view, auto-fit holds off until ⤢ (fit) resumes it */
 function touchView(){view.manual=true;$("#zfit").classList.add("manual")}
 function applyView(smooth){
   world.style.transition=(smooth&&!S.reduce)?"transform .35s cubic-bezier(.22,.61,.36,1)":"none";
@@ -547,10 +547,10 @@ function fit(){
   const maxX=Math.max(...boxes.map(b=>b.x+b.w)),maxY=Math.max(...boxes.map(b=>b.y+b.h));
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
   view.k=Math.max(MINZ,Math.min(1,(cw-64)/(maxX-minX),(ch-64)/(maxY-minY)));
-  if(S.layout==="tree"){ /* 좌상단 앵커 */
+  if(S.layout==="tree"){ /* top-left anchor */
     view.x=28-minX*view.k;
     view.y=24-minY*view.k;
-  }else{ /* 방사: 중앙 정렬 */
+  }else{ /* radial: centred */
     view.x=(cw-(maxX-minX)*view.k)/2-minX*view.k;
     view.y=(ch-(maxY-minY)*view.k)/2-minY*view.k;
   }
@@ -592,7 +592,7 @@ canvas.addEventListener("pointerup",()=>{
   if(pan&&!pan.moved)clearSel();
   pan=null;canvas.classList.remove("panning");
 });
-function zoomBy(f){ /* 캔버스 중심 고정 줌 */
+function zoomBy(f){ /* zoom about the canvas centre */
   const cx=canvas.clientWidth/2,cy=canvas.clientHeight/2,k2=Math.min(MAXZ,Math.max(MINZ,view.k*f));
   view.x=cx-(cx-view.x)*(k2/view.k);view.y=cy-(cy-view.y)*(k2/view.k);view.k=k2;touchView();applyView(true);
 }
@@ -610,7 +610,7 @@ function updateMinimap(){
   if(!hasTasks)return;
   const boxes=graphBoxes();
   const pad=44;
-  /* 범위 = 노드 영역 ∪ 현재 뷰포트 → 화면 비율과 동일하게 보이도록 */
+  /* extent = the node area ∪ the current viewport, so the minimap keeps the screen's proportions */
   const vpx=-view.x/view.k, vpy=-view.y/view.k, vpw=canvas.clientWidth/view.k, vph=canvas.clientHeight/view.k;
   const minX=Math.min(vpx,...boxes.map(b=>b.x))-pad,minY=Math.min(vpy,...boxes.map(b=>b.y))-pad;
   const maxX=Math.max(vpx+vpw,...boxes.map(b=>b.x+b.w))+pad,maxY=Math.max(vpy+vph,...boxes.map(b=>b.y+b.h))+pad;
@@ -654,12 +654,12 @@ setInterval(()=>{
     const n=document.getElementById("node-"+t.id);
     if(n){const e2=n.querySelector(".n-elapsed");if(e2)e2.textContent=elapsedText(t)}
   });
-  /* 사이드바·상세는 재구성하지 않고 경과 텍스트만 갱신 → 스크롤·포커스·펼침 상태 유지 */
+  /* the sidebar and detail are not rebuilt, only their elapsed text — scroll, focus and open sections survive */
   document.querySelectorAll("[data-el]").forEach(e=>{const t=S.tasks.get(e.dataset.el);if(t)e.textContent=e.dataset.fmt==="side"?sideMeta(t):(elapsedText(t)||"—")});
   document.querySelectorAll("[data-fel]").forEach(e=>{const f=S.foreign.get(e.dataset.fel);if(f)e.textContent=foreignElapsed(f)});
 },1000);
 
-/* ================= notifications (macOS 방식) ================= */
+/* ================= notifications (macOS style) ================= */
 const N={items:[],dnd:false,open:false,expand:{}};
 const NKIND={wait:"Needs input",err:"Stopped · errored",done:"Done"};
 let nseq=0;
@@ -671,18 +671,18 @@ function notify(kind,t,body){
   if(it.loc==="toast")armToast(it);
 }
 function armToast(it){clearTimeout(it.timer);it.timer=setTimeout(()=>hideToast(it),5000)}
-function hideToast(it){ /* 자동 숨김: 삭제가 아니라 보관함으로 이동 */
+function hideToast(it){ /* auto-hide moves it to the centre; it does not drop it */
   it.loc="center";
   const c=document.getElementById("toast-"+it.id);
   if(c){c.classList.add("out");setTimeout(()=>{c.remove();renderNotif()},250)}
   else renderNotif();
 }
 function dropNotif(it){clearTimeout(it.timer);N.items=N.items.filter(x=>x!==it)}
-function withdrawNotif(taskId,kind){ /* 다른 경로로 해소된 알림은 자동 철회 */
+function withdrawNotif(taskId,kind){ /* a notification resolved through some other path withdraws itself */
   N.items.filter(i=>i.taskId===taskId&&(!kind||i.kind===kind)).forEach(dropNotif);
   renderNotif();
 }
-function openFromNotif(it){ /* 클릭 = 해당 노드 확인 = 읽음 처리 */
+function openFromNotif(it){ /* a click means the node has been looked at, which means read */
   const t=S.tasks.get(it.taskId);
   dropNotif(it);N.open=false;renderNotif();
   if(t){select(t.id);centerOn(t)}
@@ -700,7 +700,7 @@ function ncard(it){
 }
 function renderToasts(){
   const live=N.items.filter(i=>i.loc==="toast");
-  while(live.length>3)hideToast(live.shift()); /* 초과분도 동일한 슬라이드-아웃 경로 */
+  while(live.length>3)hideToast(live.shift()); /* the overflow leaves by the same slide-out path */
   [...toastsBox.children].forEach(c=>{
     if(!live.some(i=>"toast-"+i.id===c.id)&&!c.classList.contains("out"))c.remove();
   });
@@ -747,7 +747,7 @@ function renderCenter(){
         c.addEventListener("click",()=>openFromNotif(it));
         g.append(c);
       });
-    }else{ /* macOS식 스택: 최신 1장(본문 유지) + 뒤 카드 겹침, 클릭하면 펼침. 삭제는 헤더 '지우기' 한 곳으로 */
+    }else{ /* macOS-style stack: the newest card in full, the rest peeking out behind it, click to expand. Dismissing lives in one place, the header's Clear */
       const w=el("div","stack"),c=ncard(list[0]);
       c.querySelector(".nx").remove();
       c.setAttribute("aria-label","Expand "+list.length+" "+NKIND[k]+" notifications");
@@ -769,14 +769,14 @@ function renderBanner(){
   else if(S.paused){msg="⏸ Paused (kill switch) — no new dispatches or slots, running workers asked to stop"}
   const was=b.classList.contains("on");
   b.className=msg?"on "+cls:"";
-  if(was!==!!msg&&S.autofit&&!view.manual)fit(); /* 배너 행이 캔버스 높이를 바꾸므로 */
-  const setBh=()=>document.documentElement.style.setProperty("--bh",(msg?b.offsetHeight:0)+"px"); /* 리사이저 시작 높이 보정 */
+  if(was!==!!msg&&S.autofit&&!view.manual)fit(); /* the banner row changes the canvas height */
+  const setBh=()=>document.documentElement.style.setProperty("--bh",(msg?b.offsetHeight:0)+"px"); /* corrects the resizer's starting height */
   if(!msg){setBh();return}
   b.append(el("span",null,msg));
   if(S.paused&&S.conn==="ok"){const r=el("button","act","Resume");r.addEventListener("click",()=>togglePause());b.append(r)}
   setBh();
 }
-ncEl.addEventListener("click",e=>e.stopPropagation()); /* 패널 내부 클릭이 외부클릭 판정으로 새지 않게 */
+ncEl.addEventListener("click",e=>e.stopPropagation()); /* keeps a click inside the panel from counting as a click outside it */
 notifBtn.addEventListener("click",e=>{
   e.stopPropagation();
   N.open=!N.open;
@@ -784,7 +784,7 @@ notifBtn.addEventListener("click",e=>{
   if(N.open)N.items.forEach(i=>{if(i.loc==="toast"){clearTimeout(i.timer);i.loc="center"}});
   renderNotif();if(N.open)ncEl.focus();
 });
-ncEl.tabIndex=-1;$("#settings").tabIndex=-1; /* 열릴 때 포커스를 패널 안으로 */
+ncEl.tabIndex=-1;$("#settings").tabIndex=-1; /* focus moves into the panel when it opens */
 $("#ncClear").addEventListener("click",()=>{N.items.forEach(i=>clearTimeout(i.timer));N.items=[];renderNotif()});
 $("#ncDnd").addEventListener("change",e=>{N.dnd=e.target.checked;renderNotif();renderSettings()});
 document.addEventListener("click",e=>{
@@ -800,7 +800,7 @@ function renderSettings(){
   document.querySelectorAll("#segLayout button").forEach(b=>b.classList.toggle("on",b.dataset.l===S.layout));
   document.querySelectorAll("#segAlign button").forEach(b=>b.classList.toggle("on",b.dataset.a===RZ.align));
   $("#maxwVal").textContent=String(S.maxw);
-  const mh=$("#maxwHint");mh.textContent=S.maxw>10?"⚠ over the default":"";mh.title=S.maxw>10?"Above the default of 10 — watch for a spike in subscription usage":""; /* 한 줄 유지, 상세는 툴팁 */
+  const mh=$("#maxwHint");mh.textContent=S.maxw>10?"⚠ over the default":"";mh.title=S.maxw>10?"Above the default of 10 — watch for a spike in subscription usage":""; /* stays one line; the detail goes in the tooltip */
   $("#setAutofit").checked=S.autofit;
   $("#setDnd").checked=N.dnd;
   $("#setReduce").checked=S.reduce;
@@ -846,7 +846,7 @@ $("#setReduce").addEventListener("change",e=>{
   renderSettings();
 });
 
-/* ================= layout shell (VSCode식): 리사이즈·정렬·패널 토글 ================= */
+/* ================= layout shell (VSCode style): resize, alignment, panel toggles ================= */
 const RZ=Object.assign(
   {sbw:248,dw:296,chh:232,align:"justify",sb:true,dt:true,ch:true},
   JSON.parse(localStorage.getItem("relay-sizes")||"{}")
@@ -888,7 +888,7 @@ makeResizer(".rz-ch",e=>{RZ.chh=clampNum(document.documentElement.clientHeight-e
 document.querySelectorAll("#segAlign button").forEach(b=>b.addEventListener("click",()=>setAlign(b.dataset.a)));
 applySizes();applyAlign();applyPanels();
 
-/* ================= 단축키 (JSON 커스텀) ================= */
+/* ================= shortcuts (customised as JSON) ================= */
 const KEY_DEFAULTS={
   palette:"mod+shift+p",
   toggleSidebar:"mod+b",
@@ -927,7 +927,7 @@ document.addEventListener("keydown",e=>{
   else if(matchKey(e,KEYS.chatShrink)){e.preventDefault();chatResize(-40)}
 });
 
-/* ================= 명령 팔레트 ================= */
+/* ================= command palette ================= */
 const PAL={open:false,idx:0,list:[]};
 const palEl=$("#palette"),palInput=$("#palInput"),palList=$("#palList");
 function commands(){
@@ -995,7 +995,7 @@ palInput.addEventListener("keydown",e=>{
 });
 palEl.addEventListener("click",e=>{if(e.target===palEl)closePalette()});
 
-/* ================= 단축키 JSON 편집기 ================= */
+/* ================= shortcuts JSON editor ================= */
 const kedEl=$("#keysEd");
 function openKeysEd(){
   kedEl.classList.add("open");
@@ -1043,7 +1043,7 @@ askBtn.addEventListener("click",()=>{
 });
 function autogrow(){input.style.height="auto";input.style.height=input.scrollHeight+(input.offsetHeight-input.clientHeight)+"px"} /* +border: box-sizing is border-box but scrollHeight is not. CSS max-height caps it, then it scrolls */
 chatForm.addEventListener("submit",e=>{
-  e.preventDefault(); /* IME 조합 중 Enter 가드는 아래 keydown이 담당 */
+  e.preventDefault(); /* the keydown below is what guards Enter mid-IME-composition */
   send(input.value);input.value="";askTask=null;localStorage.removeItem(DRAFT);autogrow();renderAsk();  /* the toggle is a mode and stays on; the task scope is per-question */
 });
 input.addEventListener("input",()=>{autogrow();renderAsk();localStorage.setItem(DRAFT,input.value)});
@@ -1056,8 +1056,8 @@ input.addEventListener("keydown",e=>{
 input.value=localStorage.getItem(DRAFT)||"";autogrow(); /* a long message survives a reload */
 
 /* ================= module bridge ================= */
-/* 클래식 스크립트의 최상위 const는 window 속성이 아니다 — web/src/adapter.ts가 읽는 것만 노출한다
-   (el, chatUser, notify, relayout, refresh, select 등 함수 선언은 이미 전역 객체에 올라간다). */
+/* A classic script's top-level const is not a window property — expose only what web/src/adapter.ts reads
+   (function declarations such as el, chatUser, notify, relayout, refresh and select are already on the global object). */
 Object.assign(window,{S,N,LEDGER,msgs,gwEl});
 
 /* ================= boot ================= */
