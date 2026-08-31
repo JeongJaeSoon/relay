@@ -11,7 +11,7 @@ import { ulid } from "../../../src/core/ids.ts";
 import { ingestHook } from "../../../src/hooks/ingest.ts";
 import { writeOwner } from "../../../src/lifecycle/outbox.ts";
 import { mkdtempSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
-import { assertInvariants } from "../../../src/core/state.ts";
+import { assertInvariants, holdsSlot } from "../../../src/core/state.ts";
 import stopDone from "../../fixtures/stop-done.json"; import stopQuestion from "../../fixtures/stop-question.json";
 
 function setup(max = 2) {
@@ -194,6 +194,21 @@ describe("TaskService", () => {
     // a slot that a waiting task needed — at max_concurrent_agents=1 that is a real stall, not just an ugly frame
     expect(s.permits.active()).toBe(0);
     await s.settle(); expect(s.permits.active()).toBe(0); expect(loadTask(s.db, t)!.status).toBe("closed");
+  });
+  test("a close whose rm is held on a locked worktree does not leave the task claiming a slot it gave up (I2)", async () => {
+    const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid; s.hook(t, { hook_event_name: "SessionStart", source: "startup" });
+    expect(holdsSlot(loadTask(s.db, t))).toBe(true); expect(s.permits.active()).toBe(1);
+    s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", retryable: true };
+    s.svc.close(t); await s.settle();
+    // the rm may not land for a while, or at all, so the scheduler resources have to be given up at close time. Left
+    // `running` with the permit released this is an I2 violation, which recovery answers by granting the slot again —
+    // to a task on its way out.
+    expect((s.db.query("select state from commands where kind='rm'").get() as any).state).toBe("pending");
+    expect(loadTask(s.db, t)!.status).toBe("cancelled"); expect(s.permits.active()).toBe(0);
+    expect(assertInvariants(s.db, 2)).toEqual([]);
+    s.runner.keepWorktree = null; await s.outbox.run(t);                      // the session finished exiting
+    expect(loadTask(s.db, t)!.status).toBe("closed");
   });
   test("a close whose rm is refused is not reported as closed — the session is still registered, so the task stays visible", async () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
