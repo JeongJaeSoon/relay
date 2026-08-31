@@ -313,23 +313,34 @@ header{
 .chat-h .sub{font-weight:400;letter-spacing:0}
 .chat-body{display:flex;flex:1;min-height:0}
 .chat-main{flex:1;min-width:0;display:flex;flex-direction:column}
-#dlog{width:296px;flex:none; /* = 태스크 상세 기본 폭(--dw 296px)과 동일 */border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
-.dl-h{
-  padding:7px 12px;border-bottom:1px solid var(--line);
+/* 요청 원장 (채팅 우측 레일): 사용자 메시지 1건 = 1행 — 어디로 갔는지, 지금 상태, 돌아온 답 */
+#ledger{width:296px;flex:none; /* = 태스크 상세 기본 폭(--dw 296px)과 동일 */border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.lg-h{
+  display:flex;align-items:center;gap:8px;padding:5px 12px;border-bottom:1px solid var(--line);
   font-size:var(--fs-micro);font-weight:700;letter-spacing:.07em;color:var(--muted);
 }
-.dl-list{flex:1;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:9px}
-.dl-row{display:flex;flex-direction:column;gap:3px}
-.dl-msg{font-size:var(--fs-small);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dl-st{display:flex;align-items:center;gap:6px;font-size:var(--fs-micro);color:var(--muted);flex-wrap:wrap}
-.dl-st .judging{color:var(--c-wait);font-weight:600;display:flex;align-items:center;gap:5px}
-.dl-st .judging::before{
-  content:"";width:6px;height:6px;border-radius:50%;background:var(--c-wait-g);
-  animation:dlPulse 1s ease-in-out infinite;
+.lg-h .seg{margin-left:auto;height:22px;flex:none}
+.lg-count{font-weight:700;letter-spacing:0;color:var(--c-err);background:var(--c-err-bg);border-radius:999px;padding:1px 7px}
+.lg-list{flex:1;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:11px}
+.lg-row{display:flex;flex-direction:column;gap:4px;padding-left:8px;border-left:2px solid transparent}
+.lg-row.attn{border-left-color:var(--c-wait-g)}
+.lg-msg{font-size:var(--fs-small);cursor:pointer;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.lg-row.open .lg-msg,.lg-row.open .lg-ans{-webkit-line-clamp:unset}
+.lg-st{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.lg-disp{font-size:var(--fs-micro);color:var(--muted)}
+.lg-src{font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.lg-ans{
+  font-size:var(--fs-micro);color:var(--muted);white-space:pre-wrap;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
 }
-@keyframes dlPulse{50%{opacity:.25}}
-.dl-empty{color:var(--muted);font-size:var(--fs-micro);padding:4px 0}
-@media (max-width:1100px){#dlog{display:none}}
+.lg-ans.err{color:var(--c-err)}
+.lg-ans.question{color:var(--c-wait)}
+.lg-acts{display:flex;gap:6px;flex-wrap:wrap}
+.lg-acts .chip{height:22px;padding:0 9px;font-size:var(--fs-micro)}
+.lg-empty{color:var(--muted);font-size:var(--fs-micro);padding:4px 0;display:flex;flex-direction:column;gap:7px;align-items:flex-start}
+.pill.pulse{animation:lgPulse 1s ease-in-out infinite}
+@keyframes lgPulse{50%{opacity:.35}}
+@media (max-width:1100px){#ledger{display:none}}
 #msgs{ /* 스크롤 컨테이너는 패널 전체 폭, 내용 열만 920px 중앙 정렬 → 스크롤바가 가장자리에 붙음 */
   flex:1;overflow-y:auto;padding:10px 20px;display:grid;grid-template-columns:minmax(0,920px);justify-content:center;align-content:start;gap:8px;
 }
@@ -654,9 +665,13 @@ input[type="checkbox"]{accent-color:var(--accent)}
           <button id="sendBtn" type="submit">Send</button>
         </form>
       </div>
-      <aside id="dlog" aria-label="Dispatch log">
-        <div class="dl-h">Dispatch log</div>
-        <div class="dl-list" id="dlList"></div>
+      <aside id="ledger" aria-label="Requests">
+        <div class="lg-h">Requests<span class="lg-count" id="lgCount" hidden></span>
+          <div class="seg" id="segLedger">
+            <button data-f="open" class="on">Open</button><button data-f="all">All</button>
+          </div>
+        </div>
+        <div class="lg-list" id="lgList"></div>
       </aside>
     </div>
   </footer>

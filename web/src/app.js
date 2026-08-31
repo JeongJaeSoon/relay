@@ -62,41 +62,61 @@ function chatQuestion(t){
   msgs.append(wrap);scrollChat();
 }
 
-/* ================= dispatch log (채팅 우측 레일) ================= */
-const DLOG=[];
-function renderDlog(){
-  const list=$("#dlList");if(!list)return;
+/* ================= request ledger (the rail right of the chat) =================
+   Rows come from requestRows() in web/src/ledger.ts. This only draws that pure result and attaches the action buttons. */
+const LEDGER=[];                                                                          /* filled by the adapter, needs-you first */
+let ledgerFilter="open";                                                                  /* open = only requests not yet settled, all = everything */
+const LEDGER_ACTS={
+  redispatch:{label:"Retry",run:r=>relay.redispatch(r.id)},
+  restart:{label:"Restart",run:r=>{const t=S.tasks.get(r.taskId);if(t)relay.restart(t)}},
+  close:{label:"Close",run:r=>{const t=S.tasks.get(r.taskId);if(t)relay.archive(t)}},
+};
+function ledgerRowEl(r){
+  const row=el("div","lg-row"+(r.bucket==="needs_you"?" attn":""));
+  const text=el("div","lg-msg",r.text);text.title=r.text;
+  text.addEventListener("click",()=>row.classList.toggle("open"));                        /* truncated by default, full text on click */
+  row.append(text);
+  const st=el("div","lg-st");
+  const pill=el("span","pill st-"+r.st+(r.disposition==="deciding"?" pulse":""));
+  pill.append(el("i","dot"),el("span",null,r.state));
+  st.append(pill,el("span","lg-disp",r.dispositionLabel));
+  const t=r.taskId?S.tasks.get(r.taskId):null;
+  r.taskIds.forEach(id=>{const tt=S.tasks.get(id);if(tt)st.append(ttagBtn(tt))});                 /* a split made several — name every one */
+  if(r.source!=="user")st.append(el("span","lg-src",r.source));
+  row.append(st);
+  if(r.answer)row.append(el("div","lg-ans "+(r.answerKind||""),r.answer));
+  const acts=el("div","lg-acts");
+  r.actions.forEach(a=>{
+    if(a==="answer"){                                                                     /* the task's own options — the same chips the chat offers */
+      if(t&&t.question)t.question.chips.forEach(c=>{const b=el("button","chip",c);b.addEventListener("click",()=>answerQuestion(t,c));acts.append(b)});
+      return;
+    }
+    const spec=LEDGER_ACTS[a];if(!spec)return;
+    const b=el("button","chip",spec.label);b.addEventListener("click",()=>spec.run(r));acts.append(b);
+  });
+  if(acts.childElementCount)row.append(acts);
+  return row;
+}
+function renderLedger(){
+  const list=$("#lgList");if(!list)return;
+  const attn=LEDGER.filter(r=>r.bucket==="needs_you").length;
+  const count=$("#lgCount");count.hidden=!attn;count.textContent=attn+" need"+(attn===1?"s":"")+" you";
+  document.querySelectorAll("#segLedger button").forEach(b=>b.classList.toggle("on",b.dataset.f===ledgerFilter));
+  const rows=ledgerFilter==="all"?LEDGER:LEDGER.filter(r=>r.bucket!=="settled");
   list.textContent="";
-  if(!DLOG.length){
-    list.append(el("div","dl-empty","Send a message and its accept → decide → dispatch trail lands here"));
+  if(!rows.length){
+    const empty=el("div","lg-empty",LEDGER.length?"Nothing open — every request you sent has landed.":"Every message you send is a request. What happened to it shows up here.");
+    if(LEDGER.length&&ledgerFilter==="open"){
+      const b=el("button","act","Show all "+LEDGER.length);
+      b.addEventListener("click",()=>setLedgerFilter("all"));
+      empty.append(b);
+    }
+    list.append(empty);
     return;
   }
-  DLOG.forEach(en=>{
-    const row=el("div","dl-row");
-    row.append(el("div","dl-msg",en.text));
-    const st=el("div","dl-st");
-    if(en.status==="judging"){
-      st.append(el("span","judging","deciding"));
-    }else{
-      const r=en.result||{};
-      if(r.action)st.append(el("span","mono"+(r.action==="failed"?" fail":r.action==="fast-path"?" fast":""),r.action));
-      if(r.ids&&r.ids.length){
-        st.append(el("span",null,"→"));
-        r.ids.forEach(id=>{const t=S.tasks.get(id);if(t)st.append(ttagBtn(t))});
-        if(r.action==="route_to_task")st.append(el("span",null,"· accepted"));
-      }else if(r.note){
-        st.append(el("span",null,r.note));
-      }
-      if(r.action==="failed"){
-        const b=el("button","nc-btn","Retry");
-        b.addEventListener("click",()=>relay.redispatch(en.messageId));
-        st.append(b);
-      }
-    }
-    row.append(st);
-    list.append(row);
-  });
+  rows.forEach(r=>list.append(ledgerRowEl(r)));
 }
+function setLedgerFilter(f){ledgerFilter=f;renderLedger()}
 
 /* ================= server actions (window.relay, installed by web/src/adapter.ts) ================= */
 function send(text){text=text.trim();if(!text)return;relay.send(text)}                     /* the server echoes the message as chat.message — no optimistic row */
@@ -625,7 +645,7 @@ mmEl.addEventListener("pointermove",e=>{if(e.buttons)mmJump(e)});
 
 /* ================= refresh & tick ================= */
 function refresh(){
-  renderNodes();renderEdges();renderSidebar();renderDetail();updateMinimap();renderDlog();
+  renderNodes();renderEdges();renderSidebar();renderDetail();updateMinimap();renderLedger();
 }
 setInterval(()=>{
   tasksArr().forEach(t=>{
@@ -806,6 +826,7 @@ $("#gearBtn").addEventListener("click",e=>{
 });
 $("#settings").addEventListener("click",e=>e.stopPropagation());
 document.querySelectorAll("#segTheme button").forEach(b=>b.addEventListener("click",()=>Theme.set(b.dataset.m)));
+document.querySelectorAll("#segLedger button").forEach(b=>b.addEventListener("click",()=>setLedgerFilter(b.dataset.f)));
 document.querySelectorAll("#segLayout button").forEach(b=>b.addEventListener("click",()=>setGraphLayout(b.dataset.l)));
 $("#maxwDec").addEventListener("click",()=>relay.setMax(S.maxw-1));
 $("#maxwInc").addEventListener("click",()=>relay.setMax(S.maxw+1));
@@ -1018,7 +1039,7 @@ input.value=localStorage.getItem(DRAFT)||"";autogrow(); /* a long message surviv
 /* ================= module bridge ================= */
 /* 클래식 스크립트의 최상위 const는 window 속성이 아니다 — web/src/adapter.ts가 읽는 것만 노출한다
    (el, chatUser, notify, relayout, refresh, select 등 함수 선언은 이미 전역 객체에 올라간다). */
-Object.assign(window,{S,N,DLOG,msgs,gwEl});
+Object.assign(window,{S,N,LEDGER,msgs,gwEl});
 
 /* ================= boot ================= */
 layout();refresh();fit();renderNotif();renderSettings();renderBanner(); /* the empty screen anchors top-left the same way a populated one does */
