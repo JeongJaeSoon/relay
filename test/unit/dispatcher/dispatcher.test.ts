@@ -18,6 +18,16 @@ const ok = (obj: unknown): RunClaude => async () => ({ code: 0, stdout: JSON.str
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
 describe("Dispatcher", () => {
+  test("a claude_bin that cannot be spawned fails the message instead of stranding it in `deciding`", async () => {
+    // `deciding` is stamped before the first `claude -p`, and Bun.spawn throws outright on a wrong claude_bin path.
+    // Left at `deciding` the message is unreachable: drainPending re-enqueues it but process() returns (not
+    // `pending`), and redispatch refuses the state as still in flight — no task, no answer, nothing to press.
+    const s = setup(async () => { throw new Error("ENOENT: no such file or directory, posix_spawn '/nope/claude'"); });
+    const id = s.msg("auth 리팩토링 해줘"); s.d.enqueue(id); await settle();
+    const m = loadMessage(s.db, id)!;
+    expect(m.dispatch_state).toBe("failed"); expect(m.dispatch_error).toContain("ENOENT");
+    expect((s.db.query("select text from messages where role='system' order by rowid desc limit 1").get() as any).text).toContain("dispatcher · failed");
+  });
   test("valid decision → dispatched + onDecision", async () => {
     const s = setup(ok({ action: "new_task", project: "myapp", title: "auth 리팩토링", size: "normal", prompt: "auth 리팩토링 해줘", confidence: "high" }));
     const id = s.msg("auth 리팩토링 해줘"); s.d.enqueue(id); await settle();

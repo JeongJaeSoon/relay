@@ -65,7 +65,9 @@ export function apiRoutes(ctx: AppContext) {
   });
   // Redispatch re-runs the decision, and a decision always mints FRESH task uuids — so it is only ever offered for the
   // states where no decision landed. `dispatched`/`fastpath` already produced their task or answer (re-deciding would
-  // duplicate them), `direct` never went through the dispatcher, and `deciding` is still in flight.
+  // duplicate them), `direct` never went through the dispatcher, and `deciding` really is still in flight: a decision
+  // that dies with relay is put back to `pending` by recovery, and one that throws is marked `failed` by the
+  // dispatcher itself — so nothing sits at `deciding` unless a `claude -p` is running for it right now.
   const REDISPATCHABLE = ["pending", "failed", "needs_confirm"];
   const notRedispatchable: Record<string, string> = { dispatched: "it already produced a task — send a new message instead", fastpath: "it was already answered", direct: "it is a direct reply to a task, never dispatched", deciding: "it is still being decided" };
   api.post("/messages/:id/redispatch", (c) => {

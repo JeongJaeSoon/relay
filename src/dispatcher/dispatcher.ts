@@ -45,6 +45,20 @@ export class Dispatcher {
    *  text when the field is missing. A role='user' emitter must set it — see the upcast in projections.ts. */
   private badge(text: string) { this.log.emit({ type: "message.received", payload: { id: ulid(), role: "system", source: "user", client_message_id: null, dispatch_state: "direct", text, task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } }); }
   private async process(id: string) {
+    try { await this.dispatchOne(id); }
+    catch (e) {
+      // `deciding` is stamped before `claude -p` ever runs, and everything after that point can throw — a wrong
+      // `claude_bin` makes Bun.spawn fail with ENOENT before a token is spent. A message left at `deciding` is
+      // stranded: drainPending re-enqueues it but this method returns on its first line (the state is no longer
+      // `pending`), and redispatch refuses the state as still in flight. `failed` is the honest state, it is
+      // redispatchable, and the reason reaches the chat the way a timeout or an unparseable answer does.
+      slog.error("dispatch failed", { id, e: String(e) });
+      if ((this.db.query("select dispatch_state from messages where id=?").get(id) as any)?.dispatch_state !== "deciding") return;
+      const error = String(e).slice(0, 300);
+      this.patch(id, { dispatch_state: "failed", dispatch_error: error }, "dispatch.failed"); this.badge(`dispatcher · failed · ${error.slice(0, 120)}`);
+    }
+  }
+  private async dispatchOne(id: string) {
     const msg = loadMessage(this.db, id); if (!msg || msg.dispatch_state !== "pending") return;
     if (this.opts.isPaused()) return;                                    // stays pending; resume-all calls drainPending()
     await this.rateLimit();
