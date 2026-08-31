@@ -12,4 +12,11 @@ test("assertInvariants reports I1/I2/I6/I9 violations and is silent on a healthy
   const v = assertInvariants(db, 3);
   expect(v).toContain("I1: active leases 4 > max 3"); expect(v).toContain("I6: waiting task u2 holds a lease"); expect(v).toContain("I9: queued task u3 has no queued_at or holds a lease");
   expect(v.some((x) => x.includes("u4"))).toBe(false);                     // permission question may keep its lease
+
+  // …and the same exception the other way round: strip the lease off a permission question whose worker is alive and
+  // that worker is running outside the pool. Nothing used to report it, so the scheduler taking the slot back after
+  // onSlot looked healthy.
+  db.run("update tasks set process_state='alive' where uuid='u4'");
+  db.run("update permit_leases set released_at=2 where holder_id='task:u4'");
+  expect(assertInvariants(db, 10)).toContain("I6: permission-waiting task u4 lost its lease while its worker is still alive");
 });
