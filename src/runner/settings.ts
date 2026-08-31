@@ -21,7 +21,7 @@ export function buildSettingsJson(p: { port: number; allowPush: boolean; maxAgen
   const cmdArgs = ` --task ${q(task)} --gen ${gen} --url ${q(api)}${p.home ? ` --home ${q(p.home)}` : ""}`;
   const hooks: Record<string, unknown> = {};
   for (const e of INJECTED_HOOK_EVENTS) hooks[e] = e === "SessionStart" ? [{ hooks: [{ type: "command", command: `${bin} hook SessionStart${cmdArgs}`, timeout: 3 }] }] : [{ hooks: [http] }];
-  hooks.PermissionRequest = [{ hooks: [{ ...http, timeout: 900 }] }];   // relay answers when the user clicks 허용/거부 (auto-deny after 14 min)
+  hooks.PermissionRequest = [{ hooks: [{ ...http, timeout: 900 }] }];   // relay answers when the user clicks Allow/Deny (auto-deny after 14 min)
   hooks.PreToolUse = [
     { matcher: "Agent", hooks: [http] },
     { matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: `${bin} hook guard${cmdArgs}${p.allowPush ? " --allow-push" : ""}`, timeout: 5 }] },
