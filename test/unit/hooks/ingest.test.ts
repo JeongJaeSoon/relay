@@ -131,7 +131,11 @@ describe("ingestHook", () => {
   });
   test("a stop of our own still exempts the generation it actually stopped", () => {
     // The cost side of scoping the stop clause: if it were too tight, relay would report a crash for every stop it
-    // issued itself. A stop stamped with the generation that then ends is exactly what the exemption is for.
+    // issued itself. A stop stamped with the generation that then ends is exactly what the exemption is for, and it
+    // is reached in ordinary use — see the interrupt-then-reply test in core/tasks.test.ts.
+    // This also guards the BIND ORDER: hoisting the `exists` moved the placeholders to task_uuid → generation →
+    // applied_at, and swapping the last two compares `e.process_generation` against a timestamp, so `ours` is never
+    // true and every stop of relay's own becomes a crash. That mutation fails here.
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
     s.log.emit({ type: "command.queued", task_uuid: "u1", causation_id: "stop:1", payload: { id: "stop:1", kind: "stop", payload: { kind: "stop", reason: "kill switch" } } });
     s.log.emit({ type: "command.running", task_uuid: "u1", causation_id: "stop:1", process_generation: 1, payload: { id: "stop:1" } });

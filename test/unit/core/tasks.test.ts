@@ -141,6 +141,29 @@ describe("TaskService", () => {
     expect(task.status).toBe("starting"); expect(task.short_id).toBe("fake1");   // adopted, not respawned
     expect((s.db.query("select state from commands where task_uuid=? and kind='spawn'").get(t) as any).state).toBe("applied");
   });
+  test("replying to a task you just interrupted must not report a crash when relay's own stop lands", async () => {
+    // Why the stop half of `ours` (hooks/ingest.ts) is load-bearing rather than defensive. interrupt() queues the stop
+    // and marks the task `cancelled`; a reply promotes it back to `queued` (sendTo), the scheduler grants a slot, and
+    // the task is `starting` and unpaused by the time the stop actually kills the session — both leading conjuncts of
+    // `unexpected` true, with only the exemption in between. Delete that clause and a user who replies to a task they
+    // just interrupted gets a crash report for a session relay stopped on purpose.
+    const s = setup(1); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid;
+    s.hook(t, { hook_event_name: "SessionStart", source: "startup" });
+    let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
+    const stop = s.runner.stop.bind(s.runner);
+    s.runner.stop = async (short: string) => { await gate; return stop(short); };   // the stop is still in flight while the user replies
+    s.svc.interrupt(t); await s.settle();
+    expect(loadTask(s.db, t)!.status).toBe("cancelled");
+    s.svc.applyDecision(s.userMsg("계속해"), { action: "route_to_task", task_id: "T-01", prompt: "계속해", confidence: "high" }); await s.settle();
+    const mid = loadTask(s.db, t)!;
+    expect(mid.status).toBe("starting"); expect(mid.paused).toBe(false); expect(mid.process_generation).toBe(1);
+    release(); await s.settle();
+    s.hook(t, { hook_event_name: "SessionEnd", reason: "other" });
+    const after = loadTask(s.db, t)!;
+    expect(after.status).toBe("starting"); expect(after.process_state).toBe("stopped");   // relay's own doing, not a crash
+    expect(s.db.query("select 1 from events where type='process.ended' and json_extract(payload_json,'$.crashed')=1").get()).toBeNull();
+  });
   test("a permission question raised while onSlot is still working keeps the task's slot (I6)", async () => {
     const s = setup(1); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
     const t = (s.db.query("select uuid from tasks").get() as any).uuid;

@@ -199,6 +199,14 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
       // `starting`/`alive`), not the idle sweep (stop wants `alive`, close wants a finished status), not the
       // scheduler's slot return (the task is still `running`) — so it holds its permit until someone closes it by hand.
       // A reap names a long-dead session and says nothing about the live one, so it never exempts anything.
+      // The stop half is NOT dead weight — it fires on a path a user reaches by hand. `interrupt()` queues the stop
+      // and marks the task `cancelled`; a reply to that task promotes it back to `queued` (sendTo), the scheduler
+      // grants a slot, and it is `starting` and unpaused by the time the stop finally kills the session. Both leading
+      // conjuncts of `unexpected` are then true and only this exemption stands between the user and a crash report
+      // for a session relay stopped itself. `retry()` accepts `cancelled` too, so there is a second path of the shape.
+      // Scoping it costs nothing there because the generation matches: the stop is stamped with the one it acts on,
+      // and that is the one whose SessionEnd arrives. The case where they diverge — a resume forks N+1, then N's late
+      // SessionEnd turns up — never reaches this code at all; the stale gate above drops it on `headerGen < gen`.
       const ours = !!d.db.query(`select 1 from commands c where c.task_uuid=? and json_extract(c.payload_json,'$.target') is null
           and exists (select 1 from events e where e.causation_id=c.id and e.type='command.running' and e.process_generation=?) and (
           (c.kind='stop' and (c.state='running' or (c.state='applied' and c.applied_at>=?)))
