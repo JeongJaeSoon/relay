@@ -190,3 +190,48 @@ test("a waiting task whose question is gone offers no answer action", () => {
   const r = one(msg({ task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } }), byId(t));
   expect(r).toMatchObject({ state: "Needs input", answer: null, actions: [] });
 });
+
+// requestRows sorts by created_at, so the arrival order lives in the timestamps, not in the array order — these two
+// cases differ only in when B was sent. Serialised was correct before the fix and has to stay correct.
+test("serialised and overlapped arrivals both keep each reason on its own request", () => {
+  const req = (id: string, at: number, text: string, tid: string) => msg({ id, created_at: at, text, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: tid, confidence: "high" } });
+  const prm = (at: number, tid: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text: `Routing needs confirmation (task ${tid} not found, candidate: route_to_task ${tid}). Which task? T-05 relay` });
+  const reasons = (ms: any[]) => Object.fromEntries(requestRows(ms, {}).map((r) => [r.id, r.answer]));
+
+  // A is answered before B is even sent
+  const serialised = reasons([req("A", 1000, "T-01 에 이어서", "T-01"), prm(2000, "T-01"), req("B", 3000, "myapp 인증", "T-09"), prm(4000, "T-09")]);
+  expect(serialised.A).toContain("task T-01 not found");
+  expect(serialised.B).toContain("task T-09 not found");
+
+  // B is sent while A is still deciding — both rows were wrong before the fix: B took A's reason and A lost its own
+  const overlapped = reasons([req("A", 1000, "T-01 에 이어서", "T-01"), req("B", 2000, "myapp 인증", "T-09"), prm(3000, "T-01"), prm(4000, "T-09")]);
+  expect(overlapped.A).toContain("task T-01 not found");
+  expect(overlapped.B).toContain("task T-09 not found");
+  expect(overlapped.A).not.toBe("Routing needs confirmation — candidate: route_to_task T-01");   // the generic fallback the row degraded to
+  expect(overlapped).toEqual(serialised);                                                        // the ordering must not change what a row says
+});
+
+// drainPending() re-queues every pending message at once (restart, POST /resume-all), so every request row precedes
+// every reply row. No timing luck: with N outstanding, the last row took the first answer and the other N−1 degraded.
+test("a drained backlog gives every request its own reply, in order", () => {
+  const ids = ["r1", "r2", "r3"];
+  const reqs = ids.map((id, i) => msg({ id, created_at: 1000 + i, text: `요청 ${i + 1}`, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: `T-0${i + 1}`, confidence: "high" } }));
+  const prompts = ids.map((_, i) => msg({ role: "system", dispatch_state: "direct", created_at: 2000 + i, text: `Routing needs confirmation (task T-0${i + 1} not found). Which task? T-05 relay` }));
+  const by = Object.fromEntries(requestRows([...reqs, ...prompts], {}).map((r) => [r.id, r]));
+  for (const [i, id] of ids.entries()) expect(by[id].answer).toContain(`task T-0${i + 1} not found`);
+  expect(needsYou(Object.values(by) as any)).toBe(3);
+});
+
+// The row names the piece lead() picked, but the outcome fallback was keyed on m.task_uuid — the FIRST piece of a
+// split (C.4.4). onCrash sets the status to error and emits the reason as a chat row, leaving last_summary null, so
+// the fallback is the live path for a failure: T-02's row printed T-01's success line as its failure reason, in red.
+test("a split's failed piece answers with its own outcome, not the first piece's", () => {
+  const m = msg({ text: "TUI 설계랑 라이프사이클 정리 같이", task_uuid: "u1", dispatch_json: { action: "split", task_ids: ["T-01", "T-02"], confidence: "high" } });
+  const ok = msg({ role: "worker_summary", dispatch_state: "direct", task_uuid: "u1", text: "✔ T-01 TUI 설계 — done" });
+  const bad = msg({ role: "error", dispatch_state: "direct", task_uuid: "u2", text: "✖ T-02 라이프사이클 — Session ended (other) — use Restart to --resume" });
+  const tasks = byId(task("u1", "T-01", "done", { last_summary: null }), task("u2", "T-02", "error", { last_summary: null }));
+  const r = one(m, tasks, [ok, bad]);
+  // both halves: the row must name the failing piece AND answer with that piece's outcome — they broke apart
+  expect(r).toMatchObject({ taskId: "T-02", state: "Error", st: "err", answerKind: "error" });
+  expect(r.answer).toBe("✖ T-02 라이프사이클 — Session ended (other) — use Restart to --resume");
+});

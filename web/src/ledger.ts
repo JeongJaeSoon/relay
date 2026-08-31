@@ -119,7 +119,10 @@ function answerOf(d: Disposition, m: Message, task: Task | null, reply: Message 
     return { answer: reply?.text ?? (dec ? `Routing needs confirmation — candidate: ${dec.action}${dec.task_id ? ` ${dec.task_id}` : ""}` : "Routing needs confirmation."), answerKind: "question" };
   }
   if (task?.status === "waiting_input" && task.question) return { answer: task.question.text, answerKind: "question" };
-  if (task && ENDED.has(task.status)) return { answer: task.last_summary ?? (m.task_uuid ? outcome.get(m.task_uuid) ?? null : null), answerKind: task.status === "error" ? "error" : "summary" };
+  // Keyed on the task the row names, not on m.task_uuid: for a split that holds only the first piece (C.4.4), while
+  // `task` is the piece lead() picked. onCrash leaves last_summary null and puts the reason in an error chat row, so
+  // this fallback is the live path for a failure — off the wrong key it printed a sibling's success line as one.
+  if (task && ENDED.has(task.status)) return { answer: task.last_summary ?? outcome.get(task.uuid) ?? null, answerKind: task.status === "error" ? "error" : "summary" };
   if (d === "answered") return { answer: m.dispatch_json?.answer ?? reply?.text ?? null, answerKind: "answer" };
   if (d === "fastpath") return { answer: reply?.text ?? null, answerKind: "answer" };
   return { answer: null, answerKind: null };
