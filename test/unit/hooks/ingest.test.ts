@@ -129,6 +129,42 @@ describe("ingestHook", () => {
     expect(s.crashes).toEqual(["SessionEnd(other) while running"]); expect(loadTask(s.db, "u1")!.process_state).toBe("crashed");
     expect(s.db.query("select process_generation g from events where type='process.ended' order by seq desc limit 1").get()).toEqual({ g: 2 });
   });
+  test("a stop of our own still exempts the generation it actually stopped", () => {
+    // The cost side of scoping the stop clause: if it were too tight, relay would report a crash for every stop it
+    // issued itself. A stop stamped with the generation that then ends is exactly what the exemption is for, and it
+    // is reached in ordinary use — see the interrupt-then-reply test in core/tasks.test.ts.
+    // This also guards the BIND ORDER: hoisting the `exists` moved the placeholders to task_uuid → generation →
+    // applied_at, and swapping the last two compares `e.process_generation` against a timestamp, so `ours` is never
+    // true and every stop of relay's own becomes a crash. That mutation fails here.
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    s.log.emit({ type: "command.queued", task_uuid: "u1", causation_id: "stop:1", payload: { id: "stop:1", kind: "stop", payload: { kind: "stop", reason: "kill switch" } } });
+    s.log.emit({ type: "command.running", task_uuid: "u1", causation_id: "stop:1", process_generation: 1, payload: { id: "stop:1" } });
+    s.log.emit({ type: "command.applied", task_uuid: "u1", causation_id: "stop:1", payload: { id: "stop:1" } });
+    s.post({ hook_event_name: "SessionEnd", reason: "other" });
+    expect(s.crashes).toEqual([]); expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
+  });
+  test("a fork that crashes after a recent stop of ours is still a crash", () => {
+    // pause() stops generation 1, resume-all forks generation 2, and 30s later that fork genuinely dies. The stop
+    // clause had no generation scope, so any stop applied in the last 60s exempted any generation's death: the task
+    // landed on process_state `stopped` with status still `running`, which nothing recovers from — watchdog and
+    // recovery scan `starting`/`alive`, the idle sweep wants `alive` or a finished status, and the scheduler's slot
+    // return only fires once the task is no longer `starting`/`running`. The permit was held until a manual close.
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { paused: true } } });
+    s.log.emit({ type: "command.queued", task_uuid: "u1", causation_id: "stop:pause", payload: { id: "stop:pause", kind: "stop", payload: { kind: "stop", reason: "kill switch" } } });
+    s.log.emit({ type: "command.running", task_uuid: "u1", causation_id: "stop:pause", process_generation: 1, payload: { id: "stop:pause" } });
+    s.log.emit({ type: "command.applied", task_uuid: "u1", causation_id: "stop:pause", payload: { id: "stop:pause" } });
+    s.post({ hook_event_name: "SessionEnd", reason: "other" });
+    expect(s.crashes).toEqual([]);                                                       // the paused generation ending is relay's own doing
+    // resume-all: the resume forks generation 2 and clears `paused`
+    s.log.emit({ type: "command.queued", task_uuid: "u1", causation_id: "resume:1", payload: { id: "resume:1", kind: "resume", payload: { kind: "resume", prompt: "go", marker: "0000aaaa" } } });
+    s.log.emit({ type: "command.running", task_uuid: "u1", causation_id: "resume:1", process_generation: 1, payload: { id: "resume:1" } });
+    s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { paused: false } } });
+    s.post({ hook_event_name: "SessionStart", source: "fork" }); expect(loadTask(s.db, "u1")!.process_generation).toBe(2);
+    s.log.emit({ type: "command.applied", task_uuid: "u1", causation_id: "resume:1", payload: { id: "resume:1" } });
+    s.post({ hook_event_name: "SessionEnd", reason: "other" });                          // generation 2 dies, still inside the stop's 60s window
+    expect(s.crashes).toEqual(["SessionEnd(other) while running"]); expect(loadTask(s.db, "u1")!.process_state).toBe("crashed");
+  });
   test("SessionEnd after a task is done is a plain stop, not a crash", () => {
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
     s.log.emit({ type: "task.status_changed", task_uuid: "u1", payload: { status: "done", patch: { status: "done" } } });

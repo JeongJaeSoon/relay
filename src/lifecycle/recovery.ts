@@ -14,11 +14,11 @@ import { ingestHook } from "../hooks/ingest.ts";
 import { drainInbox } from "../hooks/inbox.ts";
 import { setMeta } from "../db/db.ts";
 import { log as slog } from "../log.ts";
-export interface RecoveryReport { reconciled: number; crashed: string[]; adopted: string[]; requeued: string[]; orphans: string[]; commands: { requeued: string[]; unknown: string[] }; inboxDrained: number; leasesReleased: string[]; invariants: string[] }
+export interface RecoveryReport { reconciled: number; crashed: string[]; adopted: string[]; requeued: string[]; orphans: string[]; commands: { requeued: string[]; unknown: string[] }; inboxDrained: number; leasesReleased: string[]; redeciding: string[]; invariants: string[] }
 /** Ours = the roster row's cwd carries our owner stamp for this task (name/short id alone are not proof — roadmap B8/§6.3). */
 const ownedBy = (row: AgentRow, taskUuid: string, instanceId: string) => { const o = readOwner(row.cwd); return !!o && o.task_uuid === taskUuid && o.relay_instance_id === instanceId; };
 export async function recover(d: { db: Database; log: EventLog; runner: AgentRunner; permits: PermitPool; outbox: Outbox; dispatcher: Dispatcher; scheduler: Scheduler; tasks: TaskService; spool: { drain(): Promise<unknown> }; maxAgents: () => number; instanceId: () => string }): Promise<RecoveryReport> {
-  setMeta(d.db, "recovering", "1"); const report: RecoveryReport = { reconciled: 0, crashed: [], adopted: [], requeued: [], orphans: [], commands: { requeued: [], unknown: [] }, inboxDrained: 0, leasesReleased: [], invariants: [] };
+  setMeta(d.db, "recovering", "1"); const report: RecoveryReport = { reconciled: 0, crashed: [], adopted: [], requeued: [], orphans: [], commands: { requeued: [], unknown: [] }, inboxDrained: 0, leasesReleased: [], redeciding: [], invariants: [] };
   let rows: AgentRow[] | null = null;
   for (let i = 0; i < 3 && !rows; i++) { try { rows = await d.runner.list(true); } catch (e) { slog.warn("agents --json failed during recovery", { attempt: i + 1, e: String(e) }); await Bun.sleep(1000); } }
   if (!rows) { slog.error("recovery: agents --json unavailable — leaving tasks untouched, staying in recovering mode"); return report; }   // watchdog keeps retrying; hooks keep buffering (durably)
@@ -70,8 +70,23 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
   // ⑤ replay everything that arrived while we were down/reconciling (durable inbox + spool); new arrivals keep buffering until the flag drops
   report.inboxDrained = drainInbox(d.db, (body, headers) => { try { ingestHook(body, headers, d.tasks.ingestDeps, { replay: true }); } catch (e) { slog.warn("inbox drain failed", { e: String(e) }); } });
   await d.spool.drain();
+  // ⑥ decisions the crash interrupted. A `claude -p` is a child of the relay process, so nothing that was
+  // `deciding` when relay went down can ever finish or report — and while the row stays `deciding`, drainPending
+  // re-enqueues it only for process() to return (the state is not `pending`) and redispatch refuses it as in flight.
+  // The decision itself is safe to re-run: it has minted nothing yet — applyDecision stamps `dispatched` and creates
+  // the task in one transaction (A9). What stops this from starting a SECOND `claude -p` for a decision that is
+  // genuinely in flight is three things together, not the `dispatch_state !== "pending"` guard on its own:
+  //   1. writes are refused with 503 while `recovering=1` (gateway/routes.ts), so no new decision can begin here;
+  //   2. the dispatcher chain is global and serial, so two process() calls for one id can never overlap;
+  //   3. only then does that guard see `dispatched`/`deciding` and return.
+  // Drop any one of them and this reopens — (2) in particular, because `await this.rateLimit()` runs before `deciding`
+  // is stamped, so a parallel dispatcher would leave a window with neither the guard nor the stamp holding. Anyone
+  // parallelising the dispatcher has to re-close this first; it breaks silently.
+  for (const r of d.db.query("select id from messages where role='user' and dispatch_state='deciding'").all() as any[]) {
+    d.log.emit({ type: "dispatch.requeued", payload: { message_id: r.id, patch: { dispatch_state: "pending", dispatch_error: null } } }); report.redeciding.push(r.id);
+  }
   setMeta(d.db, "recovering", "0");
-  // ⑥ resume work
+  // ⑦ resume work
   await d.outbox.runAll(); d.dispatcher.drainPending(); void d.scheduler.pump();
   report.invariants = assertInvariants(d.db, d.maxAgents());
   for (const v of report.invariants) slog.warn("invariant violated after recovery", { v });

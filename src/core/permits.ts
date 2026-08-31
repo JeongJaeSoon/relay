@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { EventLog } from "./events.ts";
+import { HOLDS_SLOT } from "./state.ts";
 import { ulid } from "./ids.ts";
 
 interface Holder { holder_kind: "task" | "subagent"; holder_id: string; task_uuid: string; reason?: string }
@@ -28,9 +29,11 @@ export class PermitPool {
   /** B5 recovery order: dead sessions → leases whose task is not running. Returns released holder ids. */
   reconcile(aliveSessionIds: Set<string>): string[] {
     const out: string[] = [];
-    const rows = this.db.query("select l.holder_id, l.holder_kind, t.session_id, t.status, t.paused from permit_leases l join tasks t on t.uuid=l.task_uuid where l.released_at is null").all() as any[];
+    // `holds_slot` is I2 plus I6's exception: a task parked on a PERMISSION question is not "not running" — its worker
+    // is alive and waiting on relay's answer, so its slot is still occupied and reconcile must leave the lease alone.
+    const rows = this.db.query(`select l.holder_id, l.holder_kind, t.session_id, t.status, t.paused, ${HOLDS_SLOT("t")} as holds_slot from permit_leases l join tasks t on t.uuid=l.task_uuid where l.released_at is null`).all() as any[];
     for (const r of rows) if (r.session_id && !aliveSessionIds.has(r.session_id)) { this.release(r.holder_id, "session dead"); out.push(r.holder_id); }
-    for (const r of rows) if (!out.includes(r.holder_id) && r.holder_kind === "task" && !["starting", "running"].includes(r.status)) { this.release(r.holder_id, "task not running"); out.push(r.holder_id); }
+    for (const r of rows) if (!out.includes(r.holder_id) && r.holder_kind === "task" && !r.holds_slot) { this.release(r.holder_id, "task not running"); out.push(r.holder_id); }
     return out;
   }
 }

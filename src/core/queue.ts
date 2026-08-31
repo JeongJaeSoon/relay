@@ -3,6 +3,7 @@ import type { Task } from "@shared/types.ts";
 import { now } from "./clock.ts";
 import { EventLog, loadTask, rowToTask } from "./events.ts";
 import type { PermitPool } from "./permits.ts";
+import { holdsSlot } from "./state.ts";
 import { log as slog } from "../log.ts";
 
 export class Scheduler {
@@ -26,10 +27,13 @@ export class Scheduler {
           try { await this.onSlot(loadTask(this.db, t.uuid)!); }
           catch (e) { slog.error("onSlot failed — returning the slot", { task: t.uuid, e: String(e) }); this.permits.release(`task:${t.uuid}`, "onSlot failed"); this.enqueue(t.uuid, true); continue; }
           // The slot follows the task. onSlot can end it without ever starting a process — a spawn whose outcome relay
-          // could not read parks the task in `error` (outbox, B3) instead of requeueing it — and only `starting`/
-          // `running` are entitled to a lease (I2). Take the slot back rather than leak it to a task that will not run.
+          // could not read parks the task in `error` (outbox, B3) instead of requeueing it — so take the slot back
+          // rather than leak it to a task that will not run. The test is `holdsSlot`, which is I2 *and* I6's
+          // exception: onSlot drains the task's whole outbox queue and the resume path waits inside it for up to 20s,
+          // so a live worker's PermissionRequest lands here and flips the task to waiting_input. That worker is alive
+          // and carries on the moment relay answers — reading only `starting`/`running` gave its slot away.
           const after = loadTask(this.db, t.uuid);
-          if (!["starting", "running"].includes(after?.status ?? "")) this.permits.release(`task:${t.uuid}`, `not running after onSlot (${after?.status ?? "gone"})`);
+          if (!holdsSlot(after)) this.permits.release(`task:${t.uuid}`, `not running after onSlot (${after?.status ?? "gone"})`);
         }
       } while (this.again);
     } finally { this.pumping = false; }

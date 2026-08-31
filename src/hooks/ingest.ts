@@ -191,15 +191,27 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
       for (const l of d.db.query("select holder_id from permit_leases where task_uuid=? and holder_kind='subagent' and released_at is null").all(task.uuid) as any[]) d.permits.release(l.holder_id);   // provisional Agent leases die with the process
       const endGen = headerGen ?? gen;                                       // which generation ended: the projection is generation-scoped (I7)
       // Relay's own doing covers `resume` as well as `stop`: the outbox stops the live session before `--bg --resume`
-      // forks a new one (Phase 0 ④), so the SessionEnd that follows is expected, not a crash. But that command stays
-      // `running` until the fork is on the roster, and by then the FORK IS ALREADY ALIVE — so the exemption is scoped
-      // to the one generation the resume interrupted, the one stamped on its `command.running`. A newer generation's
-      // death is a real crash: swallowing it strands the task holding its slot, which nothing recovers from.
+      // forks a new one (Phase 0 ④), so the SessionEnd that follows is expected, not a crash. But a command of ours
+      // says something about ONE generation — the one it acted on, stamped on its `command.running` — and by the time
+      // it finishes a newer one is often already alive. So the whole exemption is scoped to the generation that ended:
+      // pause stops N, resume-all forks N+1, and N+1 dying 30s later is a real crash. Swallowing it leaves the task
+      // `running` over a `stopped` process, which nothing recovers from — not the watchdog or recovery (both scan
+      // `starting`/`alive`), not the idle sweep (stop wants `alive`, close wants a finished status), not the
+      // scheduler's slot return (the task is still `running`) — so it holds its permit until someone closes it by hand.
       // A reap names a long-dead session and says nothing about the live one, so it never exempts anything.
-      const ours = !!d.db.query(`select 1 from commands c where c.task_uuid=? and json_extract(c.payload_json,'$.target') is null and (
+      // The stop half is NOT dead weight — it fires on a path a user reaches by hand. `interrupt()` queues the stop
+      // and marks the task `cancelled`; a reply to that task promotes it back to `queued` (sendTo), the scheduler
+      // grants a slot, and it is `starting` and unpaused by the time the stop finally kills the session. Both leading
+      // conjuncts of `unexpected` are then true and only this exemption stands between the user and a crash report
+      // for a session relay stopped itself. `retry()` accepts `cancelled` too, so there is a second path of the shape.
+      // Scoping it costs nothing there because the generation matches: the stop is stamped with the one it acts on,
+      // and that is the one whose SessionEnd arrives. The case where they diverge — a resume forks N+1, then N's late
+      // SessionEnd turns up — never reaches this code at all; the stale gate above drops it on `headerGen < gen`.
+      const ours = !!d.db.query(`select 1 from commands c where c.task_uuid=? and json_extract(c.payload_json,'$.target') is null
+          and exists (select 1 from events e where e.causation_id=c.id and e.type='command.running' and e.process_generation=?) and (
           (c.kind='stop' and (c.state='running' or (c.state='applied' and c.applied_at>=?)))
-          or (c.kind='resume' and c.state='running' and exists (select 1 from events e where e.causation_id=c.id and e.type='command.running' and e.process_generation=?)))`)
-        .get(task.uuid, now() - 60_000, endGen);
+          or (c.kind='resume' and c.state='running'))`)
+        .get(task.uuid, endGen, now() - 60_000);
       const unexpected = ["starting", "running"].includes(task.status) && !task.paused && !ours;
       d.log.emit({ type: "process.ended", task_uuid: task.uuid, process_generation: endGen, payload: { generation: endGen, reason: body.reason ?? "other", crashed: unexpected } });
       if (unexpected) d.onCrash(loadTask(d.db, task.uuid)!, `SessionEnd(${body.reason ?? "other"}) while running`);

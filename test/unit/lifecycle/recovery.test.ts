@@ -20,6 +20,19 @@ describe("recover", () => {
     expect((s.db.query("select value from meta where key='recovering'").get() as any)?.value).toBe("0");
     expect(report.invariants).toEqual([]);
   });
+  test("a decision the crash interrupted is put back to `pending` and re-decided", async () => {
+    // The `claude -p` that was deciding died with relay: nothing can ever finish or report it. While the row stays
+    // `deciding`, drainPending re-enqueues it only for process() to return (the state is not `pending`) and
+    // redispatch refuses it as still in flight — the user is left with no task, no answer and no way forward.
+    const s = await buildTestApp();
+    s.log.emit({ type: "message.received", payload: { id: "m1", role: "user", source: "user", client_message_id: "m1", dispatch_state: "pending", text: "auth 리팩토링 해줘", task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: 1 } });
+    s.log.emit({ type: "dispatch.started", payload: { message_id: "m1", patch: { dispatch_state: "deciding" } } });
+    const report = await recover(args(s));
+    expect(report.redeciding).toEqual(["m1"]);
+    await s.settle(60);
+    expect((s.db.query("select dispatch_state from messages where id='m1'").get() as any).dispatch_state).toBe("dispatched");
+    expect(report.invariants).toEqual([]);
+  });
   test("when agents --json is unavailable nothing is touched and relay stays in recovering mode", async () => {
     const s = await buildTestApp(); const t = s.seedTask("running"); s.runner.list = async () => { throw new Error("daemon restarting"); };
     const report = await recover(args(s));

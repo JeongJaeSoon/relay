@@ -19,6 +19,19 @@ describe("PermitPool", () => {
     // reconcile: u1's session is dead → its lease is released first
     expect(pool.reconcile(new Set(["s2"]))).toEqual(["task:u1"]); expect(pool.active()).toBe(1);
   });
+  test("reconcile keeps a permission-waiting task's lease and releases a marker-waiting one (I6)", () => {
+    // The watchdog runs reconcile every tick, so this is where a permission question actually lost its slot in
+    // production: relay answers that question itself and the worker carries straight on, which is exactly the state
+    // I6 exempts. `starting`/`running` alone reads it as "task not running" and takes the slot off a live worker.
+    const db = openDb(":memory:"); migrate(db); const log = new EventLog(db, () => {}, parseConfig("")); db.run("insert into projects(id,name,path,created_at) values('p','p','/p',1)");
+    const pool = new PermitPool(db, log, () => 10);
+    mkTask(db, log, "u1", "s1"); mkTask(db, log, "u2", "s2"); mkTask(db, log, "u3", "s3");
+    for (const u of ["u1", "u2", "u3"]) pool.acquire({ holder_kind: "task", holder_id: `task:${u}`, task_uuid: u });
+    const wait = (u: string, source: string) => log.emit({ type: "task.status_changed", task_uuid: u, payload: { status: "waiting_input", patch: { status: "waiting_input", question: { text: "?", options: [], asked_at: 1, source } } } });
+    wait("u1", "permission"); wait("u2", "marker");
+    expect(pool.reconcile(new Set(["s1", "s2", "s3"]))).toEqual(["task:u2"]);
+    expect(pool.has("task:u1")).toBe(true); expect(pool.has("task:u3")).toBe(true);
+  });
   test("subagent per-task cap (conservative mode)", () => {
     const db = openDb(":memory:"); migrate(db); const log = new EventLog(db, () => {}, parseConfig("")); db.run("insert into projects(id,name,path,created_at) values('p','p','/p',1)"); mkTask(db, log, "u1");
     const pool = new PermitPool(db, log, () => 10, { subagentPerTask: 1 });
