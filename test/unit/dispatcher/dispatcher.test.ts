@@ -51,3 +51,15 @@ describe("Dispatcher", () => {
     expect(order).toEqual(["1번", "2번", "3번"]);
   });
 });
+
+// `--max-turns 1` cuts the model off before it emits the structured output whenever it thinks first: measured against
+// 2.1.251 on a real Ask prompt, 1 gave `terminal_reason:"max_turns"` and `structured_output: undefined`, 2 completed.
+// Routing shares the same call and was failing the same way whenever the model reasoned before answering.
+test("the model call leaves room for the structured output to be emitted after thinking", async () => {
+  const seen: string[][] = [];
+  const s = setup(async (args) => { seen.push(args); return ok({ action: "answer_directly", answer: "ok", confidence: "high" })(args, { cwd: "", timeoutMs: 0 }); });
+  const id = s.msg("인생의 의미는?"); s.d.enqueue(id); await settle();
+  const args = seen[0]; const i = args.indexOf("--max-turns");
+  expect(i).toBeGreaterThan(-1);
+  expect(Number(args[i + 1])).toBeGreaterThanOrEqual(2);
+});

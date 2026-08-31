@@ -1,0 +1,51 @@
+import { afterEach, expect, test } from "bun:test";
+import { ASK_PREFIX, isAsk, markAsk, stripAsk } from "@shared/ask.ts";
+import { sendMessage } from "../src/api.ts";
+import { badgeParts } from "../src/adapter.ts";
+import { requestRows } from "../src/ledger.ts";
+
+const realFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = realFetch; });
+const capture = () => {
+  const bodies: any[] = [];
+  globalThis.fetch = (async (_url: string, init: any) => { bodies.push(JSON.parse(init.body)); return new Response(JSON.stringify({ message_id: "m" }), { status: 202 }); }) as any;
+  return bodies;
+};
+
+test("the marker round-trips and is idempotent", () => {
+  expect(isAsk("? why")).toBe(true); expect(isAsk("?why")).toBe(true); expect(isAsk("why?")).toBe(false);
+  expect(stripAsk("?  why did T-02 fail")).toBe("why did T-02 fail");
+  expect(markAsk("why")).toBe(`${ASK_PREFIX}why`); expect(markAsk(markAsk("why"))).toBe(markAsk("why"));
+});
+
+test("the ? prefix and the Ask toggle send the same request", async () => {
+  const bodies = capture();
+  await sendMessage("? why did T-02 fail");                                      // typed prefix, toggle off
+  await sendMessage("why did T-02 fail", { ask: true });                         // toggle on
+  await sendMessage("why did T-02 fail");                                        // neither → an ordinary message
+  const shape = (b: any) => ({ text: b.text, ask: b.ask, ask_task_id: b.ask_task_id });
+  expect(shape(bodies[0])).toEqual({ text: "why did T-02 fail", ask: true, ask_task_id: undefined });
+  expect(shape(bodies[1])).toEqual(shape(bodies[0]));
+  expect(shape(bodies[2])).toEqual({ text: "why did T-02 fail", ask: undefined, ask_task_id: undefined });
+});
+
+test("the task panel's button scopes the question; a reply is never turned into one", async () => {
+  const bodies = capture();
+  await sendMessage("why is it stuck", { askTask: "uuid-2" });                   // "Ask about this task"
+  await sendMessage("? why is it stuck", { askTask: "uuid-2" });                 // same, with the prefix typed too
+  await sendMessage("a", { replyTo: "uuid-2", ask: true });                      // answering a worker's question stays a reply
+  expect(bodies[0]).toMatchObject({ text: "why is it stuck", ask: true, ask_task_id: "uuid-2" });
+  expect({ ...bodies[1], client_message_id: null }).toEqual({ ...bodies[0], client_message_id: null });
+  expect(bodies[2]).toMatchObject({ text: "a", reply_to_task_id: "uuid-2" });
+  expect(bodies[2].ask).toBeUndefined(); expect(bodies[2].ask_task_id).toBeUndefined();
+});
+
+test("a question is shown as its question text with an ask chip", () => {
+  const m = (text: string, st = "dispatched"): any => ({ id: "m1", role: "user", source: "user", client_message_id: "c", dispatch_state: st, text, task_uuid: null, reply_to_task_uuid: null, dispatch_json: { action: "answer_directly", answer: "a" }, dispatch_error: null, chain_prev_id: null, created_at: 1 });
+  const ctx = { projects: [], tasks: {} } as any;
+  expect(badgeParts(m(`${ASK_PREFIX}why did T-02 fail`), ctx).parts).toEqual(["ask", "answer_directly"]);
+  expect(badgeParts(m("refactor auth"), ctx).parts).toEqual(["answer_directly"]);
+  expect(badgeParts(m(`${ASK_PREFIX}상태?`, "fastpath"), ctx).parts).toEqual(["ask", "fast-path"]);
+  // The rail that showed this is now the request ledger; the prefix is a keyboard gesture and must not reach it.
+  expect(requestRows([m(`${ASK_PREFIX}why did T-02 fail`)], {})[0].text).toBe("why did T-02 fail");
+});

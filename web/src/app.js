@@ -119,7 +119,7 @@ function renderLedger(){
 function setLedgerFilter(f){ledgerFilter=f;renderLedger()}
 
 /* ================= server actions (window.relay, installed by web/src/adapter.ts) ================= */
-function send(text){text=text.trim();if(!text)return;relay.send(text)}                     /* the server echoes the message as chat.message — no optimistic row */
+function send(text){text=text.trim();if(!text)return;relay.send(text,askActive(),askTask&&askTask.uuid)}  /* the server echoes the message as chat.message — no optimistic row */
 function answerQuestion(t,choice){if(t.status!=="wait")return;relay.answer(t,choice)}
 function stopTask(t){relay.stop(t)}
 function restartTask(t){relay.restart(t)}
@@ -440,9 +440,11 @@ function renderDetail(){
     const btns=el("div","d-btns");
     const b1=el("button","act","Open in terminal");
     b1.addEventListener("click",()=>relay.attach(t));
+    const bAsk=el("button","act","Ask about this task");   /* relay tasks only — a session relay does not own has no transcript it was given */
+    bAsk.addEventListener("click",()=>askAbout(t));
     const b2=el("button","act","Copy worktree path");
     b2.addEventListener("click",()=>{const pth=t.worktree||"(no worktree)";navigator.clipboard&&navigator.clipboard.writeText(pth).catch(()=>{});chatNote("Copied to clipboard: "+pth)});
-    btns.append(b1,b2);body.append(btns);
+    btns.append(b1,bAsk,b2);body.append(btns);
     const acts=el("div","d-actions");
     if(t.status==="run"||t.status==="wait"){
       const b=el("button","act danger","Stop");
@@ -1022,12 +1024,29 @@ kedEl.addEventListener("click",e=>{if(e.target===kedEl)closeKeysEd()});
 
 /* ================= input ================= */
 const input=$("#input"),chatForm=$("#chatForm"),DRAFT="relay-draft";
+const askBtn=$("#askBtn");
+const PH={msg:"Type a message — Enter to send, Shift+Enter for a new line",ask:"Ask a question — answered here, never turned into a task"};
+let askTask=null;   /* the task an Ask is about — a question, never a message to the worker */
+/* The toggle and a typed `?` are the same declaration; the canonical marker lives in shared/ask.ts, the server decides. */
+const ASK_RE=/^\?+\s*/;
+let askOn=false;
+const askActive=()=>askOn||!!askTask||ASK_RE.test(input.value);
+function renderAsk(){
+  const a=askActive();
+  askBtn.setAttribute("aria-pressed",a?"true":"false");
+  input.placeholder=askTask?"Ask about "+askTask.id+" — read from its transcript, never sent to the worker":a?PH.ask:PH.msg;
+}
+function askAbout(t){askTask={uuid:t.uuid,id:t.id};askOn=true;renderAsk();input.focus()}
+askBtn.addEventListener("click",()=>{
+  if(askActive()){askOn=false;askTask=null;input.value=input.value.replace(ASK_RE,"");autogrow()}else askOn=true;
+  renderAsk();input.focus();
+});
 function autogrow(){input.style.height="auto";input.style.height=input.scrollHeight+(input.offsetHeight-input.clientHeight)+"px"} /* +border: box-sizing is border-box but scrollHeight is not. CSS max-height caps it, then it scrolls */
 chatForm.addEventListener("submit",e=>{
   e.preventDefault(); /* IME 조합 중 Enter 가드는 아래 keydown이 담당 */
-  send(input.value);input.value="";localStorage.removeItem(DRAFT);autogrow();
+  send(input.value);input.value="";askTask=null;localStorage.removeItem(DRAFT);autogrow();renderAsk();  /* the toggle is a mode and stays on; the task scope is per-question */
 });
-input.addEventListener("input",()=>{autogrow();localStorage.setItem(DRAFT,input.value)});
+input.addEventListener("input",()=>{autogrow();renderAsk();localStorage.setItem(DRAFT,input.value)});
 input.addEventListener("keydown",e=>{
   if(e.key!=="Enter")return;
   if(e.isComposing||e.keyCode===229)return; /* an Enter mid-composition commits the candidate: never send it, never swallow it either */
@@ -1042,4 +1061,4 @@ input.value=localStorage.getItem(DRAFT)||"";autogrow(); /* a long message surviv
 Object.assign(window,{S,N,LEDGER,msgs,gwEl});
 
 /* ================= boot ================= */
-layout();refresh();fit();renderNotif();renderSettings();renderBanner(); /* the empty screen anchors top-left the same way a populated one does */
+layout();refresh();fit();renderNotif();renderSettings();renderBanner();renderAsk(); /* the empty screen anchors top-left the same way a populated one does */

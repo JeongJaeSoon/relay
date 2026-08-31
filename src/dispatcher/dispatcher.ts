@@ -2,16 +2,19 @@ import type { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { DispatchDecision, Message } from "@shared/types.ts";
+import { isAsk, stripAsk } from "@shared/ask.ts";
 import { paths, type Config } from "../config.ts";
 import { now } from "../core/clock.ts";
 import { EventLog, loadMessage } from "../core/events.ts";
 import { ulid } from "../core/ids.ts";
 import { isStatusQuery, statusAnswer } from "../core/fastpath.ts";
 import { log as slog } from "../log.ts";
+import { buildAskContext } from "./ask-context.ts";
 import { buildContext } from "./context.ts";
-import { DecisionSchema, dispatchJsonSchema, lowConfidence } from "./schema.ts";
-import { dispatchSystemPrompt } from "./system-prompt.ts";
+import { AnswerSchema, ANSWER_JSON_SCHEMA, DecisionSchema, dispatchJsonSchema, lowConfidence } from "./schema.ts";
+import { ASK_SYSTEM_PROMPT, dispatchSystemPrompt } from "./system-prompt.ts";
 
+const ASK_JSON_SCHEMA = JSON.stringify(ANSWER_JSON_SCHEMA);   // fixed: Ask mode's schema never depends on config
 export type RunClaude = (args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
 /** Absolute `claude` path from config (04 Global Constraints): launchd's minimal PATH has no brew/npm bin dir. */
 export const bunRunClaude = (claudeBin = "claude"): RunClaude => async (args, { cwd, timeoutMs }) => {
@@ -43,13 +46,20 @@ export class Dispatcher {
     const msg = loadMessage(this.db, id); if (!msg || msg.dispatch_state !== "pending") return;
     if (this.opts.isPaused()) return;                                    // stays pending; resume-all calls drainPending()
     await this.rateLimit();
-    if (isStatusQuery(msg.text, msg.reply_to_task_uuid)) {
+    // Ask mode was declared at submission and marked on the text by the gateway; the marker is the dispatcher's only
+    // input from it, so it survives a restart (drainPending) and a replay. The fast path is tried first: declaring a
+    // status question must never make it more expensive than the same words without the marker.
+    const ask = isAsk(msg.text); const text = ask ? stripAsk(msg.text) : msg.text;
+    // A message scoped to one task is not a system status query, however it is worded — the fast path's answer is the
+    // whole system's. Same rule the reply path already has, same argument.
+    if (isStatusQuery(text, msg.reply_to_task_uuid ?? msg.task_uuid)) {
       this.patch(id, { dispatch_state: "fastpath" }, "dispatch.fastpath");
       this.log.emit({ type: "message.received", payload: { id: ulid(), role: "dispatcher_answer", source: "user", client_message_id: null, dispatch_state: "direct", text: statusAnswer(this.db, this.cfg), task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
       return;
     }
     this.patch(id, { dispatch_state: "deciding" }, "dispatch.started");
     const prev = this.db.query("select id from messages where role='user' and dispatch_state in ('dispatched','failed','needs_confirm','fastpath') and id<>? order by created_at desc limit 1").get(id) as any;
+    if (ask) return this.answerQuestion(id, text, msg.task_uuid, prev?.id ?? null);
     const ctx = buildContext(this.db);
     let last: { decision: DispatchDecision | null; error: string } = { decision: null, error: "" };
     for (const effort of [this.cfg.dispatcher.effort, this.cfg.dispatcher.retry_effort]) {
@@ -65,18 +75,54 @@ export class Dispatcher {
     // A9: the message's `dispatched` mark, the badge row, the task and its spawn command are committed together by TaskService.applyDecision (one transaction) — never here
     this.opts.onDecision(loadMessage(this.db, id)!, last.decision, { chain_prev_id: prev?.id ?? null });
   }
+  /** Ask mode: the only reachable outcome is an answer. Same retry shape as routing, and one context — empty for a
+   *  plain question, the target task's state and transcript tail for a task-scoped one. The worker is never touched:
+   *  this spawns its own one-shot `claude -p`, exactly as the dispatcher does, and sends nothing to the session. */
+  private async answerQuestion(id: string, question: string, taskUuid: string | null, prevId: string | null) {
+    // Two contexts, one path: the target task's state and transcript tail, or — for a plain question — the same
+    // projects/tasks/chat summary routing gets, minus the routing apparatus. A declared question needs less context
+    // than routing, not none: without it the model cannot answer "why did T-02 fail" at all.
+    const ctx = taskUuid ? buildAskContext(this.db, taskUuid) : buildContext(this.db, "ask");
+    let last: { answer: string | null; error: string } = { answer: null, error: "" };
+    for (const effort of [this.cfg.dispatcher.effort, this.cfg.dispatcher.retry_effort]) {
+      last = await this.answer(question, ctx, effort, last.error);
+      if (last.answer || last.error === "timeout") break;
+    }
+    if (!last.answer) { this.patch(id, { dispatch_state: "failed", dispatch_error: last.error, chain_prev_id: prevId }, "dispatch.failed"); this.badge(`dispatcher · failed · ${last.error}`); return; }
+    // The decision is built here, from the answer alone. The model never names an action in Ask mode, so a question
+    // cannot become new_task, route_to_task or close_task however it replies.
+    this.opts.onDecision(loadMessage(this.db, id)!, { action: "answer_directly", answer: last.answer, confidence: "high" }, { chain_prev_id: prevId });
+  }
   private async decide(text: string, ctx: string, effort: string, prevError: string) {
-    const cwd = join(paths.home, "dispatcher-cwd"); mkdirSync(cwd, { recursive: true });
     const prompt = `${ctx}\n${prevError ? `\n[previous attempt failed: ${prevError} — answer strictly via the structured output]\n` : ""}\n[user message]\n${text}`;
-    const args = ["-p", "--output-format", "json", "--json-schema", this.jsonSchema, "--max-turns", "1", "--tools", "", "--no-session-persistence",
-      "--model", this.cfg.dispatcher.model, "--effort", effort, "--append-system-prompt", this.systemPrompt, prompt];
+    const { out, error } = await this.call(prompt, this.systemPrompt, this.jsonSchema, effort);
+    if (error) return { decision: null, error };
+    const parsed = DecisionSchema.safeParse(out);
+    return parsed.success ? { decision: parsed.data, error: "" } : { decision: null, error: parsed.error.issues.map((i) => i.message).join("; ") };
+  }
+  private async answer(question: string, ctx: string, effort: string, prevError: string) {
+    const prompt = `${ctx ? `${ctx}\n\n` : ""}${prevError ? `[previous attempt failed: ${prevError} — answer strictly via the structured output]\n\n` : ""}[user message]\n${question}`;
+    const { out, error } = await this.call(prompt, ASK_SYSTEM_PROMPT, ASK_JSON_SCHEMA, effort);
+    if (error) return { answer: null, error };
+    const parsed = AnswerSchema.safeParse(out);
+    // The issues, not a fixed string: this feeds the retry prompt, and "no answer in the structured output" tells the
+    // model nothing it can act on — `decide()` has always passed the real ones through.
+    return parsed.success ? { answer: parsed.data.answer, error: "" } : { answer: null, error: `no answer in the structured output: ${parsed.error.issues.map((i) => i.message).join("; ")}` };
+  }
+  private async call(prompt: string, system: string, jsonSchema: string, effort: string): Promise<{ out: unknown; error: string }> {
+    const cwd = join(paths.home, "dispatcher-cwd"); mkdirSync(cwd, { recursive: true });
+    // 2, not 1: the structured output is delivered as a tool call, so a turn that thinks first is cut off before it
+    // emits one — `terminal_reason: "max_turns"`, `structured_output: undefined`. Measured against 2.1.251 on the
+    // real Ask prompt: 1 → max_turns and no output, 2 → completed with the answer, 3 → no different. Routing shares
+    // this call and has been getting away with it only when the model answered without thinking first.
+    const args = ["-p", "--output-format", "json", "--json-schema", jsonSchema, "--max-turns", "2", "--tools", "", "--no-session-persistence",
+      "--model", this.cfg.dispatcher.model, "--effort", effort, "--append-system-prompt", system, prompt];
     const t0 = now();
     const r = await this.run(args, { cwd, timeoutMs: this.cfg.dispatcher.timeout_ms });
-    if (now() - t0 >= this.cfg.dispatcher.timeout_ms || r.code === 130 || r.code === 143) return { decision: null, error: "timeout" };   // SIGINT → 130, SIGTERM → 143
-    let j: any; try { j = JSON.parse(r.stdout); } catch { return { decision: null, error: `unparseable stdout: ${r.stdout.slice(0, 120)}` }; }
+    if (now() - t0 >= this.cfg.dispatcher.timeout_ms || r.code === 130 || r.code === 143) return { out: null, error: "timeout" };   // SIGINT → 130, SIGTERM → 143
+    let j: any; try { j = JSON.parse(r.stdout); } catch { return { out: null, error: `unparseable stdout: ${r.stdout.slice(0, 120)}` }; }
     if (j.usage) this.log.emit({ type: "usage.sampled", payload: { source: "dispatcher", delta: (j.usage.input_tokens ?? 0) + (j.usage.output_tokens ?? 0) + (j.usage.cache_creation_input_tokens ?? 0) + (j.usage.cache_read_input_tokens ?? 0), cost: j.total_cost_usd ?? null } });
-    const parsed = DecisionSchema.safeParse(j.structured_output);
-    return parsed.success ? { decision: parsed.data, error: "" } : { decision: null, error: parsed.error.issues.map((i) => i.message).join("; ") };
+    return { out: j.structured_output, error: "" };
   }
   private async rateLimit() {
     const win = 60_000, n = this.cfg.dispatcher.rate_per_min;

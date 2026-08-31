@@ -1,5 +1,6 @@
 // web/src/adapter.ts — the only place that knows both worlds: server Task/Message/SystemState (store) and the demo engine's S/N/LEDGER/chat globals (app.js).
 import type { EventEnvelope, ForeignSession, Message, Project, Task } from "@shared/types.ts";
+import { isAsk, stripAsk } from "@shared/ask.ts";
 import * as api from "./api.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
 import { requestRows } from "./ledger.ts";
@@ -34,7 +35,13 @@ export function toDemoForeign(f: ForeignSession): DemoForeign {
     kind: f.kind === "bg" ? "background" : f.kind ?? "", pid: f.pid, startedAt: f.started_at ? new Date(f.started_at) : null, firstSeen: new Date(f.first_seen), lastSeen: new Date(f.last_seen) };
 }
 const demoOf = (uuid: string | null | undefined): DemoTask | undefined => { if (!uuid) return undefined; const t = store.state.tasks[uuid]; return t ? D.S?.tasks?.get(t.display_id) ?? undefined : undefined; };
+/** The question text as the user typed it: the Ask marker is the wire's business, not the reader's. */
+const plain = (text: string) => (isAsk(text) ? stripAsk(text) : text);
 export function badgeParts(m: Message, ctx: Ctx): { kind: string; parts: string[]; task?: DemoTask; retry?: boolean; judging: boolean } {
+  const b = stateBadges(m, ctx);
+  return isAsk(m.text) ? { ...b, parts: ["ask", ...b.parts] } : b;               // Ask mode stays visible on the row it produced
+}
+function stateBadges(m: Message, ctx: Ctx): { kind: string; parts: string[]; task?: DemoTask; retry?: boolean; judging: boolean } {
   const st = m.task_uuid ? ctx.tasks[m.task_uuid] : null; const task: DemoTask | undefined = st ? ((D.S?.tasks?.get(st.display_id) as DemoTask | undefined) ?? { ...toDemoTask(st, ctx), events: [], timers: [], x: 0, y: 0 }) : undefined; const d = m.dispatch_json;
   switch (m.dispatch_state) {
     case "pending": return { kind: "gateway", parts: ["⏳ Accepted"], judging: false };
@@ -86,7 +93,7 @@ export function installAdapter() {
   const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0; let loadedDetail: string | null = null;
   const ctx = (): Ctx => ({ projects: store.state.projects, tasks: store.state.tasks });
   const relay = {
-    send: (text: string) => run("send", api.sendMessage(text)),
+    send: (text: string, ask = false, askTask?: string) => run("send", api.sendMessage(text, { ask, askTask })),
     answer: (t: DemoTask, choice: string) => run("answer", api.answer(t.uuid, choice)),
     stop: (t: DemoTask) => run("stop", api.interrupt(t.uuid)), restart: (t: DemoTask) => run("restart", api.retry(t.uuid)), archive: (t: DemoTask) => run("archive", api.close(t.uuid)),
     attach: async (t: DemoTask) => { try { const { command } = await api.attachLease(t.uuid); await navigator.clipboard?.writeText(command).catch(() => {}); note(`Copied to clipboard: ${command} (run it in a terminal — relay attach releases the lease when it ends)`); } catch (e) { note(`attach failed: ${(e as Error).message}`); } },
@@ -135,7 +142,7 @@ export function installAdapter() {
       if (isDispatcherBadgeRow(m)) { drawn.add(id); continue; }                   // the badge chips under the user message already say this
       if (drawn.has(id)) { const old = badgeRows.get(id); if (old && m.role === "user") { const fresh = badgeRow(m); old.replaceWith(fresh); badgeRows.set(id, fresh); } continue; }
       drawn.add(id); const task = demoOf(m.task_uuid);
-      if (m.role === "user") { D.chatUser(m.text); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
+      if (m.role === "user") { D.chatUser(plain(m.text)); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
       else if (m.role === "question" && task) D.chatQuestion(task);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
       else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(task ?? null, m.text); }
       else D.chatMsg(task ?? null, m.text);                                    // worker_summary | error | dispatcher_answer
