@@ -27,5 +27,8 @@ export class IdleReaper {
     for (const r of this.db.query("select uuid from tasks where parent_uuid is null and status in ('done','cancelled','error') and updated_at<? and not exists (select 1 from commands c where c.task_uuid=tasks.uuid and c.kind='rm' and json_extract(c.payload_json,'$.target') is null)").all(closeBefore) as any[]) {
       this.log.emit({ type: "idle.deadline", task_uuid: r.uuid, payload: { action: "close", patch: {} } }); this.tasks.close(r.uuid);
     }
+    // A disposal held on a locked worktree waits for a run() that a closing task gets from nowhere else. This timer is
+    // that trigger: the lock is the session exiting, so the next tick is always late enough.
+    for (const r of this.db.query("select distinct task_uuid uuid from commands where kind='rm' and state='pending' and json_extract(payload_json,'$.target') is null").all() as any[]) this.outbox.kick(r.uuid);
   }
 }

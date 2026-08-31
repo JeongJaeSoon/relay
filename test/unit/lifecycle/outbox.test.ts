@@ -202,6 +202,31 @@ describe("Outbox", () => {
     expect(s.runner.rows.has("gen1")).toBe(true);
     expect(s.states()).toEqual(["failed"]);                                                            // refused, visible, retryable — never silently "applied"
   });
+  test("a task's own rm that ends unknown parks the task in error — `closed` is projected from that result, so it must not vanish", async () => {
+    const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+    s.runner.rm = async () => { throw new Error("claude: command not found"); };
+    s.ob.enqueue("u1", "rm1", { kind: "rm" }); await s.ob.run("u1");
+    expect(s.states()).toEqual(["unknown"]);
+    expect(loadTask(s.db, "u1")!.status).toBe("error");                                                // not left at `done` with a session still registered
+    expect(loadTask(s.db, "u1")!.last_summary).toContain("may still be registered");
+  });
+  test("a relay restart mid-rm parks the task the same way — that path never reaches the catch", async () => {
+    const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+    s.ob.enqueue("u1", "rm1", { kind: "rm" }); s.db.run("update commands set state='running'");
+    s.ob.enqueue("u1", "reap", { kind: "rm", target: { session_id: "sid-old", short_id: null } }); s.db.run("update commands set state='running' where id like 'rm:%'");
+    expect(s.ob.reconcileRunning().unknown.length).toBeGreaterThan(0);
+    expect(loadTask(s.db, "u1")!.status).toBe("error");
+  });
+  test("a worktree locked because the session is still exiting holds the rm instead of recording a refusal", async () => {
+    const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+    s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", keptPath: "/p/wt", retryable: true };
+    s.ob.enqueue("u1", "rm1", { kind: "rm" }); await s.ob.run("u1");
+    expect(s.states()).toEqual(["pending"]);                                                           // still queued, not refused
+    expect(loadTask(s.db, "u1")!.status).toBe("done");                                                 // nothing for a person to do, so nothing is said
+    expect(s.db.query("select count(*) c from events where type='worktree.kept'").get()).toEqual({ c: 0 });
+    s.runner.keepWorktree = null; await s.ob.run("u1");                                                // the session finished exiting; the reaper's kick re-runs it
+    expect(s.states()).toEqual(["applied"]); expect(loadTask(s.db, "u1")!.status).toBe("closed");
+  });
   test("cancelPending fails the listed kinds so a closed task never keeps a pending spawn/send", async () => {
     const s = setup(); s.mk("u1", "queued", { queued_at: 1 });
     s.ob.enqueue("u1", "sp", { kind: "spawn", spec: spec("u1") }); s.ob.enqueue("u1", "se", { kind: "send", text: "x", marker: "00000009" });

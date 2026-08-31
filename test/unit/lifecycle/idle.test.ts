@@ -53,3 +53,16 @@ test("a close the CLI refused is not re-attempted on every tick, and the task st
   } finally { setNow(null); }
 });
 
+test("the reaper re-runs a disposal that was held on a locked worktree — a closing task gets a run() from nowhere else", async () => {
+  const s = await buildTestApp(); const t0 = Date.now(); setNow(() => t0);
+  const done = s.seedTask("done", { updated_at: t0, process_state: "stopped" });
+  s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", retryable: true };
+  const reaper = new IdleReaper(s.db, s.log, s.ctx.cfg, s.outbox, s.svc);
+  try {
+    s.svc.close(done); await s.settle();
+    expect(s.db.query("select state from commands where kind='rm'").get()).toEqual({ state: "pending" });
+    expect(loadTask(s.db, done)!.status).toBe("done"); expect(s.runner.rows.has("fake01")).toBe(true);
+    s.runner.keepWorktree = null; reaper.tick(); await s.settle();     // the session finished exiting
+    expect(loadTask(s.db, done)!.status).toBe("closed"); expect(s.runner.rows.has("fake01")).toBe(false);
+  } finally { setNow(null); }
+});

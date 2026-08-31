@@ -4,8 +4,9 @@ export interface SpawnSpec { taskUuid: string; displayId: string; name: string; 
 export interface AgentRow { short_id: string | null; session_id: string | null; name: string | null; cwd: string | null; pid: number | null; alive: boolean; busy: boolean | null; waiting_for: string | null; raw: unknown }
 /** What `claude rm` did. `reason` and `keptPath` are the CLI's OWN words and path — there are several distinct
  *  refusals and relay must not guess which one fired: "uncommitted changes" sends a user looking for a dirty file that
- *  a "not pushed anywhere" refusal does not have. */
-export interface RmOutcome { worktreeKept: boolean; reason?: string; keptPath?: string }
+ *  a "not pushed anywhere" refusal does not have. `retryable` separates the one refusal that resolves without anybody
+ *  doing anything (the worktree is locked because the session is still exiting) from the two that need a person. */
+export interface RmOutcome { worktreeKept: boolean; reason?: string; keptPath?: string; retryable?: boolean }
 export interface AgentRunner {
   spawn(spec: SpawnSpec): Promise<{ short_id: string; name: string }>;
   resume(p: { sessionId: string; cwd: string; name: string; settingsJson: string; prompt: string; env: Record<string, string> }): Promise<{ short_id: string }>;

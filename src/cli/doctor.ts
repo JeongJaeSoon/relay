@@ -9,10 +9,11 @@ import { driftWarns, loadCapabilities, showVersion, versionDrift, versionOk, typ
 import { has, relayBin } from "./client.ts";
 export interface Check { name: string; ok: boolean; detail: string; fix?: string }
 export const checkPerms = (p: string, mode: number): Check => { if (!existsSync(p)) return { name: p, ok: false, detail: "missing" }; const m = statSync(p).mode & 0o777; return { name: p, ok: m === mode, detail: m.toString(8), fix: m === mode ? undefined : `chmod ${mode.toString(8)} ${p}` }; };
-/** Tasks whose disposal `claude rm` refused and nothing has since removed: the worktree still holds work that exists
- *  nowhere else — uncommitted, or committed and never pushed. Relay records the refusal and stops there, so this is the
- *  only place these can be counted. */
-export const keptSessions = (db: Database) => db.query("select t.display_id, t.worktree_path from tasks t where exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state='failed' and json_extract(c.payload_json,'$.target') is null) and not exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state='applied' and json_extract(c.payload_json,'$.target') is null)").all() as { display_id: string; worktree_path: string | null }[];
+/** Tasks whose disposal did not finish and nothing has since removed: `claude rm` refused because the worktree holds
+ *  work that exists nowhere else (uncommitted, or committed and never pushed), or the rm ended `unknown` and relay
+ *  cannot tell. Relay records both honestly and stops there, so this is the only place they can be counted. A
+ *  transient lock is not here on purpose — that rm is still pending and clears itself. */
+export const keptSessions = (db: Database) => db.query("select t.display_id, t.worktree_path from tasks t where exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state in ('failed','unknown') and json_extract(c.payload_json,'$.target') is null) and not exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state='applied' and json_extract(c.payload_json,'$.target') is null)").all() as { display_id: string; worktree_path: string | null }[];
 export const parseDaemonStatus = (t: string) => ({ pid: Number(t.match(/pid:\s*(\d+)/)?.[1] ?? 0), version: t.match(/version:\s*(\S+)/)?.[1] ?? "" });
 export const summarize = (r: Check[]) => r.map((c) => `${c.ok ? "✔" : "✖"} ${c.name}${c.detail ? " — " + c.detail : ""}${!c.ok && c.fix ? `\n    → ${c.fix}` : ""}`).join("\n");
 const probeEnv = (): Record<string, string> => Object.fromEntries(Object.entries(process.env).filter(([k, v]) => k !== "ANTHROPIC_API_KEY" && v != null)) as Record<string, string>;

@@ -15,7 +15,11 @@ export const parseBg = (stdout: string) => { const m = stdout.match(/backgrounde
 export function parseRm(out: string) {
   const kept = /kept|uncommitted|preserv/i.test(out);
   if (!kept) return { worktreeKept: false };
-  return { worktreeKept: true, reason: out.match(/^\s*kept\s+\S+\s+[—–-]\s*(.+?)\s*$/m)?.[1], keptPath: out.match(/^\s*worktree kept at\s+(.+?)\s*$/m)?.[1] };
+  const reason = out.match(/^\s*kept\s+\S+\s+[—–-]\s*(.+?)\s*$/m)?.[1];
+  // A lock is the session still exiting, and it clears on its own — nothing for a person to do, so it must not be
+  // recorded the way the other two are. `close` enqueues its rm straight after a stop, so this is the LIKELY refusal,
+  // not a rare one.
+  return { worktreeKept: true, reason, keptPath: out.match(/^\s*worktree kept at\s+(.+?)\s*$/m)?.[1], retryable: /locked/i.test(reason ?? out) };
 }
 const DEAD_STATES = ["stopped", "done", "failed"];
 /** Accepts both the documented vocabulary (state working|blocked|done|failed|stopped, status working|waiting) and the

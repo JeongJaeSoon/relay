@@ -101,11 +101,21 @@ export class Outbox {
   /** Startup (B3 crash points): a command left `running` by a crash. spawn → pending (apply() adopts an already-running session by owner file); others → unknown (user confirms/retries; a marker echo still promotes send/resume). */
   reconcileRunning(): { requeued: string[]; unknown: string[] } {
     const out = { requeued: [] as string[], unknown: [] as string[] };
-    for (const r of this.db.query("select id, task_uuid, kind from commands where state='running' order by rowid").all() as any[]) {
+    for (const r of this.db.query("select id, task_uuid, kind, payload_json from commands where state='running' order by rowid").all() as any[]) {
       if (r.kind === "spawn") { this.log.emit({ type: "command.requeued", task_uuid: r.task_uuid, payload: { id: r.id } }); out.requeued.push(r.id); }
-      else { this.log.emit({ type: "command.unknown", task_uuid: r.task_uuid, causation_id: r.id, payload: { id: r.id, error: "relay restarted during execution" } }); out.unknown.push(r.id); }
+      else {
+        this.log.emit({ type: "command.unknown", task_uuid: r.task_uuid, causation_id: r.id, payload: { id: r.id, error: "relay restarted during execution" } }); out.unknown.push(r.id);
+        if (r.kind === "rm" && !(JSON.parse(r.payload_json) as CommandPayload & { target?: ReapTarget }).target) this.parkStrandedClose(r.task_uuid, r.id, "relay restarted during execution");
+      }
     }
     return out;
+  }
+  /** A close whose rm ended `unknown`: relay does not know whether the session is still registered, and `closed` is
+   *  the one thing it must not claim. `error` is the same place a refusal lands — the task stays in the list, says
+   *  why, and `relay doctor` counts it with the refusals. */
+  private parkStrandedClose(taskUuid: string, commandId: string, error: string) {
+    const t = loadTask(this.db, taskUuid); if (!t || ["closed", "error"].includes(t.status)) return;
+    this.log.emit({ type: "task.status_changed", task_uuid: taskUuid, causation_id: commandId, payload: { status: "error", patch: { status: "error", ended_at: t.ended_at ?? now(), last_summary: `close did not finish — the session may still be registered: ${error}` } } });
   }
   /** Promotion, source 1 and 2: the marker echoed in a UserPromptSubmit hook (idle delivery) or in a reply frame the
    *  worker sent back over the inbox socket (mid-turn delivery). */
@@ -159,6 +169,11 @@ export class Outbox {
         // look like it were still coming up. Park it in `error`: visible, and the scheduler takes the slot back.
         if (cmd.kind === "spawn" && loadTask(this.db, taskUuid)?.process_state === "none")
           this.log.emit({ type: "task.status_changed", task_uuid: taskUuid, causation_id: cmd.id, payload: { status: "error", patch: { status: "error", ended_at: now(), last_summary: `spawn failed, outcome unknown — ${String(e).slice(0, 200)}` } } });
+        // A task's own rm is the other command whose failure can strand a task, and for the same reason in reverse:
+        // `closed` is projected from its RESULT, so an rm that ends `unknown` leaves the task in whatever status it
+        // had while the sweep guard is satisfied by the row and the session stays registered. Park it where a
+        // refusal parks it — visible, named, and counted by `relay doctor`.
+        if (cmd.kind === "rm" && !(cmd.payload as CommandPayload & { target?: ReapTarget }).target) this.parkStrandedClose(taskUuid, cmd.id, String(e).slice(0, 200));
         slog.warn("command failed", { id: cmd.id, e: String(e) }); return "error";
       }
     }
@@ -211,6 +226,7 @@ export class Outbox {
         // as applied is relay believing a cleanup that did not happen — the third root of the leak. `failed` keeps it
         // visible and retryable; `unknown` would be dishonest (the refusal is known, not ambiguous) and would wedge
         // every reap queued behind it, since an unknown head blocks the task's queue (I8).
+        if (r.worktreeKept && r.retryable) throw new HeldError(`worktree still locked — ${r.reason}`);
         if (r.worktreeKept) {
           const why = keptReason(r, t.worktree_path);
           this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: shortId, worktree_path: r.keptPath ?? t.worktree_path, reason: `kept the superseded session — ${why}` } });
@@ -314,6 +330,11 @@ export class Outbox {
         // close/cleanup silently leaks sessions and worktrees". `failed` is the honest state and, unlike `unknown`,
         // does not wedge the queue behind it (I8); the user retries once the worktree is clean.
         this.patch(t, { process_state: "stopped" }, cmd);
+        // The lock is the session still exiting and it clears by itself — and since `close` enqueues its rm right
+        // after a stop, it is the LIKELY refusal, not a rare one. Held keeps the command pending for the next run()
+        // (the idle reaper kicks it every minute); recording it like the other two would park the task in `error`
+        // with advice — "push or discard the branch" — for a condition nobody has to do anything about.
+        if (r.worktreeKept && r.retryable) throw new HeldError(`worktree still locked — ${r.reason}`);
         if (r.worktreeKept) {
           const error = `claude rm kept the session — ${keptReason(r, t.worktree_path)}`;
           this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: r.keptPath ?? t.worktree_path, reason: `kept the worktree — ${keptReason(r, t.worktree_path)}` } });

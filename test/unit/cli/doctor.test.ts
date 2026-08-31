@@ -81,7 +81,9 @@ test("keptSessions lists the tasks whose `claude rm` was refused, and drops them
   task("u1", "T-01", 1); rm("u1", "rm1", "failed", null);                    // refused: the worktree still holds work
   task("u2", "T-02", 2); rm("u2", "rm2", "failed", null); rm("u2", "rm3", "applied", null);   // the user pushed and closed it again
   task("u3", "T-03", 3); rm("u3", "rm4", "failed", "sid-old");              // a reap of a superseded session, not a task's own disposal
-  expect(keptSessions(db).map((k) => k.display_id)).toEqual(["T-01"]);
+  task("u4", "T-04", 4); rm("u4", "rm5", "unknown", null);                 // relay restarted mid-rm: it cannot tell whether the session is gone
+  task("u5", "T-05", 5); rm("u5", "rm6", "pending", null);                 // held on a lock that clears itself — not waiting on a person
+  expect(keptSessions(db).map((k) => k.display_id)).toEqual(["T-01", "T-04"]);
   expect(keptSessions(db)[0].worktree_path).toBe("/p/.claude/worktrees/T-01");
   db.close();
 });

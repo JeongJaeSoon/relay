@@ -26,10 +26,11 @@ test("spawnArgs matches the canonical command and never passes --advisor (CLI 2.
 // someone their tree is dirty when it is clean and merely unpushed sends them looking for a file that is not there.
 test("parseRm keeps the three refusals apart and carries the path the user has to look at", () => {
   const unpushed = "kept 07fe3848 — worktree has commits that are not pushed anywhere\n  worktree kept at /p/.claude/worktrees/relay-abc\n  resolve that (commit/push, or remove the worktree), then run 'claude rm 07fe3848' again\n";
-  expect(parseRm(unpushed)).toEqual({ worktreeKept: true, reason: "worktree has commits that are not pushed anywhere", keptPath: "/p/.claude/worktrees/relay-abc" });
+  expect(parseRm(unpushed)).toEqual({ worktreeKept: true, reason: "worktree has commits that are not pushed anywhere", keptPath: "/p/.claude/worktrees/relay-abc", retryable: false });
   const dirty = "kept 99816309 — worktree has uncommitted changes\n  worktree kept at /p/.claude/worktrees/relay-def\n";
-  expect(parseRm(dirty).reason).toBe("worktree has uncommitted changes");
+  expect(parseRm(dirty)).toMatchObject({ reason: "worktree has uncommitted changes", retryable: false });
   const locked = "kept 99816309 — worktree is locked — in use by another live session, or locked by hand\n  worktree kept at /p/wt\n";
-  expect(parseRm(locked).reason).toBe("worktree is locked — in use by another live session, or locked by hand");
+  // the only refusal that clears on its own: the session is still exiting. Nothing for a person to do.
+  expect(parseRm(locked)).toMatchObject({ reason: "worktree is locked — in use by another live session, or locked by hand", retryable: true });
   expect(parseRm("removed 6063a069\n")).toEqual({ worktreeKept: false });
 });

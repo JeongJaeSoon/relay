@@ -13,7 +13,7 @@ export class FakeRunner implements AgentRunner {
   async stop(shortId: string) { this.calls.push({ kind: "stop", args: shortId }); const r = this.rows.get(shortId); if (r) { r.alive = false; r.pid = null; r.busy = null; } }
   /** Set to make `rm` refuse the way the CLI does — the session stays in `rows`, exactly as its row stays in
    *  `agents --json --all`. Without this the refusal path, which is the COMMON one in a real install, is untestable. */
-  keepWorktree: { reason: string; keptPath?: string } | null = null;
+  keepWorktree: { reason: string; keptPath?: string; retryable?: boolean } | null = null;
   async rm(shortId: string) {
     this.calls.push({ kind: "rm", args: shortId });
     if (this.keepWorktree) return { worktreeKept: true, ...this.keepWorktree };
