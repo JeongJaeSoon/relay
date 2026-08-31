@@ -5,6 +5,8 @@ import { loadConfig, paths } from "../config.ts";
 import type { Database } from "bun:sqlite";
 import { openDb } from "../db/db.ts";
 import { NativeSessionRunner } from "../runner/native.ts";
+import type { AgentRow } from "../runner/runner.ts";
+import { FOREIGN_GRACE_MS, foreignRows, ownership } from "../lifecycle/foreign.ts";
 import { driftWarns, loadCapabilities, showVersion, versionDrift, versionOk, type DriftLevel } from "../runner/capabilities.ts";
 import { has, relayBin } from "./client.ts";
 export interface Check { name: string; ok: boolean; detail: string; fix?: string }
@@ -14,6 +16,19 @@ export const checkPerms = (p: string, mode: number): Check => { if (!existsSync(
  *  cannot tell. Relay records both honestly and stops there, so this is the only place they can be counted. A
  *  transient lock is not here on purpose — that rm is still pending and clears itself. */
 export const keptSessions = (db: Database) => db.query("select t.display_id, t.worktree_path from tasks t where exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state in ('failed','unknown') and json_extract(c.payload_json,'$.target') is null) and not exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state='applied' and json_extract(c.payload_json,'$.target') is null)").all() as { display_id: string; worktree_path: string | null }[];
+/** Roster rows no task accounts for. `close()` cannot reach these and `keptSessions` cannot see them: a task whose
+ *  spawn never recorded a short id keeps `process_state='none'`, so close queues no stop and its rm is a no-op
+ *  (`t.short_id ? runner.rm(...) : { worktreeKept: false }`) — the task closes cleanly with nothing in `commands` to
+ *  find the session by. Ownership is `foreign.ts`'s, not a second notion of it: a name is never identity (B8), and
+ *  `process_instances` carries the session ids a fork left behind. The grace window is the same one the foreign list
+ *  waits out — a roster row exists before the outbox has recorded its short id — applied here to `startedAt`, since a
+ *  one-shot check has no `first_seen` history; a row with no `startedAt` is reported rather than hidden.
+ *  Inherited hole: for a NON-git project every task shares the launch cwd, so one `.relay-owner` there makes
+ *  `stamped()` true for any row in it. A false negative, and narrow — the scheduler keeps a non-git project to one
+ *  task at a time. */
+export function unaccountedSessions(db: Database, rows: AgentRow[], t = Date.now(), graceMs = FOREIGN_GRACE_MS): AgentRow[] {
+  return foreignRows(rows, ownership(db)).filter((r) => t - Number((r.raw as { startedAt?: number })?.startedAt ?? 0) >= graceMs);
+}
 export const parseDaemonStatus = (t: string) => ({ pid: Number(t.match(/pid:\s*(\d+)/)?.[1] ?? 0), version: t.match(/version:\s*(\S+)/)?.[1] ?? "" });
 export const summarize = (r: Check[]) => r.map((c) => `${c.ok ? "✔" : "✖"} ${c.name}${c.detail ? " — " + c.detail : ""}${!c.ok && c.fix ? `\n    → ${c.fix}` : ""}`).join("\n");
 const probeEnv = (): Record<string, string> => Object.fromEntries(Object.entries(process.env).filter(([k, v]) => k !== "ANTHROPIC_API_KEY" && v != null)) as Record<string, string>;
@@ -54,10 +69,15 @@ export async function runChecks(opts: { service?: boolean; probe?: boolean } = {
     // tree with no worktree and a guard boundary the size of the directory.
     const legacy = db.query("select name, path from projects where is_git = 0").all() as { name: string; path: string }[];
     const kept = keptSessions(db);
+    let roster: AgentRow[] | null = null;
+    try { roster = await new NativeSessionRunner(probeEnv, { claudeBin: cfg.claude_bin }).list(true); } catch (e) { r.push({ name: "background session roster", ok: false, detail: String(e).slice(0, 80), fix: `${cfg.claude_bin} agents --json --all` }); }
+    const unaccounted = roster ? unaccountedSessions(db, roster) : [];
     db.close();
     r.push({ name: "DB integrity", ok: ic === "ok", detail: String(ic), fix: "relay db restore <backup>" });
     r.push({ name: "sessions relay could not deregister", ok: kept.length === 0, detail: kept.length ? kept.map((k) => `${k.display_id} ${k.worktree_path ?? "?"}`).join(", ") : "none",
       fix: kept.length ? `claude rm keeps a session whose worktree holds work that exists nowhere else. Push or discard the branch in each worktree above, then close the task again (or set worker.allow_push = true so workers push before they finish)` : undefined });
+    if (roster) r.push({ name: "background sessions relay cannot account for", ok: unaccounted.length === 0, detail: unaccounted.length ? unaccounted.map((x) => `${x.short_id ?? "?"} ${x.name ?? ""}`.trim()).join(", ") : "none",
+      fix: unaccounted.length ? `these are alive and no task owns them — either a session started outside relay, or one whose spawn relay never recorded. Check them (claude logs <id>), then stop them from the dashboard's external-sessions list or with claude stop <id>` : undefined });
     if (legacy.length) r.push({ name: "project roots are git repositories", ok: false, detail: legacy.map((p) => `${p.name} (${p.path})`).join(", "),
       fix: `these were registered before the rule and get no worktree isolation — remove and re-add them: ${legacy.map((p) => `relay open → settings → remove "${p.name}"`).join("; ")}` });
   }

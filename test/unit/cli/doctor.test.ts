@@ -87,3 +87,23 @@ test("keptSessions lists the tasks whose `claude rm` was refused, and drops them
   expect(keptSessions(db)[0].worktree_path).toBe("/p/.claude/worktrees/T-01");
   db.close();
 });
+
+test("unaccountedSessions finds the orphan close cannot reach, and leaves owned and nascent rows alone", async () => {
+  const { unaccountedSessions } = await import("../../../src/cli/doctor.ts");
+  const { openDb, migrate } = await import("../../../src/db/db.ts");
+  const db = openDb(":memory:"); migrate(db);
+  db.run("insert into projects(id,name,path,is_git,created_at) values('p','p','/p',1,1)");
+  db.run("insert into tasks(uuid,num,display_id,project_id,title,status,size,effort,model,session_id,short_id,process_state,process_generation,turn_state,attach_state,paused,qhead,usage_tokens,created_at,updated_at) values('u1',1,'T-01','p','t','running','normal','xhigh','m','sid-mine','mine','alive',1,'busy','none',0,0,0,1,1)");
+  const row = (short: string, session: string, startedAt: number): any => ({ short_id: short, session_id: session, name: "n", cwd: "/p", pid: 1, alive: true, busy: false, waiting_for: null, raw: { startedAt } });
+  const t = 1_000_000;
+  const rows = [
+    row("mine", "sid-mine", t - 60_000),        // a task owns it
+    row("orph", "sid-orph", t - 60_000),        // spawn never recorded a short id: no stop, no rm, no commands row — invisible to keptSessions
+    row("new", "sid-new", t - 5_000),           // still inside the grace window the foreign list waits out
+  ];
+  expect(unaccountedSessions(db, rows, t).map((x) => x.short_id)).toEqual(["orph"]);
+  // a fork's earlier session ids live only in process_instances, and those are still sessions relay started
+  db.run("insert into process_instances(task_uuid,generation,session_id,short_id,started_at) values('u1',0,'sid-orph','orph',1)");
+  expect(unaccountedSessions(db, rows, t)).toEqual([]);
+  db.close();
+});
