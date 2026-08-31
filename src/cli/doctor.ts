@@ -75,7 +75,7 @@ export async function runChecks(opts: { service?: boolean; probe?: boolean } = {
     db.close();
     r.push({ name: "DB integrity", ok: ic === "ok", detail: String(ic), fix: "relay db restore <backup>" });
     r.push({ name: "sessions relay could not deregister", ok: kept.length === 0, detail: kept.length ? kept.map((k) => `${k.display_id} ${k.worktree_path ?? "?"}`).join(", ") : "none",
-      fix: kept.length ? `claude rm keeps a session whose worktree holds work that exists nowhere else. Push or discard the branch in each worktree above, then close the task again (or set worker.allow_push = true so workers push before they finish)` : undefined });
+      fix: kept.length ? `claude rm keeps a session whose worktree still holds work that exists nowhere else, or is locked. The task's last message says which. Resolve it (push or discard the branch; unlock or stop whatever holds the lock), then close the task again — or set worker.allow_push = true so workers push before they finish` : undefined });
     if (roster) r.push({ name: "background sessions relay cannot account for", ok: unaccounted.length === 0, detail: unaccounted.length ? unaccounted.map((x) => `${x.short_id ?? "?"} ${x.name ?? ""}`.trim()).join(", ") : "none",
       fix: unaccounted.length ? `these are alive and no task owns them — either a session started outside relay, or one whose spawn relay never recorded. Check them (claude logs <id>), then stop them from the dashboard's external-sessions list or with claude stop <id>` : undefined });
     if (legacy.length) r.push({ name: "project roots are git repositories", ok: false, detail: legacy.map((p) => `${p.name} (${p.path})`).join(", "),

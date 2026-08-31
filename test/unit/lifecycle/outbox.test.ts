@@ -3,7 +3,8 @@ import { openDb, migrate } from "../../../src/db/db.ts";
 import { EventLog, loadTask } from "../../../src/core/events.ts";
 import { parseConfig } from "../../../src/config.ts";
 import { FakeRunner } from "../../../src/runner/fake.ts";
-import { Outbox, readOwner } from "../../../src/lifecycle/outbox.ts";
+import { LOCK_HOLD_MS, Outbox, readOwner } from "../../../src/lifecycle/outbox.ts";
+import { setNow } from "../../../src/core/clock.ts";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
 
 const cfg = parseConfig("");
@@ -226,6 +227,41 @@ describe("Outbox", () => {
     expect(s.db.query("select count(*) c from events where type='worktree.kept'").get()).toEqual({ c: 0 });
     s.runner.keepWorktree = null; await s.ob.run("u1");                                                // the session finished exiting; the reaper's kick re-runs it
     expect(s.states()).toEqual(["applied"]); expect(loadTask(s.db, "u1")!.status).toBe("closed");
+  });
+  test("a reap held on a locked worktree is never recorded as applied — reapOne's own catch must not swallow the hold", async () => {
+    const s = setup(); s.mk("u1", "running", { process_generation: 0, worktree_path: "/p/wt" });
+    for (const [g, short] of [[1, "gen1"], [2, "gen2"]] as [number, string][]) {
+      s.runner.rows.set(short, { short_id: short, session_id: `sid-${short}`, name: "relay:T-01 t", cwd: "/p", pid: g, alive: true, busy: false, waiting_for: null, raw: {} });
+      s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: g, payload: { generation: g, session_id: `sid-${short}` } });
+      s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { short_id: short } } });
+    }
+    s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { process_state: "stopped" } } });
+    s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", retryable: true };
+    s.ob.reapRms(loadTask(s.db, "u1")!); await s.ob.run("u1");
+    expect(s.states()).toEqual(["pending"]);                                                           // NOT applied: nothing was deregistered
+    expect(s.runner.rows.has("gen1")).toBe(true);
+  });
+  test("a lock that never clears becomes an ordinary refusal instead of a command pending for ever", async () => {
+    const t0 = Date.now(); setNow(() => t0);
+    try {
+      const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped", worktree_path: "/p/wt" });
+      s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", keptPath: "/p/wt", retryable: true };
+      s.ob.enqueue("u1", "rm1", { kind: "rm" }); await s.ob.run("u1");
+      expect(s.states()).toEqual(["pending"]);                                                         // inside the window: still assumed to be the session exiting
+      setNow(() => t0 + LOCK_HOLD_MS + 1); await s.ob.run("u1");
+      // `in use by another live session, or locked by hand` names the cases that never clear, so the hold is bounded
+      expect(s.states()).toEqual(["failed"]);
+      expect(loadTask(s.db, "u1")!.status).toBe("error");
+      expect(s.db.query("select count(*) c from events where type='worktree.kept'").get()).toEqual({ c: 1 });
+    } finally { setNow(null); }
+  });
+  test("a refused rm never resurrects an already-closed task, and an applied one never restarts its retention clock", async () => {
+    const s = setup(); s.mk("u1", "closed", { session_id: "sid", short_id: "fake1", process_state: "stopped", closed_at: 500, ended_at: 400 });
+    s.runner.keepWorktree = { reason: "worktree has commits that are not pushed anywhere", keptPath: "/p/wt" };
+    s.ob.enqueue("u1", "rec1", { kind: "rm" }); await s.ob.run("u1");                                  // what recovery queues for a closed task still on the roster
+    expect(loadTask(s.db, "u1")!.status).toBe("closed");                                               // first boot after upgrading must not resurrect every leaked session
+    s.runner.keepWorktree = null; s.ob.enqueue("u1", "rec2", { kind: "rm" }); await s.ob.run("u1");
+    expect(loadTask(s.db, "u1")!.closed_at).toBe(500);                                                 // the 90-day clock keeps running from the original close
   });
   test("cancelPending fails the listed kinds so a closed task never keeps a pending spawn/send", async () => {
     const s = setup(); s.mk("u1", "queued", { queued_at: 1 });

@@ -66,3 +66,23 @@ test("the reaper re-runs a disposal that was held on a locked worktree — a clo
     expect(loadTask(s.db, done)!.status).toBe("closed"); expect(s.runner.rows.has("fake01")).toBe(false);
   } finally { setNow(null); }
 });
+
+test("the reaper's re-run reaches a held REAP rm too — retryable was added at both rm sites", async () => {
+  const s = await buildTestApp(); const t0 = Date.now(); setNow(() => t0);
+  const t = s.seedTask("done", { updated_at: t0, process_state: "stopped" });
+  // `--bg --resume` forks: the older session id survives only in process_instances, which is what a reap works from
+  s.log.emit({ type: "process.started", task_uuid: t, process_generation: 2, payload: { generation: 2, session_id: "sid-old", short_id: "old1" } });
+  s.log.emit({ type: "process.started", task_uuid: t, process_generation: 3, payload: { generation: 3, session_id: "sid1", short_id: "fake01" } });
+  s.log.emit({ type: "task.patched", task_uuid: t, payload: { patch: { process_state: "stopped" } } });
+  s.runner.rows.set("old1", { short_id: "old1", session_id: "sid-old", name: "n", cwd: "/tmp/myapp", pid: 9, alive: true, busy: false, waiting_for: null, raw: {} });
+  s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", retryable: true };
+  const reaper = new IdleReaper(s.db, s.log, s.ctx.cfg, s.outbox, s.svc);
+  try {
+    s.outbox.reapRms(loadTask(s.db, t)!); await s.settle();
+    expect(s.db.query("select state from commands where kind='rm'").get()).toEqual({ state: "pending" });
+    expect(s.runner.rows.has("old1")).toBe(true);
+    s.runner.keepWorktree = null; reaper.tick(); await s.settle();
+    expect(s.db.query("select state from commands where kind='rm'").get()).toEqual({ state: "applied" });
+    expect(s.runner.rows.has("old1")).toBe(false);
+  } finally { setNow(null); }
+});

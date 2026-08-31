@@ -28,7 +28,9 @@ export class IdleReaper {
       this.log.emit({ type: "idle.deadline", task_uuid: r.uuid, payload: { action: "close", patch: {} } }); this.tasks.close(r.uuid);
     }
     // A disposal held on a locked worktree waits for a run() that a closing task gets from nowhere else. This timer is
-    // that trigger: the lock is the session exiting, so the next tick is always late enough.
-    for (const r of this.db.query("select distinct task_uuid uuid from commands where kind='rm' and state='pending' and json_extract(payload_json,'$.target') is null").all() as any[]) this.outbox.kick(r.uuid);
+    // that trigger. A REAP rm is held the same way, so this must not filter on `target` — retryable was added at both
+    // rm sites and the retry has to reach both. The hold itself is bounded (`LOCK_HOLD_MS`); a lock that never clears
+    // becomes an ordinary refusal rather than a command pending for ever.
+    for (const r of this.db.query("select distinct task_uuid uuid from commands where kind='rm' and state='pending'").all() as any[]) this.outbox.kick(r.uuid);
   }
 }

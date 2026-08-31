@@ -30,6 +30,11 @@ export interface OutboxDeps { delivery: () => DeliveryMethod; isPaused: () => bo
 /** The CLI's own words for why it kept the session, plus the path to look at — the path is the actionable half, since
  *  the user's next move is to look at the commits in it. `reason` is only ever missing if the wording changes. */
 const keptReason = (r: RmOutcome, fallbackPath: string | null) => `${r.reason ?? "its worktree still holds work"}${r.keptPath ?? fallbackPath ? ` (${r.keptPath ?? fallbackPath})` : ""}`;
+/** How long a disposal may be held waiting for a locked worktree before the lock is treated as permanent. The lock is
+ *  normally the session exiting (measured: clear within ~25s on CLI 2.1.251), but the CLI's own message names the cases
+ *  that never clear — `in use by another live session, or locked by hand`. Past this the refusal is recorded like the
+ *  other two, so "it clears itself" is something the code enforces rather than assumes. */
+export const LOCK_HOLD_MS = 15 * 60_000;
 /** Thrown by apply() when the command must stay pending and the task queue must stop for now (inbox held, turn busy). */
 class HeldError extends Error {}
 const rowToCommand = (r: any): Command => ({ ...r, payload: JSON.parse(r.payload_json) });
@@ -226,14 +231,19 @@ export class Outbox {
         // as applied is relay believing a cleanup that did not happen — the third root of the leak. `failed` keeps it
         // visible and retryable; `unknown` would be dishonest (the refusal is known, not ambiguous) and would wedge
         // every reap queued behind it, since an unknown head blocks the task's queue (I8).
-        if (r.worktreeKept && r.retryable) throw new HeldError(`worktree still locked — ${r.reason}`);
+        if (r.worktreeKept && r.retryable && now() - cmd.created_at < LOCK_HOLD_MS) throw new HeldError(`worktree still locked — ${r.reason}`);
         if (r.worktreeKept) {
           const why = keptReason(r, t.worktree_path);
           this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: shortId, worktree_path: r.keptPath ?? t.worktree_path, reason: `kept the superseded session — ${why}` } });
           this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: `claude rm kept the superseded session — ${why}` } }); return;
         }
       }
-    } catch (e) { slog.warn(`reap ${kind} failed — leaving the session in place`, { task: t.uuid, short_id: shortId, e: String(e) }); }
+    } catch (e) {
+      // A hold is not a failure and must reach loop(): swallowed here it fell through to `applied` below, which is
+      // relay believing a cleanup that did not happen — the exact thing the comment above guards against.
+      if (e instanceof HeldError) throw e;
+      slog.warn(`reap ${kind} failed — leaving the session in place`, { task: t.uuid, short_id: shortId, e: String(e) });
+    }
     this.applied(cmd, t, { reaped: shortId }); return;
   }
   private async waitGone(shortId: string, ms = 10_000) { const t0 = now(); while (now() - t0 < ms) { const r = (await this.runner.list()).find((x) => x.short_id === shortId); if (!r || !r.alive) return true; await Bun.sleep(300); } return false; }
@@ -334,7 +344,7 @@ export class Outbox {
         // after a stop, it is the LIKELY refusal, not a rare one. Held keeps the command pending for the next run()
         // (the idle reaper kicks it every minute); recording it like the other two would park the task in `error`
         // with advice — "push or discard the branch" — for a condition nobody has to do anything about.
-        if (r.worktreeKept && r.retryable) throw new HeldError(`worktree still locked — ${r.reason}`);
+        if (r.worktreeKept && r.retryable && now() - cmd.created_at < LOCK_HOLD_MS) throw new HeldError(`worktree still locked — ${r.reason}`);
         if (r.worktreeKept) {
           const error = `claude rm kept the session — ${keptReason(r, t.worktree_path)}`;
           this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: t.short_id, worktree_path: r.keptPath ?? t.worktree_path, reason: `kept the worktree — ${keptReason(r, t.worktree_path)}` } });
@@ -342,12 +352,15 @@ export class Outbox {
           // A close that could not deregister anything must not read as `closed`, or the leak becomes invisible: a
           // closed task is filtered out of every list the user looks at. `error` is where a task that needs a person
           // goes, and `last_summary` says which worktree to resolve.
-          this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "error", patch: { status: "error", ended_at: t.ended_at ?? now(), last_summary: error } } });
+          // Not for a task that is already `closed`: `recovery.ts` queues an rm for every closed task whose session is
+          // still on the roster, so on the first boot after upgrading this would resurrect every session v0.1.2 leaked
+          // as an `error` task. The leak is visible in `relay doctor` either way, which is the surface chosen for it.
+          if (t.status !== "closed") this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "error", patch: { status: "error", ended_at: t.ended_at ?? now(), last_summary: error } } });
           return;
         }
         this.applied(cmd, t, { worktreeKept: false });
         // After `applied`, so the task is never `closed` while its own rm is still running (I5).
-        this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "closed", patch: { status: "closed", closed_at: now(), ended_at: t.ended_at ?? now(), question: null, qhead: false } } });
+        this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "closed", patch: { status: "closed", closed_at: t.closed_at ?? now(), ended_at: t.ended_at ?? now(), question: null, qhead: false } } });
         return;
       }
     }
