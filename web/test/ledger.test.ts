@@ -318,10 +318,10 @@ test("a pre-0.1.1 snapshot: every request keeps its own reason, in either langua
   const ko = (id: string, at: number) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text: "라우팅 확인 필요 (confidence=low, 후보: new_task). 어느 작업인가요? T-02 relay / T-03 myapp" });
   const en = (id: string, at: number) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text: "Routing needs confirmation (T-02 is in the error state — restart it first). Which task? T-02 relay" });
   const by = Object.fromEntries(requestRows([
-    msg({ id: "R1", created_at: 1000, text: "myapp refactor auth", dispatch_state: "needs_confirm", dispatch_json: NT }), ko("K1", 1100),
-    msg({ id: "R2", created_at: 2000, text: "myapp task with a question", dispatch_state: "needs_confirm", dispatch_json: NT }), ko("K2", 2100),
-    msg({ id: "R3", created_at: 3000, text: "아 그리고 프롬프트가 입력될때", dispatch_state: "needs_confirm" }),
-    msg({ id: "R4", created_at: 4000, text: "어디에 던지면 좋을지 모르겠을때", dispatch_state: "needs_confirm" }),
+    msg({ id: "R1", created_at: 1000, text: "request 1", dispatch_state: "needs_confirm", dispatch_json: NT }), ko("K1", 1100),
+    msg({ id: "R2", created_at: 2000, text: "request 2", dispatch_state: "needs_confirm", dispatch_json: NT }), ko("K2", 2100),
+    msg({ id: "R3", created_at: 3000, text: "request 3", dispatch_state: "needs_confirm" }),
+    msg({ id: "R4", created_at: 4000, text: "request 4", dispatch_state: "needs_confirm" }),
     en("E1", 5000), en("E2", 6000),
   ], {}).map((r) => [r.id, r.answer]));
   expect(by.R1).toContain("라우팅 확인 필요");        // its own, unreadable to the old matcher

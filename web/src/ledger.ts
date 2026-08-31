@@ -167,12 +167,20 @@ function claimReplies(ordered: Message[], tasks: Record<string, Task>): Map<stri
   // cannot hold a reply belonging to a request after it. Nothing here depends on why it went unmatched — an
   // unreadable prompt, a lost write, a disposition this file does not classify.
   //
+  // Pairing from the newest end rather than the oldest is the whole of that, so do not "simplify" it back. The two
+  // ends are not symmetric: a deficit is reachable through HISTORY, which is already written and cannot be undone,
+  // while a surplus is reachable only through FUTURE code, which is under the team's control. The direction that
+  // degrades is the one the team can still fix.
+  //
   // ASSUMED, and worth stating because nothing here checks it: every prompt row has an owner among these requests.
   // The producers are enumerable — needsConfirm() is the only one (tasks.ts:139), reached from applyDecision, from
   // splitGuard, and from sendTo for a reply to an errored task, which pass 1 removes first. A row that is counted as
   // a prompt but belongs to none of them is a surplus, and a surplus newer than the requests' own replies would be
   // taken by the newest request. So a NEW kind of system row with no task_uuid and no leading marker must either
-  // carry a marker or be excluded in replyKindOf — otherwise it will be read as somebody's reason.
+  // carry a marker or be excluded in replyKindOf — otherwise it will be read as somebody's reason. The thinnest link
+  // today is chatFor("started")'s `▶ [project] … started (T-0x)`: `▶` is not in MARKED, so that row is held out by
+  // carrying a task_uuid and by nothing else. Pre-0.1.1 databases confirm the rest — they hold `dispatcher · …`
+  // badges in English from the era when the prompts were Korean, so the markers really do outlive a rewording.
   const at = new Map(ordered.map((m, i) => [m.id, i]));
   for (const kind of ["answer", "prompt"] as ReplyKind[]) {
     const reqs = ordered.filter((m) => m.role === "user" && !offChain(m) && awaitedBy(dispositionOf(m)) === kind);
