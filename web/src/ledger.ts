@@ -100,16 +100,17 @@ const offChain = (m: Message) => m.reply_to_task_uuid !== null;
  * up to the next request" hands request B the answer to A. That is the default with two requests in flight, not a
  * rare race. A reply row carries no task_uuid and no causation id, so nothing on it links it back.
  *
- * What does hold is the order — but only for the replies the chain produces, so there are two passes:
+ * What does hold is the order — but for one exception, which is worth stating flatly because it is not derivable
+ * from this file: EVERY claimable reply is emitted on the dispatcher chain, in the order the requests were made,
+ * EXCEPT the reply-to-errored-task path, which is matched by adjacency instead. Hence two passes:
  *
- *  1. The one confirmation that never touches the chain: an answer aimed at a task in the error state. routes.ts
- *     records the message and TaskService.answer() runs through to needsConfirm() synchronously in the same HTTP
- *     handler, so this prompt is written while chain requests are still inside `claude -p` — ahead of prompts for
- *     requests made long before it. In the shared queue it would take the oldest waiting request's prompt and shift
- *     every later claim, which is worse than the positional bug it replaces: instead of one row degrading to its own
- *     candidate, every row confidently shows someone else's reason. So it is matched on adjacency and kept out of
- *     the queue. Adjacency is sound here and nowhere else — needsConfirm() emits the prompt in the same tick as the
- *     message, with no other message row between them.
+ *  1. That exception. routes.ts records the message and TaskService.answer() runs through to needsConfirm()
+ *     synchronously in the same HTTP handler, so its prompt is written while chain requests are still inside
+ *     `claude -p` — ahead of prompts for requests made long before it. In the shared queue it would take the oldest
+ *     waiting request's prompt and shift every later claim, which is worse than the positional bug it replaces:
+ *     instead of one row degrading to its own candidate, every row confidently shows someone else's reason. So it is
+ *     matched on adjacency and kept out of the queue. Adjacency is sound here and nowhere else — needsConfirm()
+ *     emits the prompt in the same tick as the message, with no other message row between them.
  *  2. Everything the chain produced, claimed in order: the k-th reply of a kind goes to the k-th request still
  *     awaiting that kind. A reply nothing is waiting for is dropped.
  *
