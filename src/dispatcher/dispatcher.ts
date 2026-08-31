@@ -105,11 +105,17 @@ export class Dispatcher {
     const { out, error } = await this.call(prompt, ASK_SYSTEM_PROMPT, ASK_JSON_SCHEMA, effort);
     if (error) return { answer: null, error };
     const parsed = AnswerSchema.safeParse(out);
-    return parsed.success ? { answer: parsed.data.answer, error: "" } : { answer: null, error: "no answer in the structured output" };
+    // The issues, not a fixed string: this feeds the retry prompt, and "no answer in the structured output" tells the
+    // model nothing it can act on — `decide()` has always passed the real ones through.
+    return parsed.success ? { answer: parsed.data.answer, error: "" } : { answer: null, error: `no answer in the structured output: ${parsed.error.issues.map((i) => i.message).join("; ")}` };
   }
   private async call(prompt: string, system: string, jsonSchema: string, effort: string): Promise<{ out: unknown; error: string }> {
     const cwd = join(paths.home, "dispatcher-cwd"); mkdirSync(cwd, { recursive: true });
-    const args = ["-p", "--output-format", "json", "--json-schema", jsonSchema, "--max-turns", "1", "--tools", "", "--no-session-persistence",
+    // 2, not 1: the structured output is delivered as a tool call, so a turn that thinks first is cut off before it
+    // emits one — `terminal_reason: "max_turns"`, `structured_output: undefined`. Measured against 2.1.251 on the
+    // real Ask prompt: 1 → max_turns and no output, 2 → completed with the answer, 3 → no different. Routing shares
+    // this call and has been getting away with it only when the model answered without thinking first.
+    const args = ["-p", "--output-format", "json", "--json-schema", jsonSchema, "--max-turns", "2", "--tools", "", "--no-session-persistence",
       "--model", this.cfg.dispatcher.model, "--effort", effort, "--append-system-prompt", system, prompt];
     const t0 = now();
     const r = await this.run(args, { cwd, timeoutMs: this.cfg.dispatcher.timeout_ms });

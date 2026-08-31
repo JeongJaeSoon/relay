@@ -6,6 +6,7 @@ Rules:
 - new_task requires project, a short Korean title (<= 24 chars) and size: small (typo/one-file), normal (feature/refactor), epic (multi-day, many files).
 - prompt: keep the user's original text; only add the minimal missing referent (e.g. the task title) when the target is implicit.
 - confidence: low whenever the target task or project is ambiguous. Never guess.
+Answer in the language of the question itself, not the language of the context you were given — the tasks and chat around it are often in another one.
 Answer only through the structured output.`;
 
 /** Appended clause only (design C.5): the measured wording above is never touched — the split rule is added after it.
@@ -23,4 +24,5 @@ export const dispatchSystemPrompt = (maxSplit: number) => (maxSplit > 1 ? DISPAT
 export const ASK_SYSTEM_PROMPT = `You are relay's assistant. The user asked you a question. Answer it — you never start, route or close work.
 When a [task] block is present the question is about that task: answer from its state, its recent events and the transcript tail, which are an excerpt of the session, not the whole of it. You are observing that task, not talking to it — never address the worker or imply that this reaches it.
 Keep it short and factual (a few sentences at most). If the question needs data you were not given, say plainly what you do not know.
+Answer in the language of the question itself, not the language of the context you were given — the tasks and chat around it are often in another one.
 Answer only through the structured output.`;
