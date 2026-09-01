@@ -55,14 +55,15 @@ echo "report → $REPORT"
 section "1. relay doctor"
 relay doctor --json >"$RAW/doctor-before.json" 2>"$RAW/doctor-before.err"
 if [ -s "$RAW/doctor-before.json" ]; then
-  BAD="$(j 'print("; ".join(c["name"]+": "+c["detail"] for c in d if not c["ok"]))' <"$RAW/doctor-before.json")"
+  # drift has its own gate below — counting it here too would report one condition as two failures
+  BAD="$(j 'print("; ".join(c["name"]+": "+c["detail"] for c in d if not c["ok"] and c["name"] != "CLI version drift"))' <"$RAW/doctor-before.json")"
   gate "doctor" "$([ -z "$BAD" ] && echo 1 || echo 0)" "${BAD:-all checks ok}"
 else gate "doctor" 0 "no JSON output ($(head -c 200 "$RAW/doctor-before.err"))"; fi
 STATE="$(api "$API/usage")" || { gate "service reachable" 0 "GET /api/usage failed on :$PORT — brew services start relay"; echo "aborting"; exit 1; }
 echo "$STATE" >"$RAW/state-before.json"
 DRIFT="$(printf '%s' "$STATE" | j 'print(d.get("cli_drift") or "")')"
 gate "service reachable" 1 "port $PORT · version $(printf '%s' "$STATE" | j 'print(d.get("version"))') · delivery $(printf '%s' "$STATE" | j 'print(d.get("delivery_method"))')"
-gate "cli drift" "$([ -z "$DRIFT" ] && echo 1 || echo 0)" "${DRIFT:+capabilities measured on $DRIFT — see issue #42; }${DRIFT:-capabilities match the installed CLI}"
+gate "cli drift" "$([ -z "$DRIFT" ] && echo 1 || echo 0)" "${DRIFT:+capabilities measured on $DRIFT — relay doctor --probe re-checks the --bg --resume gate; the rest is issue #42}${DRIFT:-capabilities match the installed CLI}"
 PAUSED="$(printf '%s' "$STATE" | j 'print(1 if d.get("paused") else 0)')"; [ "$PAUSED" = 1 ] && gate "kill switch" 0 "relay is paused — nothing will run; relay resume-all"
 
 # ── 2. baseline: what relay owns on the claude roster right now ────────────────────────────────────────────────────────
