@@ -106,6 +106,11 @@ bun run compile 0.1.0      # dist/relay-<ver>-darwin-{arm64,x64}/relay + tarball
 The compiled binary is ~59 MB (arm64) / ~64 MB (x64); the tarballs are ~21 MB / ~24 MB. The
 dashboard HTML and `agents/*.md` are embedded via `with { type: "file" }` — there is no copy step.
 
+To check an installed binary end to end on a Mac — service up, one real task in a registered project, close,
+and what `claude agents --json` still holds afterwards — run `scripts/smoke-installed.sh <project>`; it writes a
+report under `~/.config/relay/smoke/`. `--commit` makes the worker leave an unpushed commit, the shape `claude rm`
+refuses, to check that close reports it instead of claiming `closed`.
+
 For hooks to point at your working tree instead of an installed binary, symlink the dev shim and
 set `RELAY_BIN`:
 
