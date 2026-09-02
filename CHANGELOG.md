@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.1.4
+
+A dashboard regression that #24 fixed and then unfixed in its own second commit, and a script that
+checks an *installed* relay the way the repository's tests cannot.
+
+### Dashboard
+
+- **The #24 guard is back, and this time the test reaches the branch.** #24 narrowed the promoted
+  question row to `task?.question`; its second commit put `&& task` back while keeping the comment
+  that explains why it must not be, so every release since 0.1.1 carried the regression: reloading
+  the dashboard with an answered question among the last 200 messages threw inside `syncMessages`
+  and aborted that frame's `sync()` — blank canvas, no graph, no sidebar. The #24 test could not
+  catch it because it asserted on `toDemoTask`, not on the branch. The branch is now
+  `promotedQuestionTask()`, exported, and the test calls it with a waiting task, an answered task, a
+  missing task and a non-question row; restoring the old guard by hand makes it fail.
+
+### An installed-binary smoke test
+
+`scripts/smoke-installed.sh <project>` drives the brew binary and the launchd service through one
+real task and writes a report under `~/.config/relay/smoke/`: `relay doctor`, CLI drift, one
+`relay send` into a registered project, the worker reaching a terminal state, hooks arriving,
+`close`, and what `claude agents --json --all` still holds afterwards.
+
+- `--commit` makes the worker leave an unpushed local commit — the shape `claude rm` refuses — and
+  then expects `close` to end in `error` with the worktree kept, checks the directory really is on
+  disk, and expects `relay doctor` to list it. The report ends with the reset + rm-retry steps that
+  free the worktree.
+- Drift is read from doctor's live check. The service computes `state.cli_drift` once at boot, so
+  after a CLI update the dashboard reports the old pair until a restart; the report says so.
+
+The first runs, on a Mac against Claude Code 2.1.257, went the way 0.1.3 claims: a read-only task
+spawned, ran with socket delivery, closed and left nothing on the roster; a task with an unpushed
+commit was refused by `claude rm` in the CLI's own words, held for the lock right after `stop` and
+retried a minute later, left visible in `error` with the kept worktree, and closed cleanly once the
+commit was dropped and the refused rm retried — the retry being idempotent when run twice.
+
 ## 0.1.3
 
 Every defect in this release was found by reviewing v0.1.2 after it shipped, and most of
