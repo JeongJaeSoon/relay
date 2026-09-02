@@ -61,14 +61,17 @@ if [ -s "$RAW/doctor-before.json" ]; then
 else gate "doctor" 0 "no JSON output ($(head -c 200 "$RAW/doctor-before.err"))"; fi
 STATE="$(api "$API/usage")" || { gate "service reachable" 0 "GET /api/usage failed on :$PORT — brew services start relay"; echo "aborting"; exit 1; }
 echo "$STATE" >"$RAW/state-before.json"
-DRIFT="$(printf '%s' "$STATE" | j 'print(d.get("cli_drift") or "")')"
+SVC_DRIFT="$(printf '%s' "$STATE" | j 'print(d.get("cli_drift") or "")')"
 gate "service reachable" 1 "port $PORT · version $(printf '%s' "$STATE" | j 'print(d.get("version"))') · delivery $(printf '%s' "$STATE" | j 'print(d.get("delivery_method"))')"
-gate "cli drift" "$([ -z "$DRIFT" ] && echo 1 || echo 0)" "${DRIFT:+capabilities measured on $DRIFT — relay doctor --probe re-checks the --bg --resume gate; the rest is issue #42}${DRIFT:-capabilities match the installed CLI}"
+# doctor measures drift live; the service computes state.cli_drift once at boot, so after a CLI update the two disagree until a restart
+DRIFT="$(j 'c=[c for c in d if c["name"]=="CLI version drift"]; print("" if not c or c[0]["ok"] else c[0]["detail"])' <"$RAW/doctor-before.json" 2>/dev/null)"
+STALE=""; case "$SVC_DRIFT" in "") ;; *) case "$DRIFT" in *"${SVC_DRIFT##*→ }"*) ;; *) STALE=" · the running service still says '$SVC_DRIFT' (computed at boot — brew services restart relay to refresh)";; esac;; esac
+gate "cli drift" "$([ -z "$DRIFT" ] && echo 1 || echo 0)" "${DRIFT:+$DRIFT — relay doctor --probe re-checks the --bg --resume gate; the rest is issue #42}${DRIFT:-capabilities match the installed CLI}$STALE"
 PAUSED="$(printf '%s' "$STATE" | j 'print(1 if d.get("paused") else 0)')"; [ "$PAUSED" = 1 ] && gate "kill switch" 0 "relay is paused — nothing will run; relay resume-all"
 
 # ── 2. baseline: what relay owns on the claude roster right now ────────────────────────────────────────────────────────
 section "2. baseline"
-claude agents --json >"$RAW/agents-before.json" 2>/dev/null || echo '[]' >"$RAW/agents-before.json"
+claude agents --json --all >"$RAW/agents-before.json" 2>/dev/null || echo '[]' >"$RAW/agents-before.json"   # --all: stopped sessions stay registered until rm
 BEFORE_RELAY="$(j 'print(sum(1 for a in d if str(a.get("name","")).startswith("relay:")))' <"$RAW/agents-before.json")"
 BEFORE_UUIDS="$(api "$API/tasks?include=closed" | tee "$RAW/tasks-before.json" | j 'print(" ".join(t["uuid"] for t in d["tasks"]))')"
 PROJ_OK="$(j "print(1 if any(p['name']=='$NAME' for p in d['projects']) else 0)" <"$RAW/tasks-before.json")"
@@ -146,14 +149,32 @@ else
       *)      gate "close removes the session" 0 "still $CST after 2 min";;
     esac
   fi
-  sleep 3; claude agents --json >"$RAW/agents-after.json" 2>/dev/null || echo '[]' >"$RAW/agents-after.json"
+  sleep 3; claude agents --json --all >"$RAW/agents-after.json" 2>/dev/null || echo '[]' >"$RAW/agents-after.json"
   LEFT="$(j "print(', '.join(f\"{a.get('id')} {a.get('name')} [{a.get('state')}]\" for a in d if str(a.get('name','')).startswith('relay:$DISP ')))" <"$RAW/agents-after.json")"
   AFTER_RELAY="$(j 'print(sum(1 for a in d if str(a.get("name","")).startswith("relay:")))' <"$RAW/agents-after.json")"
-  if [ $COMMIT = 1 ] && [ "$CST" = error ]; then gate "roster" 1 "$DISP still registered as expected ($LEFT) · relay-owned before/after: $BEFORE_RELAY/$AFTER_RELAY"
-  else gate "roster has no leftover for $DISP" "$([ -z "$LEFT" ] && echo 1 || echo 0)" "${LEFT:-none} · relay-owned before/after: $BEFORE_RELAY/$AFTER_RELAY"; fi
   relay doctor --json >"$RAW/doctor-after.json" 2>/dev/null
-  KEPT="$(j 'print("; ".join(c["name"]+": "+c["detail"] for c in d if not c["ok"] and "session" in c["name"]))' <"$RAW/doctor-after.json" 2>/dev/null)"
-  gate "doctor after close" "$([ -z "$KEPT" ] && echo 1 || echo 0)" "${KEPT:-no session checks failing}"
+  if [ $COMMIT = 1 ] && [ "$CST" = error ]; then
+    # a refused rm leaves the session registered (stopped) and doctor must list exactly this task under "could not deregister"
+    gate "roster still holds $DISP" "$([ -n "$LEFT" ] && echo 1 || echo 0)" "${LEFT:-not on the roster — rm was refused yet nothing is registered; check $RAW/agents-after.json} · relay-owned before/after: $BEFORE_RELAY/$AFTER_RELAY"
+    KEPT="$(j "c=[c for c in d if c['name']=='sessions relay could not deregister']; print(c[0]['detail'] if c else 'check missing')" <"$RAW/doctor-after.json" 2>/dev/null)"
+    OTHER="$(j "print('; '.join(c['name']+': '+c['detail'] for c in d if not c['ok'] and 'session' in c['name'] and c['name']!='sessions relay could not deregister'))" <"$RAW/doctor-after.json" 2>/dev/null)"
+    case "$KEPT" in *"$DISP "*) gate "doctor lists the kept worktree" "$([ -z "$OTHER" ] && echo 1 || echo 0)" "$KEPT${OTHER:+ · but also: $OTHER}";;
+                    *)          gate "doctor lists the kept worktree" 0 "expected $DISP under 'sessions relay could not deregister', got: $KEPT";; esac
+  else
+    gate "roster has no leftover for $DISP" "$([ -z "$LEFT" ] && echo 1 || echo 0)" "${LEFT:-none} · relay-owned before/after: $BEFORE_RELAY/$AFTER_RELAY"
+    KEPT="$(j 'print("; ".join(c["name"]+": "+c["detail"] for c in d if not c["ok"] and "session" in c["name"]))' <"$RAW/doctor-after.json" 2>/dev/null)"
+    gate "doctor after close" "$([ -z "$KEPT" ] && echo 1 || echo 0)" "${KEPT:-no session checks failing}"
+  fi
+  if [ $COMMIT = 1 ] && [ "$CST" = error ]; then
+    RM_ID="$(api "$API/tasks/$TASK" | j 'c=[c for c in d.get("commands",[]) if c["kind"]=="rm"]; print(c[-1]["id"] if c else "")')"
+    {
+      echo; echo "**To clean up** (the smoke commit is the only thing holding the worktree):"; echo
+      echo '```sh'; echo "git -C '$WT' reset --hard HEAD~1        # drop the smoke commit; the branch then holds nothing unpushed"
+      [ -n "$RM_ID" ] && echo "curl -s -X POST -H \"authorization: Bearer \$(cat $HOME_DIR/api-token)\" $API/commands/$RM_ID/retry   # re-run the refused rm (or: the task's Retry button in the dashboard)"
+      echo "relay doctor                                        # 'sessions relay could not deregister' should read none again"; echo '```'
+    } >>"$REPORT"
+    echo "  cleanup: git -C '$WT' reset --hard HEAD~1, then retry the rm${RM_ID:+ (command $RM_ID)} — steps are in the report"
+  fi
 fi
 
 # ── summary ────────────────────────────────────────────────────────────────────────────────────────────────────────────
