@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 VER="$1"; cd "$(dirname "$0")/.."
-bun pm version "$VER" --no-git-tag-version >/dev/null   # package.json only — no git operations here
+# package.json only — no git operations here; a no-op when the release commit already carries the version
+[ "$(bun -p "require('./package.json').version")" = "$VER" ] || bun pm version "$VER" --no-git-tag-version >/dev/null
 sh scripts/compile.sh "$VER"
 ARM=$(grep arm64 dist/SHA256SUMS | cut -d' ' -f1); X64=$(grep x64 dist/SHA256SUMS | cut -d' ' -f1)
 TAP="${TAP_DIR:-$HOME/workspace/homebrew-tap}"; [ -d "$TAP" ] || gh repo clone JeongJaeSoon/homebrew-tap "$TAP"
