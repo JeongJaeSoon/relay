@@ -160,6 +160,9 @@ else
     OTHER="$(j "print('; '.join(c['name']+': '+c['detail'] for c in d if not c['ok'] and 'session' in c['name'] and c['name']!='sessions relay could not deregister'))" <"$RAW/doctor-after.json" 2>/dev/null)"
     case "$KEPT" in *"$DISP "*) gate "doctor lists the kept worktree" "$([ -z "$OTHER" ] && echo 1 || echo 0)" "$KEPT${OTHER:+ · but also: $OTHER}";;
                     *)          gate "doctor lists the kept worktree" 0 "expected $DISP under 'sessions relay could not deregister', got: $KEPT";; esac
+    # the DB says "kept" from the CLI's refusal text; the filesystem is the only proof the work is really still there
+    if [ -d "$WT" ]; then gate "kept worktree exists on disk" 1 "$WT · $(git -C "$WT" log --oneline -1 2>/dev/null || echo 'no git log')"
+    else gate "kept worktree exists on disk" 0 "$WT is gone although rm reported it kept — the commit may be orphaned; check git -C <repo> branch --list 'relay-*'"; fi
   else
     gate "roster has no leftover for $DISP" "$([ -z "$LEFT" ] && echo 1 || echo 0)" "${LEFT:-none} · relay-owned before/after: $BEFORE_RELAY/$AFTER_RELAY"
     KEPT="$(j 'print("; ".join(c["name"]+": "+c["detail"] for c in d if not c["ok"] and "session" in c["name"]))' <"$RAW/doctor-after.json" 2>/dev/null)"
