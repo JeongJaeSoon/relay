@@ -90,6 +90,11 @@ export const closeConfirmUuid = (text: string) => text.match(/\[close confirm: P
 // ---- browser ----------------------------------------------------------------------------------------
 const note = (s: string) => D.chatNote?.(s);
 const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label} failed: ${String((e as Error).message ?? e)}`));
+/** The task a promoted `question` chat row may draw its chips from — `null` sends the row to the plain chat line instead.
+ *  The row outlives the question (it stays in the snapshot after the task answers) while toDemoTask fills `question` only
+ *  while the task is waiting, and chatQuestion reads `t.question.q`. Checking only that the task exists is the shape that
+ *  took the whole sync() down on reload (#24) — and came back once already, so the branch now lives here, where a test can reach it. */
+export const promotedQuestionTask = (m: Pick<Message, "role">, task: DemoTask | undefined): DemoTask | null => (m.role === "question" && task?.question ? task : null);
 export function installAdapter() {
   const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0; let loadedDetail: string | null = null;
   const ctx = (): Ctx => ({ projects: store.state.projects, tasks: store.state.tasks });
@@ -144,7 +149,7 @@ export function installAdapter() {
       if (drawn.has(id)) { const old = badgeRows.get(id); if (old && m.role === "user") { const fresh = badgeRow(m); old.replaceWith(fresh); badgeRows.set(id, fresh); } continue; }
       drawn.add(id); const task = demoOf(m.task_uuid);
       if (m.role === "user") { D.chatUser(plain(m)); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
-      else if (m.role === "question" && task) D.chatQuestion(task);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
+      else if (promotedQuestionTask(m, task)) D.chatQuestion(task!);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
       else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(task ?? null, m.text); }
       else D.chatMsg(task ?? null, m.text);                                    // worker_summary | error | dispatcher_answer
     }

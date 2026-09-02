@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { badgeParts, closeConfirmUuid, createNotifQueue, eventLine, isDispatcherBadgeRow, isTimelineEvent, toDemoForeign, toDemoTask } from "../src/adapter.ts";
+import { badgeParts, closeConfirmUuid, createNotifQueue, eventLine, isDispatcherBadgeRow, isTimelineEvent, promotedQuestionTask, toDemoForeign, toDemoTask } from "../src/adapter.ts";
 import { store } from "../src/store.ts";
 const base = (uuid: string, status: any, extra: Record<string, unknown> = {}) => ({ uuid, num: 3, display_id: "T-03", project_id: "p", title: "인증 리팩토링", status, size: "normal", effort: "xhigh", model: "claude-opus-5", session_id: "s", short_id: "ab12", worktree_path: "/w", branch: "relay-abc", base_sha: null, process_state: "alive", process_generation: 2, turn_state: "busy", attach_state: "none", attached_by: null, paused: false, last_summary: null, last_step: "Edit src/auth.ts", question: null, parent_uuid: null, agent_id: null, agent_type: null, queued_at: null, qhead: false, started_at: 1000, ended_at: null, created_at: 900, updated_at: 1, closed_at: null, usage_tokens: 0, summary_json: null, ...extra }) as any;
 const ctx = { projects: [{ id: "p", name: "myapp" }] as any, tasks: {} as any };
@@ -85,11 +85,15 @@ test("toDemoForeign names a session by what is knowable, in that order: roster n
 // toDemoTask only fills `question` while the task is waiting. chatQuestion reads t.question.q, so on any reload
 // whose last 200 messages contain an answered question, syncMessages threw and aborted the whole sync() — blank
 // canvas, no graph, no sidebar. The guard makes the row fall through to the plain chat row, which already
-// carries the question text.
+// carries the question text. #24 fixed this and its own second commit undid it (the test below only pinned
+// toDemoTask, not the branch), so the branch is now a function this test calls directly.
 test("a question row whose task has moved on does not take the render down with it", () => {
-  const answered = base("u1", "running", { question: null });
-  expect(toDemoTask(answered, { ...ctx, tasks: { u1: answered } }).question).toBeNull();
-  // The adapter's branch is `m.role === "question" && task?.question`; without the optional chain this is the
-  // dereference that threw. Asserting the shape the branch guards on is what keeps it from coming back.
-  expect(() => toDemoTask(answered, { ...ctx, tasks: { u1: answered } }).question!.q).toThrow();
+  const row = { role: "question" } as any;
+  const waiting = toDemoTask(base("u1", "waiting_input", { question: { text: "a?", options: ["x"], asked_at: 1, source: "marker" } }), ctx) as any;
+  const answered = toDemoTask(base("u1", "running", { question: null }), ctx) as any;
+  expect(answered.question).toBeNull();
+  expect(promotedQuestionTask(row, waiting)).toBe(waiting);                     // still waiting: the chips row
+  expect(promotedQuestionTask(row, answered)).toBeNull();                       // moved on: fall through to the plain row — this is the dereference that threw
+  expect(promotedQuestionTask(row, undefined)).toBeNull();                      // task gone from the snapshot
+  expect(promotedQuestionTask({ role: "system" } as any, waiting)).toBeNull();  // only the promoted question row draws chips
 });
