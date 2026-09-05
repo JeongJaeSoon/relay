@@ -174,7 +174,7 @@ describe("Outbox", () => {
     expect(s.runner.rows.get("gen1")!.alive).toBe(false); expect(s.runner.rows.get("fake1")!.alive).toBe(true);
     expect(s.states()).toEqual(["applied", "applied"]);
   });
-  test("a reap refused because the shared worktree still holds work keeps the session and still applies", async () => {
+  test("a refused reap keeps the session and records a retryable failure", async () => {
     const s = setup(); s.mk("u1", "running", { process_generation: 0, worktree_path: "/p/wt" });
     for (const [g, short] of [[1, "gen1"], [2, "gen2"]] as [number, string][]) {
       s.runner.rows.set(short, { short_id: short, session_id: `sid-${short}`, name: "relay:T-01 t", cwd: "/p", pid: g, alive: true, busy: false, waiting_for: null, raw: {} });
@@ -183,6 +183,7 @@ describe("Outbox", () => {
     }
     s.runner.rm = async (short: string) => { s.runner.calls.push({ kind: "rm", args: short }); return { worktreeKept: true }; };   // the generations share one worktree and gen2's work is still in it
     s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { process_state: "stopped" } } });   // close stops everything before anything is removed
+    s.runner.rows.get("gen2")!.alive = false;
     expect(s.ob.reapStops(loadTask(s.db, "u1")!, "test")).toEqual(["sid-gen1"]);
     s.ob.reapRms(loadTask(s.db, "u1")!); await s.ob.run("u1");
     expect(s.runner.calls.filter((c) => c.kind === "rm").map((c) => c.args)).toEqual(["gen1"]);
@@ -236,6 +237,7 @@ describe("Outbox", () => {
       s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { short_id: short } } });
     }
     s.log.emit({ type: "task.patched", task_uuid: "u1", payload: { patch: { process_state: "stopped" } } });
+    for (const row of s.runner.rows.values()) row.alive = false;
     s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", retryable: true };
     s.ob.reapRms(loadTask(s.db, "u1")!); await s.ob.run("u1");
     expect(s.states()).toEqual(["pending"]);                                                           // NOT applied: nothing was deregistered
@@ -280,4 +282,55 @@ describe("Outbox", () => {
     s.ob.enqueue("u1", "s", { kind: "send", text: "t", marker: "0000bbbb" }); s.ob.enqueue("u1", "k", { kind: "stop", reason: "kill switch" }); await s.ob.run("u1");
     expect(s.states()).toEqual(["pending", "applied"]); expect(s.runner.calls.map((c) => c.kind)).toEqual(["stop"]); expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
   });
+});
+
+describe("owned generation cleanup barriers", () => {
+  function generations() {
+    const s = setup(); s.mk("u1", "done");
+    for (const gen of [1, 2]) {
+      s.runner.rows.set(`gen${gen}`, { short_id: `gen${gen}`, session_id: `sid-${gen}`, name: "worker", cwd: "/p", pid: gen, alive: false, busy: false, waiting_for: null, raw: {} });
+      s.log.emit({ type: "process.started", task_uuid: "u1", process_generation: gen, payload: { generation: gen, session_id: `sid-${gen}`, short_id: `gen${gen}` } });
+    }
+    s.log.emit({ type: "process.ended", task_uuid: "u1", process_generation: 2, payload: { generation: 2, crashed: false } });
+    return s;
+  }
+  test("a superseded stop exception stays unknown and retryable", async () => {
+    const s = generations(); const stop = s.runner.stop.bind(s.runner);
+    s.runner.stop = async () => { throw new Error("lost stop acknowledgement"); };
+    s.ob.reapStops(loadTask(s.db, "u1")!, "close"); await s.ob.run("u1");
+    expect(s.states()).toEqual(["unknown"]);
+    s.runner.stop = stop;
+    s.ob.retry((s.db.query("select id from commands").get() as any).id); await s.ob.run("u1");
+    expect(s.states()).toEqual(["applied"]);
+  });
+  test("a failed roster read never claims a superseded rm succeeded", async () => {
+    const s = generations(); s.runner.list = async () => { throw new Error("roster unavailable"); };
+    s.ob.reapRms(loadTask(s.db, "u1")!); await s.ob.run("u1");
+    expect(s.states()).toEqual(["unknown"]);
+    expect(s.runner.rows.has("gen1")).toBe(true);
+  });
+  test("an earlier unknown stop blocks a later close rm", async () => {
+    const s = generations();
+    s.runner.stop = async () => { throw new Error("stop outcome unknown"); };
+    s.ob.reapStops(loadTask(s.db, "u1")!, "resume"); await s.ob.run("u1");
+    s.ob.enqueue("u1", "close", { kind: "rm" }); await s.ob.run("u1");
+    expect(s.runner.calls.filter(c => c.kind === "rm")).toHaveLength(0);
+    expect(loadTask(s.db, "u1")!.status).not.toBe("closed");
+  });
+  test("fresh roster liveness blocks rm even when task projection says stopped", async () => {
+    const s = generations(); s.runner.rows.get("gen1")!.alive = true;
+    s.ob.enqueue("u1", "close", { kind: "rm" }); await s.ob.run("u1");
+    expect(s.runner.calls.filter(c => c.kind === "rm")).toHaveLength(0);
+    expect(loadTask(s.db, "u1")!.status).not.toBe("closed");
+  });
+});
+
+test("rm success text without actual deregistration remains unknown", async () => {
+  const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+  s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
+  s.runner.rm = async () => ({ worktreeKept: false });
+  s.ob.enqueue("u1", "close", { kind: "rm" }); await s.ob.run("u1");
+  expect(s.states()).toEqual(["unknown"]);
+  expect(loadTask(s.db, "u1")!.status).toBe("error");
+  expect(loadTask(s.db, "u1")!.last_summary).toContain("remains registered");
 });

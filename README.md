@@ -96,7 +96,8 @@ fallback), `capabilities.json`, `hook-spool/`. Logs go to `~/Library/Logs/relay/
 ## Development
 
 Current implementation coverage, live worker evidence and dashboard fixes are recorded in
-[the September 5 QA report](docs/QA-2026-09-05.md).
+[the September 5 QA report](docs/QA-2026-09-05.md) and the
+[owned-session lifecycle follow-up](docs/QA-2026-09-05-owned-sessions.md).
 
 ```sh
 bun install

@@ -78,6 +78,7 @@ test("the reaper's re-run reaches a held REAP rm too — retryable was added at 
   s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", retryable: true };
   const reaper = new IdleReaper(s.db, s.log, s.ctx.cfg, s.outbox, s.svc);
   try {
+    for (const row of s.runner.rows.values()) row.alive = false; // The lock outlives process exit.
     s.outbox.reapRms(loadTask(s.db, t)!); await s.settle();
     expect(s.db.query("select state from commands where kind='rm'").get()).toEqual({ state: "pending" });
     expect(s.runner.rows.has("old1")).toBe(true);

@@ -34,3 +34,10 @@ test("parseRm keeps the three refusals apart and carries the path the user has t
   expect(parseRm(locked)).toMatchObject({ reason: "worktree is locked — in use by another live session, or locked by hand", retryable: true });
   expect(parseRm("removed 6063a069\n")).toEqual({ worktreeKept: false });
 });
+
+test("native stop/rm failures cannot masquerade as cleanup success", async () => {
+  const { NativeSessionRunner } = await import("../../../src/runner/native.ts");
+  const runner = new NativeSessionRunner(() => ({}), { claudeBin: "/usr/bin/false" });
+  await expect(runner.stop("owned")).rejects.toThrow("exit 1");
+  await expect(runner.rm("owned")).rejects.toThrow("exit 1");
+});
