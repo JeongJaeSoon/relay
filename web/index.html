@@ -292,6 +292,13 @@ header{
 }
 .chip:hover{border-color:var(--accent);color:var(--accent)}
 .chip:disabled{opacity:.45;pointer-events:none}
+.m-user,.m-sys,.lg-msg,.lg-ans,.d-title,.n-title,.n-step,.qt,.chip{word-break:keep-all;overflow-wrap:anywhere}
+.m-sys code,.lg-ans code,.qt code,.question-option code{
+  font-family:var(--font-mono);font-size:.95em;background:var(--inset);
+  border:1px solid var(--line);border-radius:3px;padding:0 3px;
+  word-break:normal;overflow-wrap:anywhere;box-decoration-break:clone;
+}
+.question-option{border-radius:8px;line-height:1.6}
 .d-q .chip,.lg-acts .chip{border-radius:8px}
 .d-actions{display:flex;gap:8px;flex-wrap:wrap}
 .act{
