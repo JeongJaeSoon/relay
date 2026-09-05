@@ -124,3 +124,39 @@ test("an interrupt with only an unknown stop exposes cleanup retry and blocks re
   expect(loadTask(s.db, s.uuid)).toMatchObject({ status: "cancelled", cleanup_pending: false, process_state: "stopped" });
   expect(s.runner.calls.filter(c => ["spawn", "resume"].includes(c.kind))).toHaveLength(starts);
 });
+
+for (const observation of ["named", "renamed", "not-yet-published"] as const)
+test(`unknown spawn close refuses ambiguous ownership (${observation})`, async () => {
+  const s=await buildTestApp(decide({action:"new_task",project:"myapp",title:"unknown spawn",size:"small",prompt:"read only",confidence:"high"}));
+  const spawn=s.runner.spawn.bind(s.runner);
+  s.runner.spawn=async spec=>{await spawn(spec);throw new Error("lost spawn result");};
+  await s.req("POST","/api/messages",{client_message_id:"unknown-spawn",text:"read only"});await s.settle(120);
+  const t=s.db.query("select uuid from tasks").get() as any;
+  const list = s.runner.list.bind(s.runner);
+  if (observation === "renamed") for (const r of s.runner.rows.values()) r.name = "user renamed this session";
+  if (observation === "not-yet-published") s.runner.list = async () => [];
+  await s.req("POST",`/api/tasks/${t.uuid}/close`);await s.outbox.run(t.uuid);
+  expect(loadTask(s.db,t.uuid)!.status).not.toBe("closed");
+  expect(s.runner.calls.filter(c=>["stop","rm"].includes(c.kind))).toHaveLength(0);
+  expect([...s.runner.rows.values()].filter(r=>r.alive)).toHaveLength(1);
+  expect(s.db.query("select state from commands where kind='stop'").get()).toEqual({state:"unknown"});
+  expect(loadTask(s.db,t.uuid)!.cleanup_pending).toBe(true);
+  expect((await s.req("POST",`/api/tasks/${t.uuid}/retry`)).status).toBe(409);
+  s.runner.list = list;
+  const row=[...s.runner.rows.values()][0]!;
+  // Only the authenticated hook, not the matching display name, establishes ownership.
+  await s.hookReq(t.uuid,{hook_event_name:"SessionStart",source:"startup",session_id:row.session_id,cwd:row.cwd});
+  await s.req("POST",`/api/tasks/${t.uuid}/retry-cleanup`);await s.outbox.run(t.uuid);
+  expect(loadTask(s.db,t.uuid)!.status).toBe("closed");
+  expect(s.runner.rows.size).toBe(0);
+});
+
+test("close of a queued task that never attempted spawn still completes", async () => {
+  const s = await buildTestApp(decide({action:"new_task",project:"myapp",title:"queued",size:"small",prompt:"read only",confidence:"high"}), 0);
+  await s.req("POST", "/api/messages", {client_message_id:"never-started",text:"read only"}); await s.settle(100);
+  const {uuid} = s.db.query("select uuid from tasks").get() as {uuid:string};
+  expect(loadTask(s.db,uuid)!.status).toBe("queued");
+  await s.req("POST", `/api/tasks/${uuid}/close`); await s.outbox.run(uuid);
+  expect(loadTask(s.db,uuid)!.status).toBe("closed");
+  expect(s.runner.calls).toHaveLength(0);
+});

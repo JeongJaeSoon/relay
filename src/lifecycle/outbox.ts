@@ -292,6 +292,15 @@ export class Outbox {
       throw new Error(`cleanup ownership unverified for short id ${t.short_id}`);
     return row;
   }
+  /** Roster absence cannot disprove an unrecorded launch: publication can lag, and names can change. */
+  private assertSpawnIdentified(t: Task, rows: AgentRow[]) {
+    if (t.session_id || t.short_id) return;
+    const attempts = this.db.query("select payload_json from commands where task_uuid=? and kind='spawn' and attempts>0").all(t.uuid) as { payload_json: string }[];
+    if (!attempts.length) return;
+    const names = new Set(attempts.map(a => (JSON.parse(a.payload_json) as { spec: SpawnSpec }).spec.name));
+    const candidates = rows.filter(r => names.has(r.name ?? "")).map(r => r.short_id ?? r.session_id ?? "unknown");
+    throw new Error(`unresolved spawn: ownership must be reconciled before close; roster candidates: ${candidates.join(", ") || "none observed"}`);
+  }
   private async waitGone(shortId: string, ms = 10_000) { const t0 = now(); while (now() - t0 < ms) { const r = (await this.runner.list()).find((x) => x.short_id === shortId); if (!r || !r.alive) return true; await Bun.sleep(300); } return false; }
   private async waitRow(shortId: string, ms = 10_000): Promise<AgentRow | undefined> { const t0 = now(); for (;;) { const r = (await this.runner.list(true)).find((x) => x.short_id === shortId); if (r?.cwd && r.session_id) return r; if (now() - t0 > ms) return r; await Bun.sleep(300); } }
   /** Where this session's `.relay-owner` belongs. For a git project the row's cwd is the PROJECT ROOT, shared by every
@@ -371,6 +380,7 @@ export class Outbox {
       case "stop": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "stop"); return; }
         const rows = await this.runner.list(true);
+        this.assertSpawnIdentified(t, rows);
         const row = this.cleanupRow(t, rows);
         if (row && !row.short_id) throw new Error("stop target has no short id");
         if (row?.short_id) { await this.runner.stop(row.short_id); if (!(await this.waitGone(row.short_id))) throw new Error("stop not confirmed"); }
@@ -382,7 +392,7 @@ export class Outbox {
       case "rm": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "rm"); return; }
         const current = loadTask(this.db, t.uuid)!;
-        const rows = await this.runner.list(true); this.assertStopped(current, rows);
+        const rows = await this.runner.list(true); this.assertSpawnIdentified(current, rows); this.assertStopped(current, rows);
         const row = this.cleanupRow(current, rows);
         if (row && !row.short_id) throw new Error("rm target has no short id");
         const r = row?.short_id ? await this.removeSession(current, row.short_id) : current.worktree_path && existsSync(current.worktree_path)
