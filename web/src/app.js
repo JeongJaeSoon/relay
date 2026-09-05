@@ -45,6 +45,49 @@ const ROW_H=128, SUB_ROW=102, COL_TASK=312, COL_SUB=596, ROW_Y0=40;
 const COL_FOREIGN=900, NODE_GAP=18; /* outside sessions have no gateway edge; measured heights keep the cards apart */
 const S={tasks:new Map(),foreign:new Map(),sel:null,fsel:null,maxw:10, /* default 10, no hard cap — going over is a soft warning */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
 const STATUS_LABEL={run:"Running",wait:"Needs input",queue:"Queued",done:"Done",err:"Error",cancelled:"Cancelled",closed:"Archived"};
+function taskStateLabel(t){return t.statusLabel||STATUS_LABEL[t.status]||"Unknown"}
+function uiIcon(name){
+  const paths={
+    folder:"M2 5V3h5l2 2h5v8H2Z",repository:"M4 2h9v12H4a2 2 0 0 1 0-4h9M4 2a2 2 0 0 0-2 2v8M5 4h5",
+    branch:"M4 5v6M12 5c0 4-8 1-8 6M4 1.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3M12 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3M4 11a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3",
+    copy:"M6 6h8v8H6ZM10 3V2H2v8h1",
+    running:"m5 3 7 5-7 5Z",waiting:"M8 3v5M8 11v.1M8 1l7 13H1Z",
+    review:"m8 1 7 7-7 7-7-7Z",queued:"M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2M8 4v4l3 2",
+    done:"m3 8 3 3 7-7",error:"M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2M8 5v4M8 11v.1",
+    cancelled:"M3 3h10v10H3Z",archived:"M2 2h12v3H2ZM3 5v9h10V5M6 8h4",
+    stopped:"M5 3v10M11 3v10",idle:"M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2",
+    unknown:"M6 5a2 2 0 1 1 3 2c-1 1-1 1-1 2M8 12v.1",starting:"M3 10a5 5 0 1 1 9 1M8 8l3-2",
+  };
+  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  for(const [key,value] of Object.entries({viewBox:"0 0 16 16",width:"14",height:"14",fill:"none",stroke:"currentColor","stroke-width":"1.5","stroke-linecap":"round","stroke-linejoin":"round","aria-hidden":"true",focusable:"false",class:"ui-icon"}))svg.setAttribute(key,value);
+  const path=document.createElementNS("http://www.w3.org/2000/svg","path");path.setAttribute("d",paths[name]||paths.unknown);svg.append(path);return svg;
+}
+function stateBadge(label,cls){
+  const symbols={Starting:"starting",Running:"running","Needs input":"waiting","Needs review":"review",Queued:"queued",Done:"done",Error:"error",Cancelled:"cancelled",Archived:"archived",Stopped:"stopped",Idle:"idle",Unknown:"unknown"};
+  const badge=el("span","pill state-badge "+cls);
+  badge.append(uiIcon(symbols[label]),el("span",null,label));return badge;
+}
+function directoryName(path){return String(path||"").replace(/\/+$/,"").split("/").pop()||(path?"/":"No directory")}
+function foreignDirectory(f){return "directoryPath" in f?f.directoryPath:(f.cwd==="—"?null:f.cwd)}
+function locationLabel(name,kind="folder"){
+  const row=el("div","s-location");
+  row.append(uiIcon(kind),el("span","location-name",name));return row;
+}
+function pathControl(path,label){
+  const box=el("div","path-control");
+  box.append(el("div","path-value mono",path||"Not available"));
+  const copy=el("button","act copy-path");copy.append(uiIcon("copy"),el("span",null,"Copy "+label.toLowerCase()));copy.disabled=!path;
+  const status=el("span","copy-status");status.setAttribute("role","status");
+  copy.addEventListener("click",async()=>{
+    copy.disabled=true;status.textContent="Copying…";
+    try{
+      if(!navigator.clipboard?.writeText)throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(path);status.textContent="Path copied.";
+    }catch{status.textContent="Could not copy. Select the path above to copy manually."}
+    finally{copy.disabled=!path}
+  });
+  box.append(copy,status);return box;
+}
 
 const tasksArr=()=>[...S.tasks.values()];
 const foreignArr=()=>[...S.foreign.values()];
@@ -249,7 +292,7 @@ function renderNodes(){
     n.style.left=t.x+"px";n.style.top=t.y+"px";
     n.querySelector(".n-title").textContent=t.title;
     n.querySelector(".n-title").title=t.title;
-    let pillTxt=t.status==="run"&&S.paused?"Stopped":(t.statusLabel||STATUS_LABEL[t.status]);
+    let pillTxt=taskStateLabel(t);
     if(!t.sub&&t.status==="queue"){
       const qi=queuedTasks().filter(x=>!x.sub).indexOf(t);
       pillTxt="Queued "+(qi+1);
@@ -262,7 +305,7 @@ function renderNodes(){
     n.querySelector(".n-elapsed").textContent=elapsedText(t);
     n.querySelector(".br").textContent=t.sub?"":t.branch||"";
     n.querySelector(".br").title=t.branch||"";
-    n.setAttribute("aria-label",t.title+" — "+(t.statusLabel||STATUS_LABEL[t.status]));
+    n.setAttribute("aria-label",t.id+" · "+t.title+" — "+taskStateLabel(t));
   });
   // A replacement snapshot can omit a parent entirely; remove its old DOM too.
   nodesBox.querySelectorAll(".node:not(.foreign)").forEach(n=>{
@@ -374,7 +417,6 @@ const GROUPS=[
   {label:"Queued",match:t=>t.status==="queue"},
   {label:"Done · Archived",match:t=>t.status==="done"||t.status==="closed"},
 ];
-const sideMeta=t=>t.id+" · "+t.project+" · "+(elapsedText(t)||"—");
 function renderSidebar(){
   const fam=famOf(S.sel);
   const sb=$("#sidebar"),st=sb.scrollTop;sb.textContent="";
@@ -392,10 +434,15 @@ function renderSidebar(){
     if(!list.length)box.append(el("div","group-empty","None"));
     list.forEach(t=>{
       const it=el("button","s-item st-"+t.status+(S.sel===t.id?" sel":fam.has(t.id)?" rel":"")+(t.status==="closed"?" closed":""));
-      it.append(el("i","dot"));
+      it.dataset.task=t.id;
+      it.setAttribute("aria-label",t.id+" · "+t.title+" — "+taskStateLabel(t)+" · "+t.project);
+      if(S.sel===t.id)it.setAttribute("aria-current","true");
       const txt=el("div","txt");
       txt.append(el("div","tt",t.title));
-      const mm=el("div","mm mono",sideMeta(t));mm.dataset.el=t.id;mm.dataset.fmt="side";txt.append(mm);
+      const meta=el("div","s-meta");
+      const time=el("span","s-elapsed mono",elapsedText(t)||"—");time.dataset.el=t.id;
+      meta.append(stateBadge(taskStateLabel(t),"st-"+t.status),el("span","s-id mono",t.id),time);
+      txt.append(meta,locationLabel(t.project,"repository"));
       it.append(txt);
       it.addEventListener("click",()=>{select(t.id);centerOn(t)});
       box.append(it);
@@ -411,10 +458,14 @@ function renderSidebar(){
     box.append(h);
     fs.forEach(f=>{
       const it=el("button","s-item st-foreign"+(S.fsel===f.key?" sel":""));
-      it.append(el("i","dot"));
+      it.dataset.foreign=f.key;
+      it.setAttribute("aria-label",f.title+" — "+f.stateLabel+" · "+f.cwd);
+      if(S.fsel===f.key)it.setAttribute("aria-current","true");
       const txt=el("div","txt");
       txt.append(el("div","tt",f.title));
-      const mm=el("div","mm mono",f.stateLabel+" · "+f.cwd);txt.append(mm);
+      const meta=el("div","s-meta");
+      meta.append(stateBadge(f.stateLabel,"st-foreign"),el("span","s-id","Outside relay"));
+      txt.append(meta,locationLabel(directoryName(foreignDirectory(f))));
       it.append(txt);
       it.addEventListener("click",()=>{selectForeign(f.key);centerOnBox(f)});
       box.append(it);
@@ -443,13 +494,12 @@ function renderDetail(){
     if(v instanceof Node)dd.append(v);else dd.textContent=v;
     rows.append(dd);return dd;
   };
-  const pillWrap=el("span","st-"+t.status);
-  pillWrap.append(el("span","pill",(t.statusLabel||STATUS_LABEL[t.status])));
-  row("Status",pillWrap);
+  row("Status",stateBadge(taskStateLabel(t),"st-"+t.status));
   row("ID",t.id,true);
   row("Project",t.project,true);
+  if(!t.sub)row("Worktree",pathControl(t.worktree,"worktree path"));
   row("Size",t.sub?"sub · "+t.agentType:t.size+" ("+t.model+"·"+t.effort+")");
-  if(!t.sub)row("Branch",t.branch,true);
+  if(!t.sub){const branch=el("span","branch-value");branch.append(uiIcon("branch"),el("span","mono",t.branch||"—"));row("Branch",branch)}
   row("Session",t.sid+" · "+t.proc+" · gen "+t.gen+(t.attached?" · attach("+t.attached+")":""),true);
   row("Started",t.startedAt?clock(t.startedAt):"—",true);
   row("Elapsed",elapsedText(t)||"—",true).dataset.el=t.id;
@@ -477,9 +527,7 @@ function renderDetail(){
     b1.addEventListener("click",()=>relay.attach(t));
     const bAsk=el("button","act","Ask about this task");   /* relay tasks only — a session relay does not own has no transcript it was given */
     bAsk.addEventListener("click",()=>askAbout(t));
-    const b2=el("button","act","Copy worktree path");
-    b2.addEventListener("click",()=>{const pth=t.worktree||"(no worktree)";navigator.clipboard&&navigator.clipboard.writeText(pth).catch(()=>{});chatNote("Copied to clipboard: "+pth)});
-    btns.append(b1,bAsk,b2);body.append(btns);
+    btns.append(b1,bAsk);body.append(btns);
     const acts=el("div","d-actions");
     if(t.status==="run"||t.status==="wait"){
       const b=el("button","act danger","Stop");
@@ -517,11 +565,10 @@ function renderForeignDetail(body,f){
   body.append(el("div","d-title",f.title));
   const rows=el("dl","d-rows wide");
   const row=(k,v,mono)=>{rows.append(el("dt",null,k));const dd=el("dd",mono?"mono":null);if(v instanceof Node)dd.append(v);else dd.textContent=v;rows.append(dd);return dd};
-  const pillWrap=el("span","st-foreign");pillWrap.append(el("span","pill",f.stateLabel));
-  row("State",pillWrap);
+  row("State",stateBadge(f.stateLabel,"st-foreign"));
   row("Session",f.sid,true);
   row("Agent id",f.short+(f.kind?" · "+f.kind:""),true);
-  row("Directory",f.cwd,true);
+  row("Directory",pathControl(foreignDirectory(f),"directory"));
   row("PID",f.pid==null?"—":String(f.pid),true);
   row("Started",f.startedAt?clock(f.startedAt):"unknown",true);
   row("Elapsed",foreignElapsed(f),true).dataset.fel=f.key;
@@ -701,7 +748,7 @@ setInterval(()=>{
     if(n){const e2=n.querySelector(".n-elapsed");if(e2)e2.textContent=elapsedText(t)}
   });
   /* the sidebar and detail are not rebuilt, only their elapsed text — scroll, focus and open sections survive */
-  document.querySelectorAll("[data-el]").forEach(e=>{const t=S.tasks.get(e.dataset.el);if(t)e.textContent=e.dataset.fmt==="side"?sideMeta(t):(elapsedText(t)||"—")});
+  document.querySelectorAll("[data-el]").forEach(e=>{const t=S.tasks.get(e.dataset.el);if(t)e.textContent=elapsedText(t)||"—"});
   document.querySelectorAll("[data-fel]").forEach(e=>{const f=S.foreign.get(e.dataset.fel);if(f)e.textContent=foreignElapsed(f)});
 },1000);
 

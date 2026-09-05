@@ -158,9 +158,21 @@ header{
 .s-item.rel{border-left-color:var(--accent)}
 .s-item .dot{margin-top:5px}
 .s-item .tt{font-size:var(--fs-body);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.s-item .mm{font-size:var(--fs-micro);color:var(--muted);overflow-wrap:anywhere}
+.s-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0;font-size:var(--fs-micro)}
+.state-badge{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.ui-icon{flex:none;vertical-align:-2px}
+.s-id,.s-elapsed{color:var(--muted);font-variant-numeric:tabular-nums}
+.s-elapsed{margin-left:auto}
+.s-location{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:var(--fs-small);min-width:0}
+.copy-path,.branch-value{display:inline-flex;align-items:center;gap:5px}
+.branch-value{align-items:flex-start;overflow-wrap:anywhere;max-width:100%}
+.branch-value .ui-icon{margin-top:2px}
+.branch-value .mono{min-width:0}
+.location-name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .s-item .txt{min-width:0;flex:1}
-.s-item.closed{opacity:.55}
+.path-control{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px}
+.path-value{width:100%;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
+.copy-status{font-size:var(--fs-small);color:var(--muted);overflow-wrap:anywhere}
 .group-empty{padding:6px 14px 8px;font-size:var(--fs-small);color:var(--muted)}
 
 /* canvas */
