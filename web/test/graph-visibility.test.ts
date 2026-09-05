@@ -12,7 +12,8 @@ test("child graph visibility follows its parent while preserving task history", 
   for (const parentStatus of ["run", "done", "err", "closed", "queue", "missing"]) {
     const parent = { id: "T-01", status: parentStatus, children: ["T-01.1"] };
     const child = { id: "T-01.1", status: "done", sub: true, parent: parent.id };
-    const tasks = new Map([[child.id, child], ...(parentStatus === "missing" ? [] : [[parent.id, parent] as const])]);
+    const tasks = new Map<string, typeof parent | typeof child>([[child.id, child]]);
+    if (parentStatus !== "missing") tasks.set(parent.id, parent);
     const context: any = { S: { tasks }, tasksArr: () => [...tasks.values()] };
     runInNewContext(visibility + "result=graphTasks().map(t=>t.id);", context);
     expect(context.result.includes(child.id)).toBe(!["closed", "queue", "missing"].includes(parentStatus));
@@ -26,7 +27,8 @@ test("archive or missing-parent snapshot removes stale DOM and leaves an empty g
   for (const missing of [false, true]) {
     const parent = { id: "T-01", status: "closed" };
     const child = { id: "T-01.1", status: "done", sub: true, parent: parent.id };
-    const tasks = new Map([[child.id, child], ...(missing ? [] : [[parent.id, parent] as const])]);
+    const tasks = new Map<string, typeof parent | typeof child>([[child.id, child]]);
+    if (!missing) tasks.set(parent.id, parent);
     const nodes = new Map([parent, child].map(t => ["node-" + t.id, { id: "node-" + t.id, remove() { nodes.delete(this.id); } }]));
     const hint = { style: {}, offsetLeft: 32, offsetTop: 106, offsetWidth: 224, offsetHeight: 80 };
     const mmEl = { style: {}, textContent: "stale markers" };
