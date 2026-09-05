@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
 const code = app.slice(app.indexOf("function inlineText("), app.indexOf("const pad="));
 class Element {
+  dataset: Record<string, string> = {};
   children: any[] = [];
   listeners: Record<string, () => void> = {};
   constructor(public tag: string, public textContent = "") {}

@@ -7,7 +7,7 @@ test("the detail close button uses the installed selection persistence handler",
   const closeBindings = app.slice(app.indexOf("function clearSel(){"), app.indexOf('document.addEventListener("keydown",e=>{', app.indexOf("function clearSel(){")));
   let click!: () => void;
   let savedSelection: string | null = "uuid-1";
-  const context: any = { cleared() { savedSelection = null; }, S: { sel: "T-01", fsel: null }, refresh() {}, $: () => ({ addEventListener(_event: string, fn: () => void) { click = fn; } }) };
+  const context: any = { document: { activeElement: null }, cleared() { savedSelection = null; }, S: { sel: "T-01", fsel: null }, refresh() {}, $: () => ({ addEventListener(_event: string, fn: () => void) { click = fn; } }) };
   // Install in the same script realm, as the browser module adapter does after button binding.
   runInNewContext(closeBindings + "\nconst originalClear=clearSel; clearSel=()=>{cleared();originalClear();};", context);
   click();
