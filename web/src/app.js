@@ -1173,7 +1173,7 @@ function renderPal(){
     const it=el("div","pal-item"+(i===PAL.idx?" act":""));it.id="pal-"+i;it.setAttribute("role","option");it.setAttribute("aria-selected",i===PAL.idx?"true":"false");
     it.append(el("span",null,c.t));
     if(c.k)it.append(el("kbd",null,fmtKey(c.k)));
-    it.addEventListener("click",()=>runPal(c));
+    it.addEventListener("click",e=>{e.stopPropagation();runPal(c)});
     palList.append(it);
   });
   palInput.setAttribute("aria-activedescendant","pal-"+PAL.idx);

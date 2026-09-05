@@ -58,3 +58,25 @@ test("executing a palette command preserves its own focus and panel behavior", (
   expect(c.state()).toEqual({ active: "origin", pane: "requests", inert: false, restored: 1 });
   expect(c.context.RZ.ch).toBe(false);
 });
+
+test("a clicked palette command cannot immediately close its panel as an outside click", () => {
+  const items: any[] = [];
+  let panelOpen = false, propagated = true;
+  const context: any = {
+    PAL: { idx: 0, list: [] }, palInput: { value: "", setAttribute() {} },
+    palList: { textContent: "", append: (item: any) => items.push(item), querySelector: () => null },
+    commands: () => [{ t: "Open settings", run() { panelOpen = true; } }],
+    closePalette() {},
+    el: () => ({ handlers: {} as Record<string, any>, append() {}, setAttribute() {},
+      addEventListener(name: string, fn: any) { this.handlers[name] = fn; } }),
+  };
+  const start = app.indexOf("function renderPal(){");
+  const end = app.indexOf('palInput.addEventListener("input"', start);
+  runInNewContext(app.slice(start, end), context);
+  context.renderPal();
+  items[0].handlers.click({ stopPropagation() { propagated = false; } });
+  // The document's outside-click handler would dismiss the newly opened panel.
+  if (propagated) panelOpen = false;
+  expect(propagated).toBe(false);
+  expect(panelOpen).toBe(true);
+});
