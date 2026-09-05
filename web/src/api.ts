@@ -15,14 +15,21 @@ export const sendMessage = (text: string, opts: MessageOptions = {}) => {
 };
 /** A retry after a lost HTTP acknowledgement must not create a second task. A changed draft starts a new request. */
 export function createMessageSender() {
-  let pending: { key: string; id: string } | null = null;
+  let pending: { key: string; id: string; inFlight?: Promise<{ message_id: string }> } | null = null;
   return async (text: string, opts: MessageOptions = {}) => {
     const key = JSON.stringify([text, !!opts.ask, opts.askTask ?? null, opts.replyTo ?? null]);
+    if (pending?.key === key && pending.inFlight) return pending.inFlight;
     if (!pending || pending.key !== key) pending = { key, id: crypto.randomUUID() };
     const attempt = pending;
-    const result = await sendMessage(text, { ...opts, clientMessageId: attempt.id });
-    if (pending === attempt) pending = null;
-    return result;
+    const request = sendMessage(text, { ...opts, clientMessageId: attempt.id });
+    attempt.inFlight = request;
+    try {
+      const result = await request;
+      if (pending === attempt) pending = null;
+      return result;
+    } finally {
+      attempt.inFlight = undefined;   // a failed retry keeps its ID, but can be submitted again
+    }
   };
 }
 export const answer = (uuid: string, text: string) => api.post(`/tasks/${uuid}/answer`, { text });

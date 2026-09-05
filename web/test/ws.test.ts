@@ -78,3 +78,19 @@ describe("snapshot failure recovery", () => {
     } finally { stop(); }
   });
 });
+
+test("a stalled snapshot closes its socket and retries even when fetch never settles", async () => {
+  store.reset(); let requests = 0; let signal!: AbortSignal;
+  const stop = connect({ url: "ws://stalled/ws", WebSocketImpl: FakeWS as any, snapshotTimeoutMs: 20,
+    fetchImpl: ((_url: string, init: RequestInit) => { signal = init.signal!; requests++;
+      return requests === 1 ? new Promise(() => {}) : Promise.resolve({ ok: true, json: async () => snapshot }); }) as any });
+  try {
+    const old = FakeWS.last;
+    void old.onmessage({ data: JSON.stringify({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} }) });
+    await Bun.sleep(50);
+    expect(signal.aborted).toBe(true); expect(store.state.conn).toBe("reconnecting");
+    await Bun.sleep(1100); expect(FakeWS.last).not.toBe(old);
+    await FakeWS.last.onmessage({ data: JSON.stringify({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} }) });
+    expect(requests).toBe(2); expect(store.state.conn).toBe("ok");
+  } finally { stop(); }
+});

@@ -73,3 +73,13 @@ test("the ask chip reads the declaration, not the text", () => {
   // ...but a `?` body from a non-typing source is the request, and the reader must show what was actually sent.
   expect(requestRows([{ ...m("? please fix the parser"), source: "github" }], {})[0].text).toBe("? please fix the parser");
 });
+
+test("identical concurrent sends share one in-flight POST", async () => {
+  let finish!: (r: Response) => void; let calls = 0;
+  globalThis.fetch = (() => { calls++; return new Promise(r => { finish = r; }); }) as any;
+  const sender = createMessageSender();
+  const first = sender("myapp refactor"), second = sender("myapp refactor");
+  expect(calls).toBe(1);
+  finish(new Response(JSON.stringify({ message_id: "m" }), { status: 202 }));
+  expect(await first).toEqual({ message_id: "m" }); expect(await second).toEqual({ message_id: "m" });
+});

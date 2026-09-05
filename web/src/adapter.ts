@@ -95,8 +95,18 @@ const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label
  *  while the task is waiting, and chatQuestion reads `t.question.q`. Checking only that the task exists is the shape that
  *  took the whole sync() down on reload (#24) — and came back once already, so the branch now lives here, where a test can reach it. */
 export const promotedQuestionTask = (m: Pick<Message, "role">, task: DemoTask | undefined): DemoTask | null => (m.role === "question" && task?.question ? task : null);
+/** Successful detail loads are cached; a failed request can be selected again without evicting a newer load. */
+export function createDetailLoader<T>(fetchDetail: (uuid: string) => Promise<T>) {
+  let selected: { uuid: string } | null = null;
+  return (uuid: string): Promise<T> | null => {
+    if (selected?.uuid === uuid) return null;
+    const attempt = { uuid }; selected = attempt;
+    return fetchDetail(uuid).catch(error => { if (selected === attempt) selected = null; throw error; });
+  };
+}
 export function installAdapter() {
-  const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0; let loadedDetail: string | null = null;
+  const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0;
+  const loadDetail = createDetailLoader(api.taskDetail);
   const selectionKey = "relay-selected-task"; let restoreSelection = true;
   const submitMessage = api.createMessageSender();
   const ctx = (): Ctx => ({ projects: store.state.projects, tasks: store.state.tasks });
@@ -113,7 +123,7 @@ export function installAdapter() {
     registerProject: (p: { name: string; path: string; description: string; keywords: string[] }) => run("project registration", api.registerProject(p)), removeProject: (id: string) => run("project removal", api.removeProject(id)),
     redispatch: (messageId: string) => run("retry", api.redispatch(messageId)),
     stopForeign: (key: string) => run("stop", api.stopForeign(key)),           // the one write the dashboard can aim at a session relay does not own
-    loadDetail: (t: DemoTask) => { if (loadedDetail === t.uuid) return; loadedDetail = t.uuid; api.taskDetail(t.uuid).then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).filter((e) => isTimelineEvent(e.type)).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
+    loadDetail: (t: DemoTask) => { const request = loadDetail(t.uuid); if (!request) return; request.then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).filter((e) => isTimelineEvent(e.type)).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
   };
   D.relay = relay;
   const syncTasks = (uuids: Iterable<string>) => {

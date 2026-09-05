@@ -6,6 +6,7 @@ import { runInNewContext } from "node:vm";
 const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
 const fitCode = app.slice(app.indexOf("function graphBoxes(){"), app.indexOf("function maybeFit(){"));
 function scene(width: number, height: number, layout: string, populated = false) {
+  // Deliberately start at the old geometry: fit must recalculate it, including after a resize.
   const hint = { style: { left: "278px", top: "38px", width: "400px" },
     get offsetLeft() { return parseFloat(this.style.left); }, get offsetTop() { return parseFloat(this.style.top); },
     get offsetWidth() { return parseFloat(this.style.width); }, offsetHeight: 80 };

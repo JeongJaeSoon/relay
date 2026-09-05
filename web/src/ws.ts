@@ -2,7 +2,7 @@ import type { WsFrame, TasksSnapshot } from "@shared/types.ts";
 import { readToken } from "./consts.ts";
 import { store } from "./store.ts";
 /** hello → (first load or far behind) snapshot + buffered frames | (reconnect) replay until seq reaches hello.as_of_seq → live. The cursor only moves with applied frames. */
-export function connect(opts: { url?: string; WebSocketImpl?: typeof WebSocket; fetchImpl?: typeof fetch } = {}) {
+export function connect(opts: { url?: string; WebSocketImpl?: typeof WebSocket; fetchImpl?: typeof fetch; snapshotTimeoutMs?: number } = {}) {
   const WS = opts.WebSocketImpl ?? WebSocket; const f = opts.fetchImpl ?? fetch; const token = readToken(); const tok = encodeURIComponent(token);
   const base = opts.url ?? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
   let backoff = 1000; let first = true; let stopped = false;
@@ -20,9 +20,14 @@ export function connect(opts: { url?: string; WebSocketImpl?: typeof WebSocket; 
       if (fr.type === "hello") {
         const behind = fr.as_of_seq - store.state.seq; store.applyFrame(fr);
         if (first || behind > 5000) {                                          // (re)load the snapshot, then apply what arrived meanwhile
-          buffering = true; const r = await f("/api/tasks", { headers: { authorization: `Bearer ${token}` }, signal: abort.signal });
-          if (!r.ok) throw new Error(`snapshot failed: ${r.status}`);
-          const snap = (await r.json()) as TasksSnapshot;
+          buffering = true;
+          const timeout = setTimeout(() => { abort.abort(); if (!closed && !stopped) ws.close(); }, opts.snapshotTimeoutMs ?? 10_000);
+          let snap: TasksSnapshot;
+          try {
+            const r = await f("/api/tasks", { headers: { authorization: `Bearer ${token}` }, signal: abort.signal });
+            if (!r.ok) throw new Error(`snapshot failed: ${r.status}`);
+            snap = (await r.json()) as TasksSnapshot;
+          } finally { clearTimeout(timeout); }
           if (closed || stopped) return;   // an old fetch must never overwrite a newer connection's snapshot
           store.applySnapshot(snap);
           for (const b of buf) if (b.seq > snap.as_of_seq) store.applyFrame(b); buf.length = 0; buffering = false; first = false; store.setConn("ok");
