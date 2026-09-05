@@ -26,12 +26,12 @@ export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
 }
 /** A session relay only watches. Deliberately NOT a DemoTask: it has no id, project, size, permit, branch or verdict,
  *  and the graph must never let one be mistaken for a task relay is running. */
-export interface DemoForeign { key: string; title: string; sid: string; short: string; cwd: string; state: "running" | "idle" | "unknown"; stateLabel: string; kind: string; pid: number | null; startedAt: Date | null; firstSeen: Date; lastSeen: Date }
+export interface DemoForeign { key: string; title: string; sid: string; short: string; cwd: string; directoryPath: string | null; state: "running" | "idle" | "unknown"; stateLabel: string; kind: string; pid: number | null; startedAt: Date | null; firstSeen: Date; lastSeen: Date }
 export function toDemoForeign(f: ForeignSession): DemoForeign {
   const dir = (f.cwd ?? "").replace(/\/+$/, "");
   const state = f.busy == null ? "unknown" : f.busy ? "running" : "idle";     // `agents --json` says nothing about a session it reports no status for
   return { key: f.session_id, title: f.name?.trim() || dir.split("/").pop() || `session ${f.session_id.slice(0, 8)}`,
-    sid: f.session_id, short: f.short_id ?? "—", cwd: dir || "—", state, stateLabel: { running: "Running", idle: "Idle", unknown: "Unknown" }[state],
+    sid: f.session_id, short: f.short_id ?? "—", cwd: dir || (f.cwd ? "/" : "—"), directoryPath: f.cwd || null, state, stateLabel: { running: "Running", idle: "Idle", unknown: "Unknown" }[state],
     kind: f.kind === "bg" ? "background" : f.kind ?? "", pid: f.pid, startedAt: f.started_at ? new Date(f.started_at) : null, firstSeen: new Date(f.first_seen), lastSeen: new Date(f.last_seen) };
 }
 const demoOf = (uuid: string | null | undefined): DemoTask | undefined => { if (!uuid) return undefined; const t = store.state.tasks[uuid]; return t ? D.S?.tasks?.get(t.display_id) ?? undefined : undefined; };
