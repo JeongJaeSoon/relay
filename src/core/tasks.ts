@@ -213,7 +213,7 @@ export class TaskService {
     // registered. Enqueued stops-then-removes, because the generations share one worktree: nothing may be removed
     // while anything is still running in it.
     const key = String(now());
-    if (t.short_id || t.session_id || t.process_state === "alive" || t.process_state === "starting") this.d.outbox.enqueue(taskUuid, `close-stop:${key}`, { kind: "stop", reason: "close" });
+    this.d.outbox.enqueue(taskUuid, `close-stop:${key}`, { kind: "stop", reason: "close" });
     this.d.outbox.reapStops(t, "close");
     this.d.outbox.enqueue(taskUuid, `close-rm:${key}`, { kind: "rm" });
     this.d.outbox.reapRms(t);

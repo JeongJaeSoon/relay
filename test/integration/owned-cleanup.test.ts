@@ -124,3 +124,22 @@ test("an interrupt with only an unknown stop exposes cleanup retry and blocks re
   expect(loadTask(s.db, s.uuid)).toMatchObject({ status: "cancelled", cleanup_pending: false, process_state: "stopped" });
   expect(s.runner.calls.filter(c => ["spawn", "resume"].includes(c.kind))).toHaveLength(starts);
 });
+
+test("unknown spawn close observes the fresh roster and refuses ambiguous ownership", async () => {
+  const s=await buildTestApp(decide({action:"new_task",project:"myapp",title:"unknown spawn",size:"small",prompt:"read only",confidence:"high"}));
+  const spawn=s.runner.spawn.bind(s.runner);
+  s.runner.spawn=async spec=>{await spawn(spec);throw new Error("lost spawn result");};
+  await s.req("POST","/api/messages",{client_message_id:"unknown-spawn",text:"read only"});await s.settle(120);
+  const t=s.db.query("select uuid from tasks").get() as any;
+  await s.req("POST",`/api/tasks/${t.uuid}/close`);await s.outbox.run(t.uuid);
+  expect(loadTask(s.db,t.uuid)!.status).not.toBe("closed");
+  expect(s.runner.calls.filter(c=>["stop","rm"].includes(c.kind))).toHaveLength(0);
+  expect([...s.runner.rows.values()].filter(r=>r.alive)).toHaveLength(1);
+  expect(s.db.query("select state from commands where kind='stop'").get()).toEqual({state:"unknown"});
+  const row=[...s.runner.rows.values()][0]!;
+  // Only the authenticated hook, not the matching display name, establishes ownership.
+  await s.hookReq(t.uuid,{hook_event_name:"SessionStart",source:"startup",session_id:row.session_id,cwd:row.cwd});
+  await s.req("POST",`/api/tasks/${t.uuid}/retry-cleanup`);await s.outbox.run(t.uuid);
+  expect(loadTask(s.db,t.uuid)!.status).toBe("closed");
+  expect(s.runner.rows.size).toBe(0);
+});

@@ -371,6 +371,12 @@ export class Outbox {
       case "stop": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "stop"); return; }
         const rows = await this.runner.list(true);
+        if (!t.session_id && !t.short_id) {
+          const attempts = this.db.query("select payload_json from commands where task_uuid=? and kind='spawn' and attempts>0").all(t.uuid) as { payload_json: string }[];
+          const names = new Set(attempts.map(a => (JSON.parse(a.payload_json) as { spec: SpawnSpec }).spec.name));
+          const candidates = rows.filter(r => names.has(r.name ?? ""));
+          if (candidates.length) throw new Error(`unresolved spawn: roster candidates ${candidates.map(r => r.short_id ?? r.session_id ?? "unknown").join(", ")} — ownership must be reconciled before close`);
+        }
         const row = this.cleanupRow(t, rows);
         if (row && !row.short_id) throw new Error("stop target has no short id");
         if (row?.short_id) { await this.runner.stop(row.short_id); if (!(await this.waitGone(row.short_id))) throw new Error("stop not confirmed"); }
