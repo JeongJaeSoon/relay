@@ -14,10 +14,15 @@ function inlineText(node,text){
   node.append(document.createTextNode(source.slice(end)));
   return node;
 }
+function questionKey(t){return t.question?JSON.stringify([t.question.key??null,t.question.q,t.question.chips]):null}
 function questionOption(t,choice){
+  const renderedQuestion=questionKey(t);
   const b=inlineText(el("button","chip question-option"),choice);
-  b.dataset.focusKey=JSON.stringify(["answer",t.uuid||t.id,t.question?.q,choice]);
-  b.addEventListener("click",()=>answerQuestion(t,choice));
+  b.dataset.focusKey=JSON.stringify(["answer",t.uuid||t.id,renderedQuestion,choice]);
+  b.addEventListener("click",()=>{
+    if(!renderedQuestion||questionKey(t)!==renderedQuestion||!t.question.chips.includes(choice))return;
+    answerQuestion(t,choice);
+  });
   return b;
 }
 const pad=n=>String(n).padStart(2,"0");
