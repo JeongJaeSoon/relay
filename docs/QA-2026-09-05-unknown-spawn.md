@@ -15,3 +15,7 @@ A second isolated server ran on port 8807 with its own home/logs/binary. The QA 
 Close stayed `error` with an unknown stop naming the candidate; it did not stop or remove a row on name alone. The QA harness then replayed an authenticated SessionStart for that exact real session through HTTP, using its recorded generation and worktree. Retry cleanup converged after that identity evidence. This is deliberate hook-delay injection, not a claim that the native CLI naturally delayed its hook in this run.
 
 Final native audit: the QA task was `closed`, stop/rm were `applied`, one process generation was recorded, the actual session was absent from the Claude roster, and the disposable repository contained only its original main worktree/branch at `d0a6196e8b19861f46108e91636a5e10862edc84`. Combined with PR #53, all eight QA session rows were removed; unrelated sessions were observed only.
+
+Browser verification on the isolated server confirmed Connected, Archived, stopped, zero running/queued tasks, and both external sessions still watch-only.
+
+![Unknown-spawn cleanup complete](qa/2026-09-05/unknown-spawn/complete.png)
