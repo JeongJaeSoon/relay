@@ -2,6 +2,23 @@
 /* ================= helpers ================= */
 const $=s=>document.querySelector(s);
 function el(tag,cls,txt){const n=document.createElement(tag);if(cls)n.className=cls;if(txt!=null)n.textContent=txt;return n}
+/* Only paired single backticks are presentation markup. Never interpret HTML,
+   alter the source answer, or consume unmatched/multiline/backtick runs. */
+function inlineText(node,text){
+  const source=String(text??""),pattern=/(?<!`)`([^`\n]+)`(?!`)/g;
+  let end=0;
+  for(const match of source.matchAll(pattern)){
+    node.append(document.createTextNode(source.slice(end,match.index)),el("code",null,match[1]));
+    end=match.index+match[0].length;
+  }
+  node.append(document.createTextNode(source.slice(end)));
+  return node;
+}
+function questionOption(t,choice){
+  const b=inlineText(el("button","chip question-option"),choice);
+  b.addEventListener("click",()=>answerQuestion(t,choice));
+  return b;
+}
 const pad=n=>String(n).padStart(2,"0");
 const clock=d=>pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds());
 function dur(ms){const s=Math.floor(ms/1000);return pad(Math.floor(s/60))+":"+pad(s%60)}
@@ -54,18 +71,16 @@ function ttagBtn(t){
 function chatMsg(t,text){
   const wrap=el("div","m-row");
   if(t)wrap.append(ttagBtn(t));
-  wrap.append(el("div","m-sys",text));
+  wrap.append(inlineText(el("div","m-sys"),text));
   msgs.append(wrap);scrollChat();
 }
 function chatQuestion(t){
   const wrap=el("div","m-row");
   wrap.append(ttagBtn(t));
-  wrap.append(el("div","m-sys",t.question.q));
+  wrap.append(inlineText(el("div","m-sys"),t.question.q));
   const chips=el("div","m-chips");chips.dataset.task=t.id;
   t.question.chips.forEach(c=>{
-    const b=el("button","chip",c);
-    b.addEventListener("click",()=>answerQuestion(t,c));
-    chips.append(b);
+    chips.append(questionOption(t,c));
   });
   wrap.append(chips);
   msgs.append(wrap);scrollChat();
@@ -94,11 +109,11 @@ function ledgerRowEl(r){
   r.taskIds.forEach(id=>{const tt=S.tasks.get(id);if(tt)st.append(ttagBtn(tt))});                 /* a split made several — name every one */
   if(r.source!=="user")st.append(el("span","lg-src",r.source));
   row.append(st);
-  if(r.answer)row.append(el("div","lg-ans "+(r.answerKind||""),r.answer));
+  if(r.answer)row.append(inlineText(el("div","lg-ans "+(r.answerKind||"")),r.answer));
   const acts=el("div","lg-acts");
   r.actions.forEach(a=>{
     if(a==="answer"){                                                                     /* the task's own options — the same chips the chat offers */
-      if(t&&t.question)t.question.chips.forEach(c=>{const b=el("button","chip",c);b.addEventListener("click",()=>answerQuestion(t,c));acts.append(b)});
+      if(t&&t.question)t.question.chips.forEach(c=>acts.append(questionOption(t,c)));
       return;
     }
     const spec=LEDGER_ACTS[a];if(!spec)return;
@@ -448,12 +463,10 @@ function renderDetail(){
 
   if(t.status==="wait"&&t.question){
     const q=el("div","d-q st-wait");
-    q.append(el("div","qt",t.question.q));
+    q.append(inlineText(el("div","qt"),t.question.q));
     const chips=el("div","chips");
     t.question.chips.forEach(c=>{
-      const b=el("button","chip",c);
-      b.addEventListener("click",()=>answerQuestion(t,c));
-      chips.append(b);
+      chips.append(questionOption(t,c));
     });
     q.append(chips);body.append(q);
   }
