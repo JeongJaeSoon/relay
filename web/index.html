@@ -71,6 +71,12 @@ body{
 }
 button,input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--c-run);outline-offset:2px}
+.skip-link{position:fixed;top:-100px;left:8px;z-index:200;background:var(--surface);padding:8px 12px;border:2px solid var(--accent);border-radius:6px}
+.skip-link:focus{top:8px}
+.skip-link + .skip-link:focus{left:190px}
+.chat-switch{display:none}
+.composer-scope{font-size:var(--fs-micro);color:var(--muted);padding:2px 12px 0}
+button.lg-msg{display:-webkit-box;width:100%;padding:0;border:0;background:transparent;text-align:left;color:var(--text)}
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 
 /* ---------- status color system: one class, three usages ---------- */
@@ -155,6 +161,7 @@ header{
 }
 .s-item:hover{background:var(--surface2)}
 .s-item.sel{background:var(--accent-soft);border-left-color:var(--accent)}
+.s-item.sel .s-id,.s-item.sel .s-elapsed,.s-item.sel .s-location{color:var(--text)}
 .s-item.rel{border-left-color:var(--accent)}
 .s-item .dot{margin-top:5px}
 .s-item .tt{font-size:var(--fs-body);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -262,6 +269,7 @@ header{
   font-size:14px;line-height:1;color:var(--text);
 }
 .ct-btn:hover{background:var(--surface2)}
+#zactual{font-size:10px;font-variant-numeric:tabular-nums}
 #emptyHint{
   position:absolute;left:32px;top:110px;width:224px;display:flex;flex-direction:column;
   gap:4px;color:var(--muted);pointer-events:none;font-size:var(--fs-small);
@@ -365,7 +373,15 @@ header{
 .lg-empty{color:var(--muted);font-size:var(--fs-micro);padding:4px 0;display:flex;flex-direction:column;gap:7px;align-items:flex-start}
 .pill.pulse{animation:lgPulse 1s ease-in-out infinite}
 @keyframes lgPulse{50%{opacity:.35}}
-@container (max-width:760px){#ledger{display:none}}
+@container (max-width:760px){
+  #ledger{display:none}
+  .chat-switch{display:flex;gap:6px;letter-spacing:normal}
+  .chat-switch button{min-height:28px;padding:3px 10px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface);cursor:pointer}
+  .chat-switch button[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  .chat-h>span{display:none}
+  #app.show-requests #ledger{display:flex;width:100%;border-left:0}
+  #app.show-requests .chat-main{display:none}
+}
 #msgs{ /* 스크롤 컨테이너는 패널 전체 폭, 내용 열만 920px 중앙 정렬 → 스크롤바가 가장자리에 붙음 */
   flex:1;overflow-y:auto;padding:10px 20px;display:grid;grid-template-columns:minmax(0,920px);justify-content:center;align-content:start;gap:8px;
 }
@@ -626,6 +642,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
   #app .canvas{grid-column:1}
   #app .sidebar{display:none}
   #app.compact-sb-open .sidebar{display:block;position:absolute;grid-area:auto;left:0;top:calc(48px + var(--bh,0px));bottom:var(--chh,232px);width:min(280px,85vw);z-index:25;box-shadow:var(--shadow-lg)}
+  #app.compact-sb-open .detail{visibility:hidden}
   #sidebarBtn{display:flex}
   header{gap:8px;padding:0 10px}
   .brand{gap:5px}
@@ -655,6 +672,8 @@ input[type="checkbox"]{accent-color:var(--accent)}
 </style>
 </head>
 <body>
+<button class="skip-link" id="skipMessage">Skip to message</button>
+<button class="skip-link" id="skipTasks">Skip to task list</button>
 
 <div id="app">
   <header>
@@ -680,7 +699,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
   <div class="rz rz-dt" aria-hidden="true"></div>
   <aside class="sidebar" id="sidebar" aria-label="Task list"></aside>
 
-    <section class="canvas" id="canvas" aria-label="Task graph">
+    <section class="canvas" id="canvas" tabindex="0" aria-label="Task graph. Arrow keys pan, plus and minus zoom, zero shows actual size, Home fits all tasks." title="Arrow keys pan · +/− zoom · 0 actual size · Home fit">
       <div id="world">
         <svg id="edges" width="2400" height="1600" viewBox="0 0 2400 1600" aria-hidden="true"></svg>
         <div class="gw" id="gw">
@@ -707,6 +726,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
       <div class="canvas-tools">
         <button class="ct-btn" id="zin" aria-label="Zoom in">+</button>
         <button class="ct-btn" id="zout" aria-label="Zoom out">−</button>
+        <button class="ct-btn" id="zactual" aria-label="Reset to actual size" title="Actual size (100%)">100%</button>
         <button class="ct-btn" id="zfit" aria-label="Fit to view" title="Fit to view · resume auto-fit">⤢</button>
       </div>
       <div id="minimap" aria-hidden="true"></div>
@@ -714,7 +734,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
     </section>
 
     <aside class="detail" id="detail" aria-label="Task detail">
-      <div class="d-head"><span id="dHead">Task detail</span>
+      <div class="d-head"><span id="dHead" tabindex="-1">Task detail</span>
         <button class="x" id="dClose" aria-label="Close detail">✕</button>
       </div>
       <div class="d-body" id="dBody"></div>
@@ -722,13 +742,16 @@ input[type="checkbox"]{accent-color:var(--accent)}
 
   <footer class="chat">
     <div class="rz rz-ch" aria-hidden="true"></div>
-    <div class="chat-h">Messages <span class="sub">— only worker summaries are promoted here</span></div>
+    <div class="chat-h"><span>Messages</span><span class="sub">— only worker summaries are promoted here</span>
+      <div class="chat-switch"><button id="showMessages" aria-controls="chatMain" aria-pressed="true">Messages</button><button id="showRequests" aria-controls="ledger" aria-pressed="false">Requests</button></div>
+    </div>
     <div class="chat-body">
-      <div class="chat-main">
+      <div class="chat-main" id="chatMain">
         <div id="msgs" aria-live="polite"></div>
+        <div id="composerScope" class="composer-scope"></div>
         <!-- Enter routes through requestSubmit() and #sendBtn is the submit button: any other button added here needs type="button" -->
         <form class="chat-in" id="chatForm">
-          <textarea id="input" rows="1" autocomplete="off" aria-label="Message" placeholder="Type a message — Enter to send, Shift+Enter for a new line"></textarea>
+          <textarea id="input" rows="1" autocomplete="off" aria-label="Message" aria-describedby="composerScope" placeholder="Type a message — Enter to send, Shift+Enter for a new line"></textarea>
           <button id="askBtn" type="button" aria-pressed="false" title="Ask a question — or start your message with ?">Ask</button>
           <button id="sendBtn" type="submit">Send</button>
         </form>

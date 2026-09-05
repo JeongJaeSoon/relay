@@ -14,9 +14,15 @@ function inlineText(node,text){
   node.append(document.createTextNode(source.slice(end)));
   return node;
 }
+function questionKey(t){return t.question?JSON.stringify([t.question.key??null,t.question.q,t.question.chips]):null}
 function questionOption(t,choice){
+  const renderedQuestion=questionKey(t);
   const b=inlineText(el("button","chip question-option"),choice);
-  b.addEventListener("click",()=>answerQuestion(t,choice));
+  b.dataset.focusKey=JSON.stringify(["answer",t.uuid||t.id,renderedQuestion,choice]);
+  b.addEventListener("click",()=>{
+    if(!renderedQuestion||questionKey(t)!==renderedQuestion||!t.question.chips.includes(choice))return;
+    answerQuestion(t,choice);
+  });
   return b;
 }
 const pad=n=>String(n).padStart(2,"0");
@@ -73,20 +79,31 @@ function locationLabel(name,kind="folder"){
   const row=el("div","s-location");
   row.append(uiIcon(kind),el("span","location-name",name));return row;
 }
+const pathCopyState=new Map();
+function paintPathCopy(box,state){
+  box.querySelector("button").disabled=!box.copyPath||state?.phase==="pending";
+  box.querySelector(".copy-status").textContent=state?.phase==="pending"?"Copying…":state?.phase==="success"?"Path copied.":state?.phase==="error"?"Could not copy. Select the path above to copy manually.":"";
+}
 function pathControl(path,label){
   const box=el("div","path-control");
+  box.copyPath=path;
   box.append(el("div","path-value mono",path||"Not available"));
   const copy=el("button","act copy-path");copy.append(uiIcon("copy"),el("span",null,"Copy "+label.toLowerCase()));copy.disabled=!path;
   const status=el("span","copy-status");status.setAttribute("role","status");
   copy.addEventListener("click",async()=>{
-    copy.disabled=true;status.textContent="Copying…";
+    if(!path||pathCopyState.get(path)?.phase==="pending")return;
+    const state={phase:"pending"};pathCopyState.set(path,state);paintPathCopy(box,state);
     try{
       if(!navigator.clipboard?.writeText)throw new Error("Clipboard unavailable");
-      await navigator.clipboard.writeText(path);status.textContent="Path copied.";
-    }catch{status.textContent="Could not copy. Select the path above to copy manually."}
-    finally{copy.disabled=!path}
+      await navigator.clipboard.writeText(path);state.phase="success";
+    }catch{state.phase="error"}
+    finally{
+      paintPathCopy(box,state);
+      document.querySelectorAll(".path-control").forEach(current=>{if(current.copyPath===path)paintPathCopy(current,state)});
+      if(pathCopyState.size>32)for(const [key,value] of pathCopyState){if(value.phase!=="pending"&&key!==path){pathCopyState.delete(key);break}}
+    }
   });
-  box.append(copy,status);return box;
+  box.append(copy,status);paintPathCopy(box,pathCopyState.get(path));return box;
 }
 
 const tasksArr=()=>[...S.tasks.values()];
@@ -141,8 +158,14 @@ const LEDGER_ACTS={
 };
 function ledgerRowEl(r){
   const row=el("div","lg-row"+(r.bucket==="needs_you"?" attn":""));
-  const text=el("div","lg-msg",r.text);text.title=r.text;
-  text.addEventListener("click",()=>row.classList.toggle("open"));                        /* truncated by default, full text on click */
+  const text=el("button","lg-msg",r.text);text.title=r.text;text.dataset.focusKey="request:"+r.id;
+  row.dataset.request=r.id;
+  if(expandedRequests.has(r.id))row.classList.add("open");
+  text.setAttribute("aria-expanded",String(expandedRequests.has(r.id)));
+  text.addEventListener("click",()=>{
+    const open=row.classList.toggle("open");text.setAttribute("aria-expanded",String(open));
+    if(open)expandedRequests.add(r.id);else expandedRequests.delete(r.id);
+  });
   row.append(text);
   const st=el("div","lg-st");
   const pill=el("span","pill st-"+r.st+(r.disposition==="deciding"?" pulse":""));
@@ -167,9 +190,10 @@ function ledgerRowEl(r){
 }
 function renderLedger(){
   const list=$("#lgList");if(!list)return;
+  const focused=captureFocus();
   const attn=LEDGER.filter(r=>r.bucket==="needs_you").length;
   const count=$("#lgCount");count.hidden=!attn;count.textContent=attn+" need"+(attn===1?"s":"")+" you";
-  document.querySelectorAll("#segLedger button").forEach(b=>b.classList.toggle("on",b.dataset.f===ledgerFilter));
+  document.querySelectorAll("#segLedger button").forEach(b=>{b.classList.toggle("on",b.dataset.f===ledgerFilter);b.setAttribute("aria-pressed",String(b.dataset.f===ledgerFilter))});
   const rows=ledgerFilter==="all"?LEDGER:LEDGER.filter(r=>r.bucket!=="settled");
   list.textContent="";
   if(!rows.length){
@@ -180,9 +204,11 @@ function renderLedger(){
       empty.append(b);
     }
     list.append(empty);
+    restoreFocus(focused,true);
     return;
   }
   rows.forEach(r=>list.append(ledgerRowEl(r)));
+  restoreFocus(focused,true);
 }
 function setLedgerFilter(f){ledgerFilter=f;renderLedger()}
 
@@ -265,6 +291,7 @@ function nodeEl(t){
     foot.append(el("span","n-elapsed mono"),el("span","br mono"));
     n.append(foot);
     n.addEventListener("click",e=>{e.stopPropagation();select(t.id)});
+    n.addEventListener("focus",()=>centerOn(t));
     n.addEventListener("keydown",e=>{
       if(e.key==="Enter"||e.key===" "){e.preventDefault();select(t.id)}
     });
@@ -328,6 +355,7 @@ function foreignEl(f){
     const foot=el("div","n-foot");foot.append(el("span","n-elapsed mono"),el("span","br","watching only"));
     n.append(foot);
     n.addEventListener("click",e=>{e.stopPropagation();selectForeign(f.key)});
+    n.addEventListener("focus",()=>centerOnBox(f));
     n.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();selectForeign(f.key)}});
     nodesBox.append(n);
   }
@@ -418,6 +446,7 @@ const GROUPS=[
   {label:"Done · Archived",match:t=>t.status==="done"||t.status==="closed"},
 ];
 function renderSidebar(){
+  const focused=captureFocus();
   const fam=famOf(S.sel);
   const sb=$("#sidebar"),st=sb.scrollTop;sb.textContent="";
   const overSoft=S.dailyCeiling!=null&&S.usage>S.dailyCeiling*.8;   // no ceiling configured means no limit to be over — the old 1e6 default invented one and warned forever
@@ -435,6 +464,7 @@ function renderSidebar(){
     list.forEach(t=>{
       const it=el("button","s-item st-"+t.status+(S.sel===t.id?" sel":fam.has(t.id)?" rel":"")+(t.status==="closed"?" closed":""));
       it.dataset.task=t.id;
+      it.dataset.focusKey="task:"+t.id;
       it.setAttribute("aria-label",t.id+" · "+t.title+" — "+taskStateLabel(t)+" · "+t.project);
       if(S.sel===t.id)it.setAttribute("aria-current","true");
       const txt=el("div","txt");
@@ -459,6 +489,7 @@ function renderSidebar(){
     fs.forEach(f=>{
       const it=el("button","s-item st-foreign"+(S.fsel===f.key?" sel":""));
       it.dataset.foreign=f.key;
+      it.dataset.focusKey="foreign:"+f.key;
       it.setAttribute("aria-label",f.title+" — "+f.stateLabel+" · "+f.cwd);
       if(S.fsel===f.key)it.setAttribute("aria-current","true");
       const txt=el("div","txt");
@@ -473,6 +504,7 @@ function renderSidebar(){
     sb.append(box);
   }
   sb.scrollTop=st;
+  restoreFocus(focused,true);
 }
 
 /* ================= detail ================= */
@@ -480,6 +512,7 @@ function renderDetail(){
   const body=$("#dBody"),t=S.sel?S.tasks.get(S.sel):null,f=S.fsel?S.foreign.get(S.fsel):null;
   $("#detail").classList.toggle("open",!!(t||f));
   $("#dHead").textContent=f?"Session detail · outside relay":"Task detail";
+  $("#dHead").setAttribute("aria-label",f?"Session detail: "+f.title+", "+f.stateLabel:t?"Task detail: "+t.id+", "+t.title+", "+taskStateLabel(t):"Task detail");
   const st=body.scrollTop,openSet=new Set([...body.querySelectorAll("details[open]")].map(d=>d.dataset.i)); /* restored after the rebuild */
   body.textContent="";
   if(f){renderForeignDetail(body,f);body.scrollTop=st;return}
@@ -588,15 +621,20 @@ function famOf(id){ /* a unit of work = the top-level task plus its subagents */
   const s=new Set();const t=id&&S.tasks.get(id);if(!graphTaskVisible(t))return s;
   const r=(t.sub&&S.tasks.get(t.parent))||t;s.add(r.id);r.children.forEach(c=>s.add(c));return s;
 }
-function select(id){S.sel=id;S.fsel=null;closeCompactSidebar();refresh()}
-function selectForeign(key){S.fsel=key;S.sel=null;closeCompactSidebar();refresh()} /* mutually exclusive with a task selection — there is only one detail panel */
-function clearSel(){S.sel=null;S.fsel=null;refresh()}
+function select(id){selectionOrigin=captureFocus();S.sel=id;S.fsel=null;closeCompactSidebar();refresh();focusDetail()}
+function selectForeign(key){selectionOrigin=captureFocus();S.fsel=key;S.sel=null;closeCompactSidebar();refresh();focusDetail()}
+function clearSel(){
+  const returnFocus=!!document.activeElement?.closest("#detail");
+  S.sel=null;S.fsel=null;refresh();
+  if(returnFocus)restoreFocus(selectionOrigin,true);
+}
 $("#dClose").addEventListener("click",()=>clearSel());
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
     if(PAL.open){closePalette();return}
     if(kedEl.classList.contains("open")){closeKeysEd();return}
     if(N.open||SET.open){N.open=false;SET.open=false;renderNotif();renderSettings()}
+    else if(appEl.classList.contains("compact-sb-open")){closeCompactSidebar();syncOverlayAccess();$("#sidebarBtn").focus()}
     else clearSel();
   }
 });
@@ -608,6 +646,8 @@ function touchView(){view.manual=true;$("#zfit").classList.add("manual")}
 function applyView(smooth){
   world.style.transition=(smooth&&!S.reduce)?"transform .35s cubic-bezier(.22,.61,.36,1)":"none";
   world.style.transform="translate("+view.x+"px,"+view.y+"px) scale("+view.k+")";
+  $("#zactual").textContent=Math.round(view.k*100)+"%";
+  $("#zactual").setAttribute("aria-label","Zoom "+Math.round(view.k*100)+" percent. Reset to actual size");
   updateMinimap();
 }
 function graphBoxes(){
@@ -691,7 +731,16 @@ function zoomBy(f){ /* zoom about the canvas centre */
 }
 $("#zin").addEventListener("click",()=>zoomBy(1.25));
 $("#zout").addEventListener("click",()=>zoomBy(1/1.25));
+$("#zactual").addEventListener("click",()=>zoomBy(1/view.k));
 $("#zfit").addEventListener("click",fit);
+canvas.addEventListener("keydown",e=>{
+  if(e.target!==canvas)return;
+  const delta={ArrowLeft:[40,0],ArrowRight:[-40,0],ArrowUp:[0,40],ArrowDown:[0,-40]}[e.key];
+  if(delta){e.preventDefault();view.x+=delta[0];view.y+=delta[1];touchView();applyView()}
+  else if(["+","=","-","0","Home"].includes(e.key)){
+    e.preventDefault();if(e.key==="Home")fit();else zoomBy(e.key==="0"?1/view.k:e.key==="-"?1/1.25:1.25);
+  }
+});
 let rzT;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{renderAsk();if(S.autofit&&!view.manual)fit();else updateMinimap()},120)});
 
 /* ================= minimap ================= */
@@ -739,8 +788,40 @@ mmEl.addEventListener("pointerdown",e=>{e.stopPropagation();mmEl.setPointerCaptu
 mmEl.addEventListener("pointermove",e=>{if(e.buttons)mmJump(e)});
 
 /* ================= refresh & tick ================= */
+const expandedRequests=new Set();
+let selectionOrigin=null;
+function focusKey(node){return node.dataset.focusKey||node.id||(node.tagName+":"+(node.closest("details")?.dataset.i||node.textContent))}
+function captureFocus(){
+  const node=document.activeElement;
+  if(!node||node===document.body)return null;
+  return {node,key:focusKey(node),root:node.closest("#sidebar,#dBody,#lgList,#nodes,#msgs")?.id};
+}
+function focusVisible(node){return !!node&&node.isConnected&&!node.disabled&&!node.closest("[inert]")&&node.getClientRects().length>0&&getComputedStyle(node).visibility!=="hidden"}
+function restoreFocus(saved,fallback=false){
+  if(!saved)return;
+  let target=focusVisible(saved.node)?saved.node:null;
+  if(!target&&saved.root){
+    target=[...document.getElementById(saved.root).querySelectorAll("button,summary,[tabindex]")].find(n=>focusKey(n)===saved.key&&focusVisible(n));
+  }
+  if(!target&&fallback)target=[ $("#dHead"),$("#sidebarBtn"),$("#palBtn") ].find(focusVisible);
+  if(target&&document.activeElement!==target)target.focus({preventScroll:!!target.closest("#nodes")});
+}
+function focusDetail(){if(focusVisible($("#dHead")))$("#dHead").focus({preventScroll:true})}
+function syncOverlayAccess(){
+  const modal=!!document.querySelector("#palette.open,#keysEd.open");
+  appEl.inert=modal;
+  document.querySelectorAll(".skip-link").forEach(link=>link.inert=modal);
+  const compact=window.matchMedia("(max-width:640px)").matches;
+  const sidebarOpen=compact&&appEl.classList.contains("compact-sb-open");
+  const detailOpen=window.matchMedia("(max-width:980px)").matches&&$("#detail").classList.contains("open")&&!appEl.classList.contains("hide-dt")&&!sidebarOpen;
+  $("#canvas").inert=sidebarOpen||detailOpen;
+  $("#sidebar").inert=detailOpen;
+  $("#detail").inert=sidebarOpen;
+}
 function refresh(){
+  const focused=captureFocus();
   renderNodes();renderEdges();renderSidebar();renderDetail();updateMinimap();renderLedger();
+  syncOverlayAccess();restoreFocus(focused,true);
 }
 setInterval(()=>{
   tasksArr().forEach(t=>{
@@ -850,7 +931,11 @@ function renderCenter(){
     body.append(g);
   });
 }
-function renderNotif(){renderToasts();renderCenter()}
+function renderNotif(){
+  const closing=!N.open&&!!document.activeElement?.closest("#notifCenter");
+  renderToasts();renderCenter();
+  if(closing)notifBtn.focus();
+}
 function renderBanner(){
   const b=$("#banner");b.textContent="";
   const conn=$("#conn");conn.className="conn"+(S.conn==="reconnecting"?" off":S.conn==="replaying"?" sync":"");
@@ -888,10 +973,13 @@ document.addEventListener("click",e=>{
 /* ================= settings ================= */
 const SET={open:false};
 function renderSettings(){
+  const closing=!SET.open&&!!document.activeElement?.closest("#settings");
+  const opening=SET.open&&!$("#settings").classList.contains("open");
   $("#settings").classList.toggle("open",SET.open);
-  document.querySelectorAll("#segTheme button").forEach(b=>b.classList.toggle("on",b.dataset.m===Theme.mode));
-  document.querySelectorAll("#segLayout button").forEach(b=>b.classList.toggle("on",b.dataset.l===S.layout));
-  document.querySelectorAll("#segAlign button").forEach(b=>b.classList.toggle("on",b.dataset.a===RZ.align));
+  if(closing)$("#gearBtn").focus();else if(opening)$("#settings").focus();
+  document.querySelectorAll("#segTheme button").forEach(b=>{b.classList.toggle("on",b.dataset.m===Theme.mode);b.setAttribute("aria-pressed",String(b.dataset.m===Theme.mode))});
+  document.querySelectorAll("#segLayout button").forEach(b=>{b.classList.toggle("on",b.dataset.l===S.layout);b.setAttribute("aria-pressed",String(b.dataset.l===S.layout))});
+  document.querySelectorAll("#segAlign button").forEach(b=>{b.classList.toggle("on",b.dataset.a===RZ.align);b.setAttribute("aria-pressed",String(b.dataset.a===RZ.align))});
   $("#maxwVal").textContent=String(S.maxw);
   const mh=$("#maxwHint");mh.textContent=S.maxw>10?"⚠ over the default":"";mh.title=S.maxw>10?"Above the default of 10 — watch for a spike in subscription usage":""; /* stays one line; the detail goes in the tooltip */
   $("#setAutofit").checked=S.autofit;
@@ -960,15 +1048,19 @@ function applyAlign(){
   updateMinimap();
 }
 function applyPanels(){
+  const focused=captureFocus();
   appEl.classList.toggle("hide-sb",!RZ.sb);
   appEl.classList.toggle("hide-dt",!RZ.dt);
   appEl.classList.toggle("hide-ch",!RZ.ch);
   updateMinimap();
+  syncOverlayAccess();
+  restoreFocus(focused,true);
 }
 function closeCompactSidebar(){appEl.classList.remove("compact-sb-open");$("#sidebarBtn").setAttribute("aria-expanded","false")}
 function togglePanel(which){
   if(which==="sb"&&window.matchMedia("(max-width:640px)").matches){
-    const open=appEl.classList.toggle("compact-sb-open");$("#sidebarBtn").setAttribute("aria-expanded",String(open));return;
+    const open=appEl.classList.toggle("compact-sb-open");$("#sidebarBtn").setAttribute("aria-expanded",String(open));syncOverlayAccess();
+    if(open)$("#sidebar").querySelector("button")?.focus();else $("#sidebarBtn").focus();return;
   }
   RZ[which]=!RZ[which];applyPanels();fit();saveRZ();
 }
@@ -1061,13 +1153,16 @@ function commands(){
   ];
 }
 function togglePalette(){PAL.open?closePalette():openPalette()}
+let paletteOrigin=null;
 function openPalette(){
+  if(kedEl.classList.contains("open"))return;
+  paletteOrigin=captureFocus();
   PAL.open=true;palEl.classList.add("open");
   N.open=false;SET.open=false;renderNotif();renderSettings();
-  palInput.value="";PAL.idx=0;renderPal();palInput.focus();
+  palInput.value="";PAL.idx=0;renderPal();syncOverlayAccess();palInput.focus();
 }
 $("#palBtn").addEventListener("click",e=>{e.stopPropagation();togglePalette()});
-function closePalette(){PAL.open=false;palEl.classList.remove("open");palInput.blur()}
+function closePalette(){PAL.open=false;palEl.classList.remove("open");syncOverlayAccess();restoreFocus(paletteOrigin,true)}
 function renderPal(){
   const q=palInput.value.trim().toLowerCase();
   PAL.list=commands().filter(c=>!q||q.split(/\s+/).every(n=>c.t.toLowerCase().includes(n)));
@@ -1097,13 +1192,16 @@ palEl.addEventListener("click",e=>{if(e.target===palEl)closePalette()});
 
 /* ================= shortcuts JSON editor ================= */
 const kedEl=$("#keysEd");
+let keysOrigin=null;
 function openKeysEd(){
+  keysOrigin=captureFocus();
   kedEl.classList.add("open");
+  syncOverlayAccess();
   $("#kedText").value=JSON.stringify(KEYS,null,2);
   $("#kedErr").textContent="";
   $("#kedText").focus();
 }
-function closeKeysEd(){kedEl.classList.remove("open")}
+function closeKeysEd(){kedEl.classList.remove("open");syncOverlayAccess();restoreFocus(keysOrigin,true)}
 $("#keysBtn").addEventListener("click",()=>{SET.open=false;renderSettings();openKeysEd()});
 $("#kedSave").addEventListener("click",()=>{
   try{
@@ -1135,11 +1233,12 @@ const askActive=()=>askOn||!!askTask||ASK_RE.test(input.value);
 function renderAsk(){
   const a=askActive();
   askBtn.setAttribute("aria-pressed",a?"true":"false");
+  $("#composerScope").textContent=askTask?"Ask about "+askTask.id+" · transcript question":a?"Ask · answered here":"Message · routed by Relay";
   const compact=input.clientWidth>0&&input.clientWidth<360;
   input.placeholder=askTask?"Ask about "+askTask.id+(compact?"…":" — read from its transcript, never sent to the worker"):compact?(a?"Ask a question…":"Message…"):a?PH.ask:PH.msg;
   autogrow();
 }
-function askAbout(t){if(sending)return;askTask={uuid:t.uuid,id:t.id};askOn=true;renderAsk();input.focus()}
+function askAbout(t){if(sending)return;askTask={uuid:t.uuid,id:t.id};askOn=true;showChatPane("messages");if(!RZ.ch)togglePanel("ch");renderAsk();input.focus()}
 askBtn.addEventListener("click",()=>{
   if(askActive()){askOn=false;askTask=null;input.value=input.value.replace(ASK_RE,"");autogrow()}else askOn=true;
   renderAsk();input.focus();
@@ -1172,6 +1271,40 @@ input.value=localStorage.getItem(DRAFT)||"";autogrow(); /* a long message surviv
 /* A classic script's top-level const is not a window property — expose only what web/src/adapter.ts reads
    (function declarations such as el, chatUser, notify, relayout, refresh and select are already on the global object). */
 Object.assign(window,{S,N,LEDGER,msgs,gwEl});
+
+function showChatPane(pane){
+  appEl.classList.toggle("show-requests",pane==="requests");
+  $("#showMessages").setAttribute("aria-pressed",String(pane!=="requests"));
+  $("#showRequests").setAttribute("aria-pressed",String(pane==="requests"));
+}
+$("#showMessages").addEventListener("click",()=>showChatPane("messages"));
+$("#showRequests").addEventListener("click",()=>showChatPane("requests"));
+$("#skipMessage").addEventListener("click",()=>{if(!RZ.ch)togglePanel("ch");showChatPane("messages");input.focus()});
+$("#skipTasks").addEventListener("click",()=>{
+  if(window.matchMedia("(max-width:640px)").matches){if(!appEl.classList.contains("compact-sb-open"))togglePanel("sb")}
+  else {if(!RZ.sb)togglePanel("sb");if($("#sidebar").inert)clearSel()}
+  $("#sidebar").querySelector("button")?.focus();
+});
+function reconcileFocusVisibility(){
+  const focused=captureFocus();syncOverlayAccess();
+  if(focused&&!focusVisible(focused.node)){
+    if(focused.node.closest("#ledger")&&focusVisible($("#showRequests")))$("#showRequests").focus();
+    else if(focused.node.closest(".chat-main")&&focusVisible($("#showMessages")))$("#showMessages").focus();
+    else restoreFocus(focused,true);
+  }
+}
+window.addEventListener("resize",reconcileFocusVisibility);
+new ResizeObserver(reconcileFocusVisibility).observe($(".chat"));
+function trapModalTab(e){
+  if(e.key!=="Tab")return;
+  const modal=document.querySelector("#keysEd.open,#palette.open");if(!modal)return;
+  const controls=[...modal.querySelectorAll("button,input,textarea,select,a[href],[tabindex]")].filter(n=>n.tabIndex>=0&&focusVisible(n));
+  const index=controls.indexOf(document.activeElement);
+  if(controls.length&&(index<0||(!e.shiftKey&&index===controls.length-1)||(e.shiftKey&&index===0))){
+    e.preventDefault();controls[e.shiftKey?controls.length-1:0].focus();
+  }
+}
+document.addEventListener("keydown",trapModalTab);
 
 /* ================= boot ================= */
 layout();refresh();fit();renderNotif();renderSettings();renderBanner();renderAsk(); /* the empty screen anchors top-left the same way a populated one does */

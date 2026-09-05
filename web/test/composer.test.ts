@@ -17,11 +17,12 @@ function composer(send: (...args: any[]) => Promise<boolean>) {
     });
     return controls.get(id);
   };
-  const context: any = { $, relay: { send }, localStorage: {
+  const panes: string[] = [];
+  const context: any = { $, RZ: { ch: true }, showChatPane: (pane: string) => panes.push(pane), relay: { send }, localStorage: {
     getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => storage.set(k, v), removeItem: (k: string) => storage.delete(k),
   } };
   runInNewContext(app.match(/^function send\(text\).*$/m)![0] + "\n" + section, context);
-  return { input: $("#input"), button: $("#sendBtn"), ask: $("#askBtn"), storage,
+  return { input: $("#input"), button: $("#sendBtn"), ask: $("#askBtn"), storage, panes,
     type(text: string) { $("#input").value = text; $("#input").handlers.input(); },
     submit: () => $("#chatForm").requestSubmit(),
     askAbout: (t: any) => context.askAbout(t),
@@ -32,6 +33,7 @@ test("failed submission retains the draft and task-scoped Ask for retry", async 
   const calls: any[] = []; let ok = false;
   const c = composer(async (...args) => { calls.push(args); return ok; });
   c.askAbout({ uuid: "uuid-1", id: "T-01" }); c.type("어떤 파일을 확인했어?");
+  expect(c.panes).toEqual(["messages"]);
   await c.submit();
   expect(c.input.value).toBe("어떤 파일을 확인했어?");
   expect(c.storage.get("relay-draft")).toBe(c.input.value);
