@@ -799,10 +799,13 @@ function restoreFocus(saved,fallback=false){
     target=[...document.getElementById(saved.root).querySelectorAll("button,summary,[tabindex]")].find(n=>focusKey(n)===saved.key&&focusVisible(n));
   }
   if(!target&&fallback)target=[ $("#dHead"),$("#sidebarBtn"),$("#palBtn") ].find(focusVisible);
-  if(target&&document.activeElement!==target)target.focus({preventScroll:true});
+  if(target&&document.activeElement!==target)target.focus({preventScroll:!!target.closest("#nodes")});
 }
 function focusDetail(){if(focusVisible($("#dHead")))$("#dHead").focus({preventScroll:true})}
 function syncOverlayAccess(){
+  const modal=!!document.querySelector("#palette.open,#keysEd.open");
+  appEl.inert=modal;
+  document.querySelectorAll(".skip-link").forEach(link=>link.inert=modal);
   const compact=window.matchMedia("(max-width:640px)").matches;
   const sidebarOpen=compact&&appEl.classList.contains("compact-sb-open");
   const detailOpen=window.matchMedia("(max-width:980px)").matches&&$("#detail").classList.contains("open")&&!appEl.classList.contains("hide-dt")&&!sidebarOpen;
@@ -923,7 +926,11 @@ function renderCenter(){
     body.append(g);
   });
 }
-function renderNotif(){renderToasts();renderCenter()}
+function renderNotif(){
+  const closing=!N.open&&!!document.activeElement?.closest("#notifCenter");
+  renderToasts();renderCenter();
+  if(closing)notifBtn.focus();
+}
 function renderBanner(){
   const b=$("#banner");b.textContent="";
   const conn=$("#conn");conn.className="conn"+(S.conn==="reconnecting"?" off":S.conn==="replaying"?" sync":"");
@@ -961,10 +968,13 @@ document.addEventListener("click",e=>{
 /* ================= settings ================= */
 const SET={open:false};
 function renderSettings(){
+  const closing=!SET.open&&!!document.activeElement?.closest("#settings");
+  const opening=SET.open&&!$("#settings").classList.contains("open");
   $("#settings").classList.toggle("open",SET.open);
-  document.querySelectorAll("#segTheme button").forEach(b=>b.classList.toggle("on",b.dataset.m===Theme.mode));
-  document.querySelectorAll("#segLayout button").forEach(b=>b.classList.toggle("on",b.dataset.l===S.layout));
-  document.querySelectorAll("#segAlign button").forEach(b=>b.classList.toggle("on",b.dataset.a===RZ.align));
+  if(closing)$("#gearBtn").focus();else if(opening)$("#settings").focus();
+  document.querySelectorAll("#segTheme button").forEach(b=>{b.classList.toggle("on",b.dataset.m===Theme.mode);b.setAttribute("aria-pressed",String(b.dataset.m===Theme.mode))});
+  document.querySelectorAll("#segLayout button").forEach(b=>{b.classList.toggle("on",b.dataset.l===S.layout);b.setAttribute("aria-pressed",String(b.dataset.l===S.layout))});
+  document.querySelectorAll("#segAlign button").forEach(b=>{b.classList.toggle("on",b.dataset.a===RZ.align);b.setAttribute("aria-pressed",String(b.dataset.a===RZ.align))});
   $("#maxwVal").textContent=String(S.maxw);
   const mh=$("#maxwHint");mh.textContent=S.maxw>10?"⚠ over the default":"";mh.title=S.maxw>10?"Above the default of 10 — watch for a spike in subscription usage":""; /* stays one line; the detail goes in the tooltip */
   $("#setAutofit").checked=S.autofit;
@@ -1138,13 +1148,16 @@ function commands(){
   ];
 }
 function togglePalette(){PAL.open?closePalette():openPalette()}
+let paletteOrigin=null;
 function openPalette(){
+  if(kedEl.classList.contains("open"))return;
+  paletteOrigin=captureFocus();
   PAL.open=true;palEl.classList.add("open");
   N.open=false;SET.open=false;renderNotif();renderSettings();
-  palInput.value="";PAL.idx=0;renderPal();palInput.focus();
+  palInput.value="";PAL.idx=0;renderPal();syncOverlayAccess();palInput.focus();
 }
 $("#palBtn").addEventListener("click",e=>{e.stopPropagation();togglePalette()});
-function closePalette(){PAL.open=false;palEl.classList.remove("open");palInput.blur()}
+function closePalette(){PAL.open=false;palEl.classList.remove("open");syncOverlayAccess();restoreFocus(paletteOrigin,true)}
 function renderPal(){
   const q=palInput.value.trim().toLowerCase();
   PAL.list=commands().filter(c=>!q||q.split(/\s+/).every(n=>c.t.toLowerCase().includes(n)));
@@ -1174,13 +1187,16 @@ palEl.addEventListener("click",e=>{if(e.target===palEl)closePalette()});
 
 /* ================= shortcuts JSON editor ================= */
 const kedEl=$("#keysEd");
+let keysOrigin=null;
 function openKeysEd(){
+  keysOrigin=captureFocus();
   kedEl.classList.add("open");
+  syncOverlayAccess();
   $("#kedText").value=JSON.stringify(KEYS,null,2);
   $("#kedErr").textContent="";
   $("#kedText").focus();
 }
-function closeKeysEd(){kedEl.classList.remove("open")}
+function closeKeysEd(){kedEl.classList.remove("open");syncOverlayAccess();restoreFocus(keysOrigin,true)}
 $("#keysBtn").addEventListener("click",()=>{SET.open=false;renderSettings();openKeysEd()});
 $("#kedSave").addEventListener("click",()=>{
   try{
@@ -1274,6 +1290,16 @@ function reconcileFocusVisibility(){
 }
 window.addEventListener("resize",reconcileFocusVisibility);
 new ResizeObserver(reconcileFocusVisibility).observe($(".chat"));
+function trapModalTab(e){
+  if(e.key!=="Tab")return;
+  const modal=document.querySelector("#keysEd.open,#palette.open");if(!modal)return;
+  const controls=[...modal.querySelectorAll("button,input,textarea,select,a[href],[tabindex]")].filter(n=>n.tabIndex>=0&&focusVisible(n));
+  const index=controls.indexOf(document.activeElement);
+  if(controls.length&&(index<0||(!e.shiftKey&&index===controls.length-1)||(e.shiftKey&&index===0))){
+    e.preventDefault();controls[e.shiftKey?controls.length-1:0].focus();
+  }
+}
+document.addEventListener("keydown",trapModalTab);
 
 /* ================= boot ================= */
 layout();refresh();fit();renderNotif();renderSettings();renderBanner();renderAsk(); /* the empty screen anchors top-left the same way a populated one does */
