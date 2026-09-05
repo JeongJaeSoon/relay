@@ -19,7 +19,7 @@ Started from refreshed `origin/main` `1cd3ebe` (PR #52). That PR's 357-pass dash
 Four new failure tests failed on the original implementation (25 pass / 4 fail), then passed after the fix. HTTP/dispatcher/hook integration tests exercise a forked worker, close during an in-flight superseded stop, retry through the API, preservation of a foreign row, doctor convergence, and SessionStart/SessionEnd preceding the resume result. A native runner test uses a real failing executable; a roster test refuses false rm success.
 
 - TypeScript check and web build passed.
-- Full suite: **375 pass / 2 opt-in skip / 0 fail**, 1,631 assertions, 56 files.
+- Full suite: **386 pass / 2 opt-in skip / 0 fail**, 1,664 assertions, 56 files.
 - Independent compiled binary smoke passed (version, HTTP/token injection, fail-closed command guard).
 
 ## Actual Claude and server evidence
@@ -58,7 +58,7 @@ Follow-up QA reproduced a second failure: the current session's rm completed whi
 
 The native CLI can remove a resumed session row while leaving the original shared worktree in place. Ownership proof is therefore preserved while that directory exists, through both successful fork deregistration and refusal/unknown outcomes. A fresh full roster makes a retry after actual removal idempotent.
 
-The task response/snapshot derives `cleanup_pending` from the command ledger. Error task details and request cards offer **Retry cleanup**, which calls `POST /api/tasks/<uuid>/retry-cleanup`; it retries outstanding cleanup commands without spawning or resuming a worker. Ordinary Restart is refused while removal remains unfinished. Doctor and the server share the pending-cleanup query.
+The task response/snapshot derives `cleanup_pending` from the command ledger. Error task details and request cards offer **Retry cleanup**, which calls `POST /api/tasks/<uuid>/retry-cleanup`; it retries outstanding cleanup commands without spawning or resuming a worker. Ordinary Restart is refused while any stop or removal remains unfinished. Doctor and the server share the pending-cleanup query.
 
 Actual follow-up runs used tasks `0e179dfa-feb1-493e-a516-4a6f06e1411c` (T-02) and `8945f987-86db-47ef-a8a6-240419a8b088` (T-03), two generations each. A deliberately uncommitted `qa-preserve.txt` made real Claude rm refuse. T-02 exposed the shared-stamp loss, which was fixed and reverified from a fresh T-03 spawn: both the test file and `.relay-owner` survived the refusal. Only the deliberately created test file was then removed.
 
@@ -66,3 +66,7 @@ The browser reloaded T-02 and showed Retry cleanup in its detail and both reques
 
 ![Cleanup-specific action](qa/2026-09-05/owned/retry-cleanup.png)
 ![Cleanup completed without a new worker](qa/2026-09-05/owned/cleanup-complete.png)
+
+## CodeRabbit review fixes
+
+The actual review of `d3ee82f` found two valid gaps. An interrupt may leave only an unresolved stop: both task reads and snapshots now expose `cleanup_pending`, so Restart returns 409 and Retry cleanup stops the existing worker without starting another. For a task with no durable session ID, cleanup treats its short ID as a lookup hint and requires a stamp matching the task, Relay instance, and observed session ID. Missing or mismatched proof leaves the command unknown without calling stop/rm. Cleanup by a known immutable session ID remains possible after another generation removed the shared worktree. Eleven regressions cover the stop-only HTTP path and positive/negative ownership cases for both stop and rm.

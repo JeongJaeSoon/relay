@@ -108,3 +108,19 @@ test("cleanup retry from the dashboard retries disposal without spawning another
   expect(s.runner.calls.filter(c=>["spawn","resume"].includes(c.kind))).toHaveLength(starts);
   expect(s.runner.rows.size).toBe(0);
 });
+
+test("an interrupt with only an unknown stop exposes cleanup retry and blocks restart", async () => {
+  const s = await forkedTask(); const stop = s.runner.stop.bind(s.runner);
+  s.runner.stop = async () => { throw new Error("stop acknowledgement lost"); };
+  await s.req("POST", `/api/tasks/${s.uuid}/interrupt`); await s.outbox.run(s.uuid);
+  expect(s.db.query("select count(*) n from commands where kind='rm'").get()).toEqual({ n: 0 });
+  expect(loadTask(s.db, s.uuid)).toMatchObject({ status: "cancelled", cleanup_pending: true });
+  const snap = await (await s.req("GET", "/api/tasks")).json() as any;
+  expect(snap.tasks.find((t: any) => t.uuid === s.uuid).cleanup_pending).toBe(true);
+  expect((await s.req("POST", `/api/tasks/${s.uuid}/retry`)).status).toBe(409);
+  const starts = s.runner.calls.filter(c => ["spawn", "resume"].includes(c.kind)).length;
+  s.runner.stop = stop;
+  expect((await s.req("POST", `/api/tasks/${s.uuid}/retry-cleanup`)).status).toBe(200); await s.outbox.run(s.uuid);
+  expect(loadTask(s.db, s.uuid)).toMatchObject({ status: "cancelled", cleanup_pending: false, process_state: "stopped" });
+  expect(s.runner.calls.filter(c => ["spawn", "resume"].includes(c.kind))).toHaveLength(starts);
+});

@@ -361,6 +361,25 @@ test("stop retries reconcile an absent identity and do not call a reused short i
   expect(s.runner.rows.get("reused")!.alive).toBe(true);
 });
 
+for (const kind of ["stop", "rm"] as const) for (const proof of ["absent", "task", "instance", "session", "valid"] as const)
+test(`${kind} with only a short id requires a matching session owner stamp (${proof})`, async () => {
+  const s = setup(); const dir = mkdtempSync(join(tmpdir(), "relay-short-owner-"));
+  s.mk("u1", "done", { short_id: "fake1", process_state: "stopped", worktree_path: dir });
+  s.live("u1"); s.runner.rows.get("fake1")!.alive = kind === "stop";
+  if (proof !== "absent") writeFileSync(join(dir, ".relay-owner"), JSON.stringify({
+    task_uuid: proof === "task" ? "foreign" : "u1",
+    relay_instance_id: proof === "instance" ? "other-instance" : "inst",
+    session_id: proof === "session" ? "old-session" : "sid",
+  }));
+  s.ob.enqueue("u1", "cleanup", kind === "stop" ? { kind, reason: "close" } : { kind }); await s.ob.run("u1");
+  if (proof === "valid") expect(s.runner.calls.filter(c => c.kind === kind)).toHaveLength(1);
+  else {
+    expect(s.states()).toEqual(["unknown"]);
+    expect(s.runner.calls).toHaveLength(0);
+    expect(s.runner.rows.get("fake1")!.alive).toBe(kind === "stop");
+  }
+});
+
 for (const outcome of ["refused", "unknown"] as const) test(`ownership stamp survives ${outcome} rm`, async () => {
   const s = setup(); const dir = mkdtempSync(join(tmpdir(), "relay-stamp-"));
   const stamp = { relay_instance_id: "inst", task_uuid: "u1", session_id: "sid" };

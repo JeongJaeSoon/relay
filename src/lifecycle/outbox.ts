@@ -280,6 +280,18 @@ export class Outbox {
   private async verifyRemoved(shortId: string) {
     if ((await this.runner.list(true)).some(r => r.short_id === shortId)) throw new Error(`rm not confirmed: ${shortId} remains registered`);
   }
+  /** A durable session id authorizes cleanup even after its shared worktree has gone. A short id alone is only a
+   *  lookup hint: require a stamp binding the observed session to this task and instance before acting on it. Never
+   *  use the roster's launch cwd, which is shared by unrelated git tasks. */
+  private cleanupRow(t: Task, rows: AgentRow[]): AgentRow | undefined {
+    if (t.session_id) return rows.find(r => r.session_id === t.session_id);
+    const row = rows.find(r => t.short_id && r.short_id === t.short_id);
+    if (!row) return undefined;
+    const owner = readOwner(jobWorktree(row.short_id) ?? t.worktree_path);
+    if (!row.session_id || owner?.task_uuid !== t.uuid || owner.relay_instance_id !== this.deps.instanceId() || owner.session_id !== row.session_id)
+      throw new Error(`cleanup ownership unverified for short id ${t.short_id}`);
+    return row;
+  }
   private async waitGone(shortId: string, ms = 10_000) { const t0 = now(); while (now() - t0 < ms) { const r = (await this.runner.list()).find((x) => x.short_id === shortId); if (!r || !r.alive) return true; await Bun.sleep(300); } return false; }
   private async waitRow(shortId: string, ms = 10_000): Promise<AgentRow | undefined> { const t0 = now(); for (;;) { const r = (await this.runner.list(true)).find((x) => x.short_id === shortId); if (r?.cwd && r.session_id) return r; if (now() - t0 > ms) return r; await Bun.sleep(300); } }
   /** Where this session's `.relay-owner` belongs. For a git project the row's cwd is the PROJECT ROOT, shared by every
@@ -359,7 +371,7 @@ export class Outbox {
       case "stop": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "stop"); return; }
         const rows = await this.runner.list(true);
-        const row = rows.find(r => (t.session_id && r.session_id === t.session_id) || (!t.session_id && t.short_id && r.short_id === t.short_id));
+        const row = this.cleanupRow(t, rows);
         if (row && !row.short_id) throw new Error("stop target has no short id");
         if (row?.short_id) { await this.runner.stop(row.short_id); if (!(await this.waitGone(row.short_id))) throw new Error("stop not confirmed"); }
         // Stamped with the generation we stopped, not with whatever is current after the wait: if a newer one came up
@@ -371,7 +383,7 @@ export class Outbox {
         if (p.target) { await this.reapOne(cmd, t, p.target, "rm"); return; }
         const current = loadTask(this.db, t.uuid)!;
         const rows = await this.runner.list(true); this.assertStopped(current, rows);
-        const row = rows.find(r => (current.session_id && r.session_id === current.session_id) || (!current.session_id && current.short_id && r.short_id === current.short_id));
+        const row = this.cleanupRow(current, rows);
         if (row && !row.short_id) throw new Error("rm target has no short id");
         const r = row?.short_id ? await this.removeSession(current, row.short_id) : current.worktree_path && existsSync(current.worktree_path)
           ? { worktreeKept: true, reason: "session absent from roster but worktree still exists", keptPath: current.worktree_path }
