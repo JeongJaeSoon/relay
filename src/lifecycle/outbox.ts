@@ -158,7 +158,7 @@ export class Outbox {
   private async loop(taskUuid: string): Promise<"empty" | "blocked" | "held" | "error"> {
     for (;;) {
       this.again.delete(taskUuid);
-      const row = this.db.query("select * from commands where task_uuid=? and state in ('pending','unknown') order by (case when kind='stop' then 0 when state='pending' and kind='rm' then 1 else 2 end), rowid limit 1").get(taskUuid) as any;   // Every stop, including an unknown stop, precedes every rm. Stops still bypass blocked sends.
+      const row = this.db.query("select * from commands where task_uuid=? and state in ('pending','unknown') order by (case when state='pending' and kind='stop' then 0 when kind='stop' then 1 when state='pending' and kind='rm' then 2 else 3 end), rowid limit 1").get(taskUuid) as any;   // Every stop, including an unknown stop, precedes every rm. Stops still bypass blocked sends.
       if (!row) return "empty";
       if (row.state === "unknown") return "blocked";                          // I8: an unknown head blocks the queue until the user confirms/retries
       const cmd = rowToCommand(row); const task = loadTask(this.db, taskUuid)!;
@@ -332,7 +332,10 @@ export class Outbox {
       }
       case "stop": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "stop"); return; }
-        if (t.short_id) { await this.runner.stop(t.short_id); if (!(await this.waitGone(t.short_id))) throw new Error("stop not confirmed"); }
+        const rows = await this.runner.list(true);
+        const row = rows.find(r => (t.session_id && r.session_id === t.session_id) || (!t.session_id && t.short_id && r.short_id === t.short_id));
+        if (row && !row.short_id) throw new Error("stop target has no short id");
+        if (row?.short_id) { await this.runner.stop(row.short_id); if (!(await this.waitGone(row.short_id))) throw new Error("stop not confirmed"); }
         // Stamped with the generation we stopped, not with whatever is current after the wait: if a newer one came up
         // meanwhile, this end is about a superseded process and the projection must ignore it.
         if (t.process_state === "alive" || t.process_state === "starting") this.log.emit({ type: "process.ended", task_uuid: t.uuid, causation_id: cmd.id, process_generation: t.process_generation, payload: { generation: t.process_generation, reason: p.reason, crashed: false } });

@@ -334,3 +334,23 @@ test("rm success text without actual deregistration remains unknown", async () =
   expect(loadTask(s.db, "u1")!.status).toBe("error");
   expect(loadTask(s.db, "u1")!.last_summary).toContain("remains registered");
 });
+
+test("an unknown old stop blocks removal but not stopping the current worker", async () => {
+  const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "alive" }); s.live("u1");
+  const c = s.ob.enqueue("u1", "old", { kind: "stop", reason: "old", target: { session_id: "old", short_id: "old" } });
+  s.log.emit({ type: "command.unknown", task_uuid: "u1", payload: { id: c.id, error: "lost acknowledgement" } });
+  s.ob.enqueue("u1", "close-stop", { kind: "stop", reason: "close" });
+  s.ob.enqueue("u1", "close-rm", { kind: "rm" }); await s.ob.run("u1");
+  expect(s.runner.rows.get("fake1")!.alive).toBe(false);
+  expect(s.runner.calls.filter(c => c.kind === "rm")).toHaveLength(0);
+  expect(s.states()).toEqual(["unknown", "applied", "pending"]);
+});
+
+test("stop retries reconcile an absent identity and do not call a reused short id", async () => {
+  const s = setup(); s.mk("u1", "done", { session_id: "old-session", short_id: "reused", process_state: "alive" });
+  s.runner.rows.set("reused", { short_id: "reused", session_id: "foreign", name: "external", cwd: "/foreign", pid: 7, alive: true, busy: false, waiting_for: null, raw: {} });
+  s.runner.stop = async () => { throw new Error("must not stop a foreign identity"); };
+  s.ob.enqueue("u1", "close-stop", { kind: "stop", reason: "close" }); await s.ob.run("u1");
+  expect(s.states()).toEqual(["applied"]);
+  expect(s.runner.rows.get("reused")!.alive).toBe(true);
+});
