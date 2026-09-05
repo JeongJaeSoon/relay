@@ -9,6 +9,8 @@
   cards, and preserve line breaks and long text in messages.
 - Make compact layouts usable with a task-list drawer, bounded scrolling settings/notifications,
   corrected detail placement, chat-container-aware request ledger and unobstructed graph controls.
+- Fit first-launch guidance below Gateway in both graph layouts so an empty session list does
+  not overlap zoom controls or clip at narrow widths.
 - Record source-checkout QA, real Claude worker execution and its limits in `docs/QA-2026-09-05.md`.
 
 ## 0.1.4

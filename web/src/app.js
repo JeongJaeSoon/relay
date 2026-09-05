@@ -167,8 +167,6 @@ function layout(){
   const laneX=parseFloat(gwEl.style.left)||32;
   const laneY0=(parseFloat(gwEl.style.top)||ROW_Y0)+gwEl.offsetHeight+40;
   queued.forEach((t,i)=>{t.x=laneX;t.y=laneY0+i*76});
-  const eh=document.getElementById("emptyHint");
-  eh.style.top=((parseFloat(gwEl.style.top)||ROW_Y0)+6)+"px";eh.style.left=(parseFloat(gwEl.style.left)+gwEl.offsetWidth+36)+"px";
   const ll=document.getElementById("laneLabel");
   ll.style.display=queued.length?"block":"none";
   ll.style.left=(laneX+34)+"px";ll.style.top=(laneY0-19)+"px";
@@ -509,7 +507,7 @@ function famOf(id){ /* a unit of work = the top-level task plus its subagents */
 function select(id){S.sel=id;S.fsel=null;closeCompactSidebar();refresh()}
 function selectForeign(key){S.fsel=key;S.sel=null;closeCompactSidebar();refresh()} /* mutually exclusive with a task selection — there is only one detail panel */
 function clearSel(){S.sel=null;S.fsel=null;refresh()}
-$("#dClose").addEventListener("click",clearSel);
+$("#dClose").addEventListener("click",()=>clearSel());
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
     if(PAL.open){closePalette();return}
@@ -540,9 +538,18 @@ function graphBoxes(){
   });
   return boxes;
 }
+/* Empty guidance is part of the fitted scene, below the gateway and clear of zoom controls. */
+function emptyHintBox(){
+  if(tasksArr().some(t=>t.status!=="closed"))return null;
+  const hint=$("#emptyHint");
+  hint.style.left=gwEl.offsetLeft+"px";
+  hint.style.top=(gwEl.offsetTop+gwEl.offsetHeight+20)+"px";
+  hint.style.width=Math.max(160,Math.min(400,canvas.clientWidth-96))+"px";
+  return {x:hint.offsetLeft,y:hint.offsetTop,w:hint.offsetWidth,h:hint.offsetHeight};
+}
 function fit(){
   view.manual=false;$("#zfit").classList.remove("manual");
-  const boxes=graphBoxes();
+  const boxes=graphBoxes();const hint=emptyHintBox();if(hint)boxes.push(hint);
   const minX=Math.min(...boxes.map(b=>b.x)),minY=Math.min(...boxes.map(b=>b.y));
   const maxX=Math.max(...boxes.map(b=>b.x+b.w)),maxY=Math.max(...boxes.map(b=>b.y+b.h));
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
