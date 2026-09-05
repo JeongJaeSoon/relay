@@ -5,6 +5,7 @@ import { EventLog, loadTask, rowToTask } from "./events.ts";
 import type { PermitPool } from "./permits.ts";
 import { holdsSlot } from "./state.ts";
 import { log as slog } from "../log.ts";
+import { getMeta } from "../db/db.ts";
 
 export class Scheduler {
   private pumping = false; private again = false;
@@ -15,9 +16,10 @@ export class Scheduler {
     try {
       do {
         this.again = false;
-        if (this.isPaused()) break;
+        if (this.isPaused() || getMeta(this.db, "recovering") === "1") break;
         const queued = this.db.query("select * from tasks where status='queued' and parent_uuid is null order by qhead desc, queued_at asc").all().map(rowToTask);
         for (const snap of queued) {
+          if (this.isPaused() || getMeta(this.db, "recovering") === "1") break;
           const t = loadTask(this.db, snap.uuid); if (!t || t.status !== "queued") continue;      // changed while we awaited an earlier onSlot (e.g. interrupted)
           const proj = this.db.query("select is_git from projects where id=?").get(t.project_id) as any;
           // non-git projects run one session at a time: a task whose process is alive (even waiting_input) still occupies the project directory

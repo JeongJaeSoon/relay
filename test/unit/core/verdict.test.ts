@@ -25,6 +25,18 @@ describe("verdict", () => {
     const v = verdict({ last_assistant_message: "waiting", background_tasks: [], session_crons: [] } as any, { ...task, status: "waiting_input", question: { source: "permission", text: "x", options: [], asked_at: 1 } });
     expect(v.status).toBe("waiting_input");
   });
+  test("only explicitly terminal background entries stop blocking a final marker", () => {
+    const last_assistant_message = "RELAY: done\nIntegrated and verified.";
+    for (const status of ["completed", "done", "failed", "killed", "cancelled", "stopped"]) {
+      expect(verdict({ last_assistant_message, background_tasks: [{ type: "subagent", status }, { type: "teammate", status }, { type: "shell", status }] }, task).status).toBe("done");
+    }
+    for (const status of ["running", "idle", "pending", "unknown", undefined]) {
+      expect(verdict({ last_assistant_message, background_tasks: [{ type: "teammate", status }, { status: "completed" }] }, task).status).toBe("running");
+    }
+    expect(verdict({ last_assistant_message, background_tasks: [null] }, task).status).toBe("running");
+    expect(verdict({ last_assistant_message, background_tasks: [{ status: "completed" }], session_crons: [{ status: "completed" }] }, task).status).toBe("running");
+    expect(verdict({ last_assistant_message: "", background_tasks: [{ status: "completed" }] }, task).status).toBe("needs_review");
+  });
   test("chatFor roles", () => {
     expect(chatFor("completed", task, "done!").role).toBe("worker_summary"); expect(chatFor("question", task, "q?").role).toBe("question"); expect(chatFor("error", task, "boom").role).toBe("error"); expect(chatFor("started", task, "").text).toContain("T-01");
   });

@@ -29,12 +29,20 @@ export class UsageGuard {
     const key = `${taskUuid}:${promptId ?? "?"}`; const n = (this.toolCalls.get(key) ?? 0) + 1; this.toolCalls.set(key, n); return n > this.cfg.usage.max_tool_calls_per_turn;
   }
   tick() {
+    if (getMeta(this.db, "recovering") === "1") return;
     const t = now();
     // subagent leases older than their task's wall-clock cap are stuck (SubagentStop never came) → reclaim (B5 ②)
     for (const l of this.db.query("select l.holder_id, t.size, l.acquired_at from permit_leases l join tasks t on t.uuid=l.task_uuid where l.holder_kind='subagent' and l.released_at is null").all() as any[])
       if (t - l.acquired_at > this.cfg.usage.wall_clock_min[l.size as "small" | "normal" | "epic"] * 60_000) this.permits?.release(l.holder_id, "subagent wall-clock");
-    for (const r of this.db.query("select uuid, size, started_at, display_id, title from tasks where parent_uuid is null and status in ('starting','running') and started_at is not null").all() as any[]) {
-      if (t - r.started_at > this.cfg.usage.wall_clock_min[r.size as "small" | "normal" | "epic"] * 60_000) { this.tasks.interrupt(r.uuid); this.system(`⏱ ${r.display_id} ${r.title} — stopped: wall-clock limit exceeded`); }
+    // started_at is the task's original creation attempt, including hours spent
+    // done/paused. Bound the current attempt using durable process/slot times;
+    // otherwise Restart after the deadline is cancelled on the very next tick.
+    for (const r of this.db.query(`select t.uuid, t.size, t.display_id, t.title,
+        max(t.started_at,
+          coalesce((select max(p.started_at) from process_instances p where p.task_uuid=t.uuid and p.generation=t.process_generation and p.ended_at is null),0),
+          coalesce((select max(l.acquired_at) from permit_leases l where l.task_uuid=t.uuid and l.holder_kind='task' and l.released_at is null and l.reason is not 'recovery'),0)) attempt_started_at
+        from tasks t where t.parent_uuid is null and t.status in ('starting','running') and t.paused=0 and t.started_at is not null`).all() as any[]) {
+      if (t - r.attempt_started_at > this.cfg.usage.wall_clock_min[r.size as "small" | "normal" | "epic"] * 60_000) { this.tasks.interrupt(r.uuid); this.system(`⏱ ${r.display_id} ${r.title} — stopped: wall-clock limit exceeded`); }
     }
     const ceiling = this.cfg.usage.daily_ceiling_tokens;
     if (ceiling != null && !this.tasks.paused()) {

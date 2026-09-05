@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 // Exercise the actual fit code: checking document scrollWidth alone misses content clipped by the canvas.
 const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
 const fitCode = app.slice(app.indexOf("function graphBoxes(){"), app.indexOf("function maybeFit(){"));
-function scene(width: number, height: number, layout: string, populated = false) {
+function scene(width: number, height: number, layout: string, populated = false, outside = false) {
   // Deliberately start at the old geometry: fit must recalculate it, including after a resize.
   const hint = { style: { left: "278px", top: "38px", width: "400px" },
     get offsetLeft() { return parseFloat(this.style.left); }, get offsetTop() { return parseFloat(this.style.top); },
@@ -15,11 +15,11 @@ function scene(width: number, height: number, layout: string, populated = false)
   const tasks = populated ? [{ id: "T-01", x: 310, y: 32, status: "done" }] : [];
   const context = { view, S: { layout }, MINZ: .2, canvas: { clientWidth: width, clientHeight: height }, gwEl: gateway,
     $: (selector: string) => selector === "#emptyHint" ? hint : { classList: { remove() {} } },
-    tasksArr: () => tasks, foreignArr: () => [], document: { getElementById: () => ({ offsetWidth: 210, offsetHeight: 90 }) }, applyView() {} };
+    tasksArr: () => tasks, graphTasks: () => tasks, foreignArr: () => outside ? [{ key: "outside", x: 900, y: 40 }] : [], document: { getElementById: () => ({ offsetWidth: 230, offsetHeight: 107 }) }, applyView() {} };
   runInNewContext(fitCode + "\nfit();", context);
   const rect = (el: typeof gateway) => ({ left: view.x + el.offsetLeft * view.k, top: view.y + el.offsetTop * view.k,
     right: view.x + (el.offsetLeft + el.offsetWidth) * view.k, bottom: view.y + (el.offsetTop + el.offsetHeight) * view.k });
-  return { hint: rect(hint), gateway: rect(gateway), view };
+  return { hint: rect(hint), gateway: rect(gateway), outside: rect({ offsetLeft: 900, offsetTop: 40, offsetWidth: 230, offsetHeight: 107 }), view };
 }
 
 test("empty guidance stays inside the canvas and clear of gateway, zoom and legend in both layouts", () => {
@@ -30,6 +30,13 @@ test("empty guidance stays inside the canvas and clear of gateway, zoom and lege
     expect(hint.bottom).toBeLessThanOrEqual(h - 64);
     // Zoom buttons occupy the top-right 30 x 102 px; a hint may pass beside or below them.
     expect(hint.right <= w - 42 || hint.top >= 114).toBe(true);
+  }
+});
+
+test("fitted outside lane clears the zoom toolbar in both layouts", () => {
+  for (const layout of ["tree", "radial"]) for (const [w, h] of [[896, 620], [568, 520], [390, 564], [320, 320]]) {
+    const { outside } = scene(w, h, layout, false, true);
+    expect(outside.right).toBeLessThanOrEqual(w - 60 + .01);
   }
 });
 

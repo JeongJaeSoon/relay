@@ -11,8 +11,16 @@ test("settings json injects every observation hook, deny rules and inbound accep
   // literal values, not $RELAY_* env references: a `--bg` session is started by the supervisor daemon and inherits none of relay's environment (measured 2026-08-31)
   expect(s.hooks.PreToolUse.find((h: any) => h.matcher === "Bash|Edit|Write|MultiEdit|NotebookEdit").hooks[0].command).toBe("/opt/homebrew/bin/relay hook guard --task task-1 --gen 4 --url http://127.0.0.1:8790 --home /home/relay");
   expect(s.hooks.SessionStart[0].hooks[0].command).toBe("/opt/homebrew/bin/relay hook SessionStart --task task-1 --gen 4 --url http://127.0.0.1:8790 --home /home/relay");
-  expect(s.hooks.Stop[0].hooks[0].headers.Authorization).toBe("Bearer HT"); expect(s.hooks.Stop[0].hooks[0].allowedEnvVars).toBeUndefined(); expect(s.hooks.Stop[0].hooks[0].headers["X-Relay-Gen"]).toBe("4");
-  expect(s.hooks.Stop[0].hooks[0].headers["X-Relay-Task"]).toBe("task-1"); expect(s.hooks.Stop[0].hooks[0].timeout).toBe(3);
+  for (const event of ["SessionStart", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"]) {
+    const hook = s.hooks[event][0].hooks[0];
+    expect(hook.type).toBe("command");
+    expect(hook.command).toBe(`/opt/homebrew/bin/relay hook ${event} --task task-1 --gen 4 --url http://127.0.0.1:8790 --home /home/relay`);
+    expect(hook.timeout).toBe(5); expect(hook.headers).toBeUndefined();
+  }
+  expect(s.hooks.PermissionRequest[0].hooks[0].type).toBe("http");
+  expect(s.hooks.PermissionRequest[0].hooks[0].headers.Authorization).toBe("Bearer HT");
+  expect(s.hooks.PermissionRequest[0].hooks[0].headers["X-Relay-Gen"]).toBe("4");
+  expect(s.hooks.PermissionRequest[0].hooks[0].headers["X-Relay-Task"]).toBe("task-1");
   expect(JSON.parse(buildSettingsJson({ port: 1, allowPush: true, maxAgents: 1, bin: "relay" })).hooks.PreToolUse[1].hooks[0].command).toMatch(/ --allow-push$/);
   expect(s.hooks.PermissionRequest[0].hooks[0].timeout).toBe(900);   // held open until the user approves in the dashboard (Task 8)
   expect(s.permissions.deny).toContain("Bash(git push*)"); expect(s.permissions.deny).toContain("Edit(~/.claude/**)"); expect(s.permissions.deny.some((d: string) => d.startsWith("Write("))).toBe(false);   // Write(path) rules are never matched by file permission checks expect(s.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH).toBe("1"); expect(s.env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS).toBe("10");

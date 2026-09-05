@@ -235,7 +235,12 @@ export class TaskService {
   }
   resumeAll() {
     this.d.log.emit({ type: "system.resumed", payload: {} });
-    for (const r of this.d.db.query("select uuid from tasks where paused=1").all() as any[]) this.d.outbox.enqueue(r.uuid, `unpause:${now()}`, { kind: "resume", prompt: "The kill switch has been released. Continue from where you stopped.", marker: marker() });
+    for (const r of this.d.db.query("select uuid from tasks where paused=1").all() as any[]) {
+      // A held follow-up will itself resume the stopped session. Appending an
+      // extra resume leaves an un-runnable command after that follow-up finishes.
+      if (!this.d.db.query("select 1 from commands where task_uuid=? and kind in ('send','resume') and state in ('pending','running')").get(r.uuid))
+        this.d.outbox.enqueue(r.uuid, `unpause:${now()}`, { kind: "resume", prompt: "The kill switch has been released. Continue from where you stopped.", marker: marker() });
+    }
     void this.d.outbox.runAll(); void this.d.scheduler.pump();
   }
   // ---- worker signals ----------------------------------------------------------------------------
@@ -257,6 +262,10 @@ export class TaskService {
     if (v.status === "running") { void this.d.outbox.run(t.uuid); return; }
     if (v.status === "waiting_input") { this.status(t, "waiting_input", { question: v.question }); this.d.permits.releaseTask(t.uuid, "waiting_input"); this.chat(chatFor(v.reason === "marker blocked" ? "blocked" : "question", t, v.question!.text + (v.question!.options.length ? ` (${v.question!.options.join(" / ")})` : ""))); }
     else { this.status(t, v.status, { ended_at: now(), last_summary: v.summary ?? t.last_summary }); this.d.permits.releaseTask(t.uuid, v.status); if (v.status === "done") this.chat(chatFor("completed", t, v.summary ?? "")); else this.chat(chatFor("error", t, `Needs review — ${v.reason}: ${v.summary ?? ""}`)); }
+    // Completion released the slot. A follow-up held while the turn was busy
+    // must re-enter scheduling; a `done` task cannot run a pending send itself.
+    if (v.status === "done" && this.d.db.query("select 1 from commands where task_uuid=? and kind='send' and state='pending'").get(t.uuid)
+        && !this.d.db.query("select 1 from commands where task_uuid=? and state='unknown'").get(t.uuid)) this.d.scheduler.enqueue(t.uuid, true);
     void this.d.outbox.run(t.uuid);                                      // turn boundary: deliver anything that waited for the turn to end
     void this.d.scheduler.pump();
   }
