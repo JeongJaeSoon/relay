@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSyn
 import { homedir } from "node:os"; import { join } from "node:path";
 import { loadConfig, paths } from "../config.ts";
 import type { Database } from "bun:sqlite";
+import { pendingCleanup } from "../lifecycle/cleanup.ts";
+export { pendingCleanup } from "../lifecycle/cleanup.ts";
 import { openDb } from "../db/db.ts";
 import { NativeSessionRunner } from "../runner/native.ts";
 import type { AgentRow } from "../runner/runner.ts";
@@ -74,11 +76,12 @@ export async function runChecks(opts: { service?: boolean; probe?: boolean } = {
     // Registration refuses a non-git root now, but a project registered before that rule still runs tasks in a shared
     // tree with no worktree and a guard boundary the size of the directory.
     const legacy = db.query("select name, path from projects where is_git = 0").all() as { name: string; path: string }[];
-    const kept = keptSessions(db);
+    const kept = keptSessions(db); const cleanup = pendingCleanup(db);
     let roster: AgentRow[] | null = null;
     try { roster = await new NativeSessionRunner(probeEnv, { claudeBin: cfg.claude_bin }).list(true); } catch (e) { r.push({ name: "background session roster", ok: false, detail: String(e).slice(0, 80), fix: `${cfg.claude_bin} agents --json --all` }); }
     const unaccounted = roster ? unaccountedSessions(db, roster) : [];
     db.close();
+    r.push({ name: "owned session cleanup", ok: cleanup.length === 0, detail: cleanup.length ? cleanup.map(c => `${c.display_id} ${c.kind} ${c.state} ${c.id} session=${c.session_id ?? "?"} ${c.worktree_path ?? ""} ${c.error ?? ""}`).join("; ") : "converged", fix: cleanup.length ? "Inspect the task commands; retry failed/unknown cleanup with POST /api/commands/<id>/retry after resolving the reported cause" : undefined });
     r.push({ name: "DB integrity", ok: ic === "ok", detail: String(ic), fix: "relay db restore <backup>" });
     r.push({ name: "sessions relay could not deregister", ok: kept.length === 0, detail: kept.length ? kept.map((k) => `${k.display_id} ${k.worktree_path ?? "?"}`).join(", ") : "none",
       fix: kept.length ? `claude rm keeps a session whose worktree still holds work that exists nowhere else, or is locked. The task's last message says which. Resolve it (push or discard the branch; unlock or stop whatever holds the lock), then close the task again — or set worker.allow_push = true so workers push before they finish` : undefined });

@@ -36,6 +36,7 @@ export interface Task {
   started_at: number | null; ended_at: number | null;
   created_at: number; updated_at: number; closed_at: number | null;
   usage_tokens: number;                                     // transcript 합산 추정치
+  cleanup_pending?: boolean;                              // derived from outstanding cleanup commands; never stored on tasks
   summary_json: TaskSummary | null;                         // 보존 정리(90일) 후 남는 요약(04 retention)
 }
 export interface TaskSummary { v: 1; status: TaskStatus; usage_tokens: number; events: number; commands: Record<string, number>; last_summary: string | null; digest: string; swept_at: number }

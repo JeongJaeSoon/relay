@@ -12,7 +12,7 @@ const plain = (m: Message) => (m.ask ? stripAsk(m.text) : m.text);
 export type Disposition = "deciding" | "new_task" | "split" | "routed" | "delivered" | "answered" | "fastpath" | "close_request" | "needs_confirm" | "failed";
 /** Sort and filter tier. `needs_you` is the point of the view: those requests are stranded until the user acts. */
 export type Bucket = "needs_you" | "in_flight" | "settled";
-export type RequestAction = "redispatch" | "answer" | "restart" | "close";
+export type RequestAction = "redispatch" | "answer" | "restart" | "retry_cleanup" | "close";
 export type AnswerKind = "answer" | "summary" | "question" | "error";
 
 export interface RequestRow {
@@ -214,7 +214,7 @@ function actionsOf(d: Disposition, task: Task | null): RequestAction[] {
   const a: RequestAction[] = [];
   if (d === "needs_confirm" || d === "failed") a.push("redispatch");
   if (task?.status === "waiting_input" && task.question) a.push("answer");   // the chips are the question's options — without one the action renders nothing and the row is a dead end
-  if (task && RETRYABLE.has(task.status)) a.push("restart");
+  if (task && RETRYABLE.has(task.status)) a.push(task.cleanup_pending ? "retry_cleanup" : "restart");
   if (d === "close_request" && task && task.status !== "closed") a.push("close");
   return a;
 }

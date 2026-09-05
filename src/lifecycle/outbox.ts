@@ -8,6 +8,7 @@ import { now } from "../core/clock.ts";
 import { EventLog, loadTask, type EmitInput } from "../core/events.ts";
 import { commandId } from "../core/ids.ts";
 import type { AgentRow, AgentRunner, RmOutcome, SpawnSpec } from "../runner/runner.ts";
+import { pendingCleanup } from "./cleanup.ts";
 import { log as slog } from "../log.ts";
 
 export type CommandPayload =
@@ -110,7 +111,7 @@ export class Outbox {
       if (r.kind === "spawn") { this.log.emit({ type: "command.requeued", task_uuid: r.task_uuid, payload: { id: r.id } }); out.requeued.push(r.id); }
       else {
         this.log.emit({ type: "command.unknown", task_uuid: r.task_uuid, causation_id: r.id, payload: { id: r.id, error: "relay restarted during execution" } }); out.unknown.push(r.id);
-        if (r.kind === "rm" && !(JSON.parse(r.payload_json) as CommandPayload & { target?: ReapTarget }).target) this.parkStrandedClose(r.task_uuid, r.id, "relay restarted during execution");
+        if (r.kind === "rm") this.parkStrandedClose(r.task_uuid, r.id, "relay restarted during execution");
       }
     }
     return out;
@@ -121,6 +122,19 @@ export class Outbox {
   private parkStrandedClose(taskUuid: string, commandId: string, error: string) {
     const t = loadTask(this.db, taskUuid); if (!t || ["closed", "error"].includes(t.status)) return;
     this.log.emit({ type: "task.status_changed", task_uuid: taskUuid, causation_id: commandId, payload: { status: "error", patch: { status: "error", ended_at: t.ended_at ?? now(), last_summary: `close did not finish — the session may still be registered: ${error}` } } });
+  }
+  /** A close is complete only after the final generation's disposal has confirmed its result. */
+  private finishClose(taskUuid: string, commandId: string) {
+    const own = this.db.query("select id, state from commands where task_uuid=? and kind='rm' and json_extract(payload_json,'$.target') is null order by rowid desc limit 1").get(taskUuid) as { id: string; state: string } | null;
+    if (own?.state !== "applied" || pendingCleanup(this.db, taskUuid).length) return;
+    const t = loadTask(this.db, taskUuid)!;
+    if (t.status === "closed") return;
+    if (t.worktree_path && existsSync(t.worktree_path)) {
+      const error = `sessions removed but worktree still exists (${t.worktree_path})`;
+      this.log.emit({ type: "command.failed", task_uuid: taskUuid, payload: { id: own.id, error } });
+      this.parkStrandedClose(taskUuid, commandId, error); return;
+    }
+    this.log.emit({ type: "task.status_changed", task_uuid: taskUuid, causation_id: commandId, payload: { status: "closed", patch: { status: "closed", closed_at: t.closed_at ?? now(), ended_at: t.ended_at ?? now(), question: null, qhead: false, ...(t.last_summary?.startsWith("close did not finish") || t.last_summary?.startsWith("claude rm kept") ? { last_summary: "Session cleanup completed." } : {}) } } });
   }
   /** Promotion, source 1 and 2: the marker echoed in a UserPromptSubmit hook (idle delivery) or in a reply frame the
    *  worker sent back over the inbox socket (mid-turn delivery). */
@@ -158,13 +172,13 @@ export class Outbox {
   private async loop(taskUuid: string): Promise<"empty" | "blocked" | "held" | "error"> {
     for (;;) {
       this.again.delete(taskUuid);
-      const row = this.db.query("select * from commands where task_uuid=? and state in ('pending','unknown') order by (case when state='pending' and (kind='stop' or (kind='rm' and json_extract(payload_json,'$.target') is null)) then 0 else 1 end), rowid limit 1").get(taskUuid) as any;   // stop/rm jump the queue; a reap rm goes last so every session is stopped before any is removed, and a detach-blocked one never sits in front of a real stop
+      const row = this.db.query("select * from commands where task_uuid=? and state in ('pending','unknown') order by (case when state='pending' and kind='stop' then 0 when kind='stop' then 1 when state='pending' and kind='rm' then 2 else 3 end), rowid limit 1").get(taskUuid) as any;   // Every stop, including an unknown stop, precedes every rm. Stops still bypass blocked sends.
       if (!row) return "empty";
       if (row.state === "unknown") return "blocked";                          // I8: an unknown head blocks the queue until the user confirms/retries
       const cmd = rowToCommand(row); const task = loadTask(this.db, taskUuid)!;
       if (!this.canRun(cmd, task)) return "blocked";                          // stays pending (I3, B1)
       this.log.emit({ type: "command.running", task_uuid: taskUuid, causation_id: cmd.id, process_generation: task.process_generation, payload: { id: cmd.id } });   // the generation this command acts on: a resume names the one it is about to interrupt
-      try { await this.apply(cmd, task); }
+      try { await this.apply(cmd, task); if (cmd.kind === "rm") this.finishClose(taskUuid, cmd.id); }
       catch (e) {
         if (e instanceof HeldError) { this.log.emit({ type: "command.requeued", task_uuid: taskUuid, payload: { id: cmd.id } }); return "held"; }
         this.log.emit({ type: "command.unknown", task_uuid: taskUuid, causation_id: cmd.id, payload: { id: cmd.id, error: String(e).slice(0, 300) } });   // B3: retries are manual (confirm/retry)
@@ -178,7 +192,7 @@ export class Outbox {
         // `closed` is projected from its RESULT, so an rm that ends `unknown` leaves the task in whatever status it
         // had while the sweep guard is satisfied by the row and the session stays registered. Park it where a
         // refusal parks it — visible, named, and counted by `relay doctor`.
-        if (cmd.kind === "rm" && !(cmd.payload as CommandPayload & { target?: ReapTarget }).target) this.parkStrandedClose(taskUuid, cmd.id, String(e).slice(0, 200));
+        if (cmd.kind === "rm") this.parkStrandedClose(taskUuid, cmd.id, String(e).slice(0, 200));
         slog.warn("command failed", { id: cmd.id, e: String(e) }); return "error";
       }
     }
@@ -187,6 +201,7 @@ export class Outbox {
   private canRun(cmd: Command, t: Task): boolean {
     const k = cmd.kind;
     // A reap has no urgency and may take the shared worktree with it, so unlike a real stop/rm it waits for detach.
+    if (k === "rm" && this.db.query("select 1 from commands where task_uuid=? and kind='stop' and state in ('pending','running','unknown','failed')").get(t.uuid)) return false;
     if (k === "rm" && (cmd.payload as CommandPayload & { target?: ReapTarget }).target) return t.attach_state === "none";   // a reap rm may take the shared worktree: never while the user is inside it
     if (k === "stop" || k === "rm") return true;
     if (t.attach_state !== "none") return false;
@@ -219,14 +234,14 @@ export class Outbox {
       slog.warn("reap rm refused — a generation of this task is still alive in the shared worktree", { task: t.uuid, session: target.session_id });
       this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "a generation of this task is still alive in the shared worktree" } }); return;
     }
-    let shortId: string | null = null;
-    try { shortId = (await this.runner.list(true)).find((r) => r.session_id === target.session_id)?.short_id ?? null; }
-    catch (e) { slog.warn("reap could not read the roster — leaving the session in place", { task: t.uuid, e: String(e) }); this.applied(cmd, t, { reaped: null }); return; }
+    const rows = await this.runner.list(true); // A failed observation is unknown, never proof of removal.
+    if (kind === "rm") this.assertStopped(t, rows);
+    const shortId = rows.find((r) => r.session_id === target.session_id)?.short_id ?? null;
     if (!shortId || (live && shortId === live.short_id)) { this.applied(cmd, t, { reaped: null }); return; }   // gone from the roster is the state a reap is trying to reach
-    try {
-      if (kind === "stop") await this.runner.stop(shortId);
+    {
+      if (kind === "stop") { await this.runner.stop(shortId); if (!(await this.waitGone(shortId))) throw new Error("superseded stop not confirmed"); }
       else {
-        const r = await this.runner.rm(shortId);
+        const r = await this.removeSession(t, shortId);
         // Phase 0 (`capabilities.json:448`): a kept worktree means the SESSION is still registered, so recording this
         // as applied is relay believing a cleanup that did not happen — the third root of the leak. `failed` keeps it
         // visible and retryable; `unknown` would be dishonest (the refusal is known, not ambiguous) and would wedge
@@ -235,16 +250,47 @@ export class Outbox {
         if (r.worktreeKept) {
           const why = keptReason(r, t.worktree_path);
           this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: shortId, worktree_path: r.keptPath ?? t.worktree_path, reason: `kept the superseded session — ${why}` } });
-          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: `claude rm kept the superseded session — ${why}` } }); return;
+          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: `claude rm kept the superseded session — ${why}` } }); this.parkStrandedClose(t.uuid, cmd.id, why); return;
         }
       }
-    } catch (e) {
-      // A hold is not a failure and must reach loop(): swallowed here it fell through to `applied` below, which is
-      // relay believing a cleanup that did not happen — the exact thing the comment above guards against.
-      if (e instanceof HeldError) throw e;
-      slog.warn(`reap ${kind} failed — leaving the session in place`, { task: t.uuid, short_id: shortId, e: String(e) });
     }
     this.applied(cmd, t, { reaped: shortId }); return;
+  }
+  /** DB terminality is not proof that the supervisor stopped every process using this worktree. */
+  private assertStopped(t: Task, rows: AgentRow[]) {
+    const identities = this.db.query("select session_id, short_id from process_instances where task_uuid=?").all(t.uuid) as { session_id: string | null; short_id: string | null }[];
+    identities.push(t);
+    const alive = rows.filter(r => r.alive && (identities.some(i => (i.session_id && r.session_id === i.session_id) || (i.short_id && r.short_id === i.short_id))
+      || (t.worktree_path && (r.cwd === t.worktree_path || jobWorktree(r.short_id) === t.worktree_path))));
+    if (alive.length) throw new Error(`cleanup blocked: live sessions share the worktree: ${alive.map(r => r.short_id ?? r.session_id ?? "unknown").join(", ")}`);
+  }
+  /** Keep ownership proof until the shared worktree is gone, including successful deregistration of a fork. */
+  private async removeSession(t: Task, shortId: string): Promise<RmOutcome> {
+    const dir = t.worktree_path; const owner = readOwner(dir);
+    const ours = owner?.task_uuid === t.uuid && owner.relay_instance_id === this.deps.instanceId();
+    if (ours && dir) unlinkSync(join(dir, OWNER_FILE));
+    try {
+      const result = await this.runner.rm(shortId);
+      if (!result.worktreeKept) await this.verifyRemoved(shortId);
+      return result;
+    } finally {
+      if (ours && dir && !existsSync(join(dir, OWNER_FILE))) writeOwner(dir, owner!);
+    }
+  }
+  private async verifyRemoved(shortId: string) {
+    if ((await this.runner.list(true)).some(r => r.short_id === shortId)) throw new Error(`rm not confirmed: ${shortId} remains registered`);
+  }
+  /** A durable session id authorizes cleanup even after its shared worktree has gone. A short id alone is only a
+   *  lookup hint: require a stamp binding the observed session to this task and instance before acting on it. Never
+   *  use the roster's launch cwd, which is shared by unrelated git tasks. */
+  private cleanupRow(t: Task, rows: AgentRow[]): AgentRow | undefined {
+    if (t.session_id) return rows.find(r => r.session_id === t.session_id);
+    const row = rows.find(r => t.short_id && r.short_id === t.short_id);
+    if (!row) return undefined;
+    const owner = readOwner(jobWorktree(row.short_id) ?? t.worktree_path);
+    if (!row.session_id || owner?.task_uuid !== t.uuid || owner.relay_instance_id !== this.deps.instanceId() || owner.session_id !== row.session_id)
+      throw new Error(`cleanup ownership unverified for short id ${t.short_id}`);
+    return row;
   }
   private async waitGone(shortId: string, ms = 10_000) { const t0 = now(); while (now() - t0 < ms) { const r = (await this.runner.list()).find((x) => x.short_id === shortId); if (!r || !r.alive) return true; await Bun.sleep(300); } return false; }
   private async waitRow(shortId: string, ms = 10_000): Promise<AgentRow | undefined> { const t0 = now(); for (;;) { const r = (await this.runner.list(true)).find((x) => x.short_id === shortId); if (r?.cwd && r.session_id) return r; if (now() - t0 > ms) return r; await Bun.sleep(300); } }
@@ -287,7 +333,8 @@ export class Outbox {
         if (!existing && named.length) throw new Error(`a live session is already registered as \`${p.spec.name}\` (${named.map((r) => r.short_id).join(", ")}) with no owner stamp for this task — refusing to start a second one in the same worktree`);
         const res = existing ? { short_id: existing.short_id!, name: existing.name! } : await this.runner.spawn({ ...p.spec, settingsJson: this.deps.settingsJson(t, gen), env: this.deps.env(t, gen) });
         const row = existing ?? (await this.waitRow(res.short_id));
-        this.patch(t, { short_id: res.short_id, process_state: "starting", ...(row ? this.stampWorktree(t, row, worktreeExpected) : {}) }, cmd);
+        const current = loadTask(this.db, t.uuid)!;
+        if (current.process_generation <= gen) this.patch(current, { short_id: res.short_id, ...(current.process_generation < gen ? { process_state: "starting" } : {}), ...(row ? this.stampWorktree(current, row, worktreeExpected) : {}) }, cmd);
         this.applied(cmd, t, { short_id: res.short_id, adopted: !!existing }); return;
       }
       case "send": case "resume": {
@@ -315,14 +362,18 @@ export class Outbox {
         // `--bg --resume` FORKS to a NEW session id (Phase 0 ④). Bind the task to it now so the fork's SessionStart is
         // the ordinary path; if the row is not there yet, ingest rebinds when that SessionStart arrives.
         const fresh = await this.waitRow(r.short_id);
-        this.patch(t, { short_id: r.short_id, process_state: "starting", paused: false, ...(fresh?.session_id ? { session_id: fresh.session_id } : {}) }, cmd);
+        const current = loadTask(this.db, t.uuid)!;
+        if (current.process_generation <= gen) this.patch(current, { short_id: r.short_id, ...(current.process_generation < gen ? { process_state: "starting", paused: false } : {}), ...(fresh?.session_id ? { session_id: fresh.session_id } : {}) }, cmd);
         outcome("accepted", "resume");                                       // B3: applied at `backgrounded ·` parse time; SessionStart(gen) confirms, watchdog fills a gap
         this.reapStops(loadTask(this.db, t.uuid)!, "superseded by resume");   // stop only: the fork is alive in the shared worktree, so removing anything here can delete the work it is doing (close rm's)
         this.applied(cmd, t, { short_id: r.short_id }); return;
       }
       case "stop": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "stop"); return; }
-        if (t.short_id) { await this.runner.stop(t.short_id); if (!(await this.waitGone(t.short_id))) throw new Error("stop not confirmed"); }
+        const rows = await this.runner.list(true);
+        const row = this.cleanupRow(t, rows);
+        if (row && !row.short_id) throw new Error("stop target has no short id");
+        if (row?.short_id) { await this.runner.stop(row.short_id); if (!(await this.waitGone(row.short_id))) throw new Error("stop not confirmed"); }
         // Stamped with the generation we stopped, not with whatever is current after the wait: if a newer one came up
         // meanwhile, this end is about a superseded process and the projection must ignore it.
         if (t.process_state === "alive" || t.process_state === "starting") this.log.emit({ type: "process.ended", task_uuid: t.uuid, causation_id: cmd.id, process_generation: t.process_generation, payload: { generation: t.process_generation, reason: p.reason, crashed: false } });
@@ -330,10 +381,13 @@ export class Outbox {
       }
       case "rm": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "rm"); return; }
-        // Drop our own stamp first: `claude rm` keeps a worktree that has uncommitted changes, and an untracked
-        // `.relay-owner` would be exactly that (measured 2026-08-31). Reconcile no longer needs it once we are removing.
-        if (t.worktree_path) { try { unlinkSync(join(t.worktree_path, OWNER_FILE)); } catch {} }
-        const r = t.short_id ? await this.runner.rm(t.short_id) : { worktreeKept: false };
+        const current = loadTask(this.db, t.uuid)!;
+        const rows = await this.runner.list(true); this.assertStopped(current, rows);
+        const row = this.cleanupRow(current, rows);
+        if (row && !row.short_id) throw new Error("rm target has no short id");
+        const r = row?.short_id ? await this.removeSession(current, row.short_id) : current.worktree_path && existsSync(current.worktree_path)
+          ? { worktreeKept: true, reason: "session absent from roster but worktree still exists", keptPath: current.worktree_path }
+          : { worktreeKept: false };
         // `claude rm` keeps the SESSION, not just the worktree, when that worktree has uncommitted or unpushed work
         // (Phase 0 ④). Recording that as applied is what let close report success while leaving a session registered
         // forever — `capabilities.json:448` called it: "B3's rm row must treat this as NOT applied … otherwise
@@ -359,8 +413,6 @@ export class Outbox {
           return;
         }
         this.applied(cmd, t, { worktreeKept: false });
-        // After `applied`, so the task is never `closed` while its own rm is still running (I5).
-        this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "closed", patch: { status: "closed", closed_at: t.closed_at ?? now(), ended_at: t.ended_at ?? now(), question: null, qhead: false } } });
         return;
       }
     }

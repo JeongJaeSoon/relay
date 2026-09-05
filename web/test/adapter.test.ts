@@ -97,3 +97,8 @@ test("a question row whose task has moved on does not take the render down with 
   expect(promotedQuestionTask(row, undefined)).toBeNull();                      // task gone from the snapshot
   expect(promotedQuestionTask({ role: "system" } as any, waiting)).toBeNull();  // only the promoted question row draws chips
 });
+
+test("cleanup failure is rendered as a cleanup action rather than a worker restart", () => {
+  expect(toDemoTask(base("u1", "error", { cleanup_pending: true, last_summary: "Cannot remove worktree" }), ctx)).toMatchObject({ cleanup: true, status: "err" });
+  expect(toDemoTask(base("u1", "error"), ctx).cleanup).toBe(false);
+});

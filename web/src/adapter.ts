@@ -6,7 +6,7 @@ import { stKey, stLabel, type StKey } from "./consts.ts";
 import { requestRows } from "./ledger.ts";
 import { diffNotifs, type NotifKind } from "./notify.ts";
 import { store } from "./store.ts";
-export interface DemoTaskCore { id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
+export interface DemoTaskCore { cleanup: boolean; id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
 export interface DemoEvent { id: number; at: Date; txt: string; payload: string | null }
 /** What the demo engine holds in S.tasks: the server-derived core plus the engine's own fields (layout position, timeline) that survive updates. */
 export type DemoTask = DemoTaskCore & { events: DemoEvent[]; timers: unknown[]; x: number; y: number };
@@ -17,7 +17,7 @@ const PROC: Record<string, string> = { none: "not started", starting: "starting"
 // ---- pure ------------------------------------------------------------------------------------------
 export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
   const parent = t.parent_uuid ? ctx.tasks[t.parent_uuid] : null;
-  return { id: t.display_id, uuid: t.uuid, num: t.num, title: t.title, project: ctx.projects.find((p) => p.id === t.project_id)?.name ?? t.project_id, size: t.size, status: stKey(t.status), statusLabel: stLabel(t.status),
+  return { cleanup: !!t.cleanup_pending, id: t.display_id, uuid: t.uuid, num: t.num, title: t.title, project: ctx.projects.find((p) => p.id === t.project_id)?.name ?? t.project_id, size: t.size, status: stKey(t.status), statusLabel: stLabel(t.status),
     step: t.status === "waiting_input" && t.question ? `❓ ${t.question.text}` : t.status === "queued" ? "Waiting for an agent slot" : TERMINAL.has(t.status) && t.last_summary ? t.last_summary : t.last_step ?? t.last_summary ?? "", startedAt: t.started_at ? new Date(t.started_at) : null, endedAt: t.ended_at ? new Date(t.ended_at) : null,
     question: t.status === "waiting_input" && t.question ? { q: t.question.text, chips: t.question.options.length ? t.question.options : ["OK"] } : null,
     sub: !!t.parent_uuid, parent: parent?.display_id ?? null, children: Object.values(ctx.tasks).filter((c) => c.parent_uuid === t.uuid && c.status !== "closed").sort((a, b) => a.num - b.num).map((c) => c.display_id),
@@ -116,6 +116,7 @@ export function installAdapter() {
       catch (e) { note(`Send failed — your draft is still here. ${(e as Error).message}`); return false; }
     },
     answer: (t: DemoTask, choice: string) => run("answer", api.answer(t.uuid, choice)),
+    retryCleanup: (t: DemoTask) => run("cleanup retry", api.retryCleanup(t.uuid)),
     stop: (t: DemoTask) => run("stop", api.interrupt(t.uuid)), restart: (t: DemoTask) => run("restart", api.retry(t.uuid)), archive: (t: DemoTask) => run("archive", api.close(t.uuid)),
     attach: async (t: DemoTask) => { try { const { command } = await api.attachLease(t.uuid); await navigator.clipboard?.writeText(command).catch(() => {}); note(`Copied to clipboard: ${command} (run it in a terminal — relay attach releases the lease when it ends)`); } catch (e) { note(`attach failed: ${(e as Error).message}`); } },
     pause: () => run("kill switch", S.paused ? api.resumeAll() : api.pause()),

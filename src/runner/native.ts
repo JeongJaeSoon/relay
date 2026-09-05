@@ -1,7 +1,6 @@
 import type { AgentRow, AgentRunner, SpawnSpec } from "./runner.ts";
 import type { SendOutcome } from "@shared/types.ts";
 import { buildFrame, sendFrame, type PeerFixture } from "./peer.ts";
-import { log } from "../log.ts";
 
 export const parseBg = (stdout: string) => { const m = stdout.match(/backgrounded · (\S+) · (.+)/); return m ? { short: m[1], name: m[2].trim() } : null; };
 
@@ -65,8 +64,8 @@ export class NativeSessionRunner implements AgentRunner {
     const bg = parseBg(r.stdout); if (!bg) throw new Error(`resume failed (${r.code}): ${r.stderr.slice(0, 300)}`);
     return { short_id: bg.short };
   }
-  async stop(shortId: string) { const r = await this.run(["stop", shortId], process.cwd(), this.baseEnv(), 20_000); if (r.code !== 0) log.warn("claude stop non-zero", { shortId, stderr: r.stderr.slice(0, 200) }); }
-  async rm(shortId: string) { const r = await this.run(["rm", shortId], process.cwd(), this.baseEnv(), 30_000); return parseRm(r.stdout + r.stderr); }
+  async stop(shortId: string) { const r = await this.run(["stop", shortId], process.cwd(), this.baseEnv(), 20_000); if (r.code !== 0) throw new Error(`claude stop ${shortId} exit ${r.code}: ${r.stderr.slice(0, 200)}`); }
+  async rm(shortId: string) { const r = await this.run(["rm", shortId], process.cwd(), this.baseEnv(), 30_000); const result = parseRm(r.stdout + r.stderr); if (r.code !== 0 && !result.worktreeKept) throw new Error(`claude rm ${shortId} exit ${r.code}: ${r.stderr.slice(0, 200)}`); return result; }
   /** Throws on failure: callers (watchdog, recovery) must treat "unknown" differently from "no sessions". */
   async list(all = false) {
     const r = await this.run(["agents", "--json", ...(all ? ["--all"] : [])], process.cwd(), this.baseEnv(), 20_000);

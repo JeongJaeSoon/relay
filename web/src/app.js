@@ -68,6 +68,7 @@ const LEDGER=[];                                                                
 let ledgerFilter="open";                                                                  /* open = only requests not yet settled, all = everything */
 const LEDGER_ACTS={
   redispatch:{label:"Retry",run:r=>relay.redispatch(r.id)},
+  retry_cleanup:{label:"Retry cleanup",run:r=>{const t=S.tasks.get(r.taskId);if(t)relay.retryCleanup(t)}},
   restart:{label:"Restart",run:r=>{const t=S.tasks.get(r.taskId);if(t)relay.restart(t)}},
   close:{label:"Close",run:r=>{const t=S.tasks.get(r.taskId);if(t)relay.archive(t)}},
 };
@@ -449,8 +450,8 @@ function renderDetail(){
       b.addEventListener("click",()=>stopTask(t));acts.append(b);
     }
     if(t.status==="err"||t.status==="cancelled"||t.statusLabel==="Needs review"){
-      const b=el("button","act","Restart");
-      b.addEventListener("click",()=>restartTask(t));acts.append(b);
+      const b=el("button","act",t.cleanup?"Retry cleanup":"Restart");
+      b.addEventListener("click",()=>t.cleanup?relay.retryCleanup(t):restartTask(t));acts.append(b);
     }
     if(["done","err","cancelled"].includes(t.status)||t.statusLabel==="Needs review"){
       const b=el("button","act","Archive");let armed=false; /* two-step confirm — cleaning the worktree cannot be undone */
