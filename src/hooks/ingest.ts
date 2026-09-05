@@ -9,6 +9,7 @@ import { log as slog } from "../log.ts";
 import { getMeta } from "../db/db.ts";
 import { writeOwner } from "../lifecycle/outbox.ts";
 import { pushInbox } from "./inbox.ts";
+import { redact } from "../core/redact.ts";
 
 /** Every hook event relay understands on `POST /api/hooks`. */
 export const ALL_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied", "SubagentStart", "SubagentStop", "Notification", "Stop", "SessionEnd", "WorktreeCreate", "WorktreeRemove"];
@@ -43,6 +44,18 @@ export type IngestResult = { status: number; json: unknown } | { status: 200; wa
  *  carrying that state per turn; not worth it until someone sees it happen. */
 export const permissionId = (b: any): string => b.tool_use_id ?? `pr:${createHash("sha256").update(`${b.prompt_id ?? ""}|${b.tool_name ?? ""}|${JSON.stringify(b.tool_input ?? {})}`).digest("hex").slice(0, 16)}`;
 
+// Object key order and background roster order are not new Stop outcomes. Keep
+// the fields that affect completion, rather than transport metadata or timestamps.
+// HTTP carries the original strings; the durable spool and event log redact them.
+// Normalize both transports before hashing so replay cannot duplicate completion.
+const canonical = (value: any): string => JSON.stringify(value, (_key, v) => typeof v === "string" ? redact(v)
+  : v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+const stopFingerprint = (b: any): string => createHash("sha256").update(canonical({
+  message: String(b.last_assistant_message ?? ""),
+  background: (b.background_tasks ?? []).map((x: any) => canonical({ id: x?.id ?? null, type: x?.type ?? null, status: x?.status ?? null })).sort(),
+  crons: (b.session_crons ?? []).map((x: any) => canonical(x)).sort(),
+})).digest("hex");
+
 export function sourceEventId(b: any, gen: number | null): string {
   switch (b.hook_event_name) {
     case "SessionStart": return `ss:${gen ?? "?"}:${b.source ?? "startup"}`;   // idempotent per generation (a retried SessionStart must not bump again)
@@ -50,7 +63,9 @@ export function sourceEventId(b: any, gen: number | null): string {
     case "PreToolUse": return `${b.tool_use_id}:pre`; case "PostToolUse": return `${b.tool_use_id}:post`; case "PostToolUseFailure": return `${b.tool_use_id}:fail`;
     case "PermissionRequest": return `${permissionId(b)}:perm`; case "PermissionDenied": return `${permissionId(b)}:denied`;
     case "SubagentStart": return `${b.agent_id}:start`; case "SubagentStop": return `${b.agent_id}:stop`;
-    case "Stop": return `stop:${b.prompt_id ?? ulid()}`; case "SessionEnd": return `end:${gen ?? "?"}`;
+    // Background completion may produce another Stop in the SAME prompt. An
+    // identical retry is a duplicate; a changed final response must reach verdict.
+    case "Stop": return `stop:${gen ?? "?"}:${b.prompt_id ?? ulid()}:${stopFingerprint(b)}`; case "SessionEnd": return `end:${gen ?? "?"}`;
     default: return `${b.hook_event_name}:${ulid()}`;
   }
 }
@@ -68,7 +83,10 @@ const RESUMED_SOURCES = new Set(["resume", "fork"]);
 const START_WINDOW_MS = 120_000;
 /** A spawn/resume relay itself issued just now — the only situation in which a task may bind to a different session id. */
 const startInFlight = (db: Database, taskUuid: string): boolean =>
-  !!db.query("select 1 from commands where task_uuid=? and kind in ('spawn','resume') and (state='running' or (state='applied' and applied_at>=?))").get(taskUuid, now() - START_WINDOW_MS);
+  !!db.query(`select 1 from commands c where c.task_uuid=?
+    and (c.kind in ('spawn','resume') or (c.kind='send' and exists
+      (select 1 from events e where e.causation_id=c.id and e.type='command.resume_started')))
+    and (c.state='running' or (c.state='applied' and c.applied_at>=?))`).get(taskUuid, now() - START_WINDOW_MS);
 const stepOf = (b: any) => { const i = b.tool_input ?? {}; const d = i.file_path ?? i.path ?? i.pattern ?? (typeof i.command === "string" ? i.command.slice(0, 40) : i.description); return d ? `${b.tool_name} ${String(d).split("/").slice(-2).join("/")}`.slice(0, 60) : String(b.tool_name); };
 const PERMISSION_AUTO_DENY_MS = 14 * 60_000;   // must stay below the hook timeout (900s) so the CLI never sees a dangling request
 /** A subscription/API limit **as the model or the API words it**. Deliberately narrow, and read only on the paths where
@@ -100,13 +118,16 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
     const rebind = task.session_id != null && task.session_id !== body.session_id;
     if (rebind && !(headers["x-relay-task"] === task.uuid && startInFlight(d.db, task.uuid) && !d.db.query("select 1 from tasks where session_id=? and uuid<>?").get(body.session_id, task.uuid))) return orphan();
     const resumed = RESUMED_SOURCES.has(String(body.source ?? ""));
+    // A fork hook can beat resume()'s acknowledgement. Clear the old pause now
+    // so an equally early Stop is not discarded, but never undo a new kill switch.
+    const resumedPatch = resumed ? { turn_state: "busy", ...(getMeta(d.db, "kill_switch") !== "1" ? { paused: false } : {}) } : {};
     const gen = headerGen ?? (task.process_state === "alive" && task.session_id === body.session_id && !resumed ? task.process_generation : task.process_generation + 1);
     if (headerGen != null && headerGen < task.process_generation) return { status: 200, json: {} };   // late SessionStart of an older process
     // The worktree path is exposed to relay only here (`agents --json` reports the launch cwd), so this is also where a
     // spawn-time stamp that had to be deferred finally lands (roadmap B8).
     const worktree = task.worktree_path ?? (typeof body.cwd === "string" && body.cwd ? body.cwd : null);
     if (!task.worktree_path && worktree) writeOwner(worktree, { relay_instance_id: getMeta(d.db, "relay_instance_id") ?? "", task_uuid: task.uuid, session_id: body.session_id ?? null });
-    const stored = d.log.emit({ type: "process.started", task_uuid: task.uuid, process_generation: gen, ...base(gen), payload: { generation: gen, session_id: body.session_id, source: body.source, patch: { ...(!task.worktree_path && worktree ? { worktree_path: worktree } : {}), ...(resumed ? { turn_state: "busy" } : {}), ...(task.status === "starting" ? { status: "running", started_at: task.started_at ?? now() } : {}) } } });
+    const stored = d.log.emit({ type: "process.started", task_uuid: task.uuid, process_generation: gen, ...base(gen), payload: { generation: gen, session_id: body.session_id, source: body.source, patch: { ...(!task.worktree_path && worktree ? { worktree_path: worktree } : {}), ...resumedPatch, ...(task.status === "starting" ? { status: "running", started_at: task.started_at ?? now() } : {}) } } });
     if (stored && task.status === "starting") d.log.emit({ type: "task.status_changed", task_uuid: task.uuid, payload: { status: "running", patch: {} } });
     return { status: 200, json: {} };
   }
@@ -120,6 +141,14 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
   const unplaceable = otherSession && sessionGen == null && headerGen == null;   // a session relay has never seen and cannot date
   const firstGen = headerGen == null && body.prompt_id ? (d.db.query("select process_generation g from events where source_session_id=? and turn_id=? and process_generation is not null order by seq limit 1").get(body.session_id, body.prompt_id) as any)?.g ?? null : null;
   const stale = unplaceable || (sessionGen != null && sessionGen < gen) || (headerGen != null && headerGen < gen) || (firstGen != null && firstGen < gen) || (ev !== "SessionEnd" && ["stopped", "crashed"].includes(task.process_state));
+  // Older releases persisted Stop ids without the fingerprint. Preserve retry
+  // idempotency across an upgrade without suppressing a different final outcome.
+  if (ev === "Stop" && body.prompt_id) {
+    const legacy = d.db.query(`select coalesce(cast(b.body as text), e.payload_json) payload_json from events e
+      left join blobs b on b.id=e.blob_id where e.type='hook.Stop' and e.source_session_id=? and e.source_event_id=? and e.process_generation=?`)
+      .get(body.session_id ?? null, `stop:${body.prompt_id}`, headerGen ?? gen) as { payload_json: string } | null;
+    if (legacy && stopFingerprint(JSON.parse(legacy.payload_json)) === stopFingerprint(body)) return { status: 200, json: {} };
+  }
   const stored = d.log.emit({ type: `hook.${ev}`, task_uuid: task.uuid, process_generation: headerGen ?? gen, ...base(headerGen ?? gen) });
   if (stale) return { status: 200, json: {} };
   if (!stored) {                                                             // duplicate delivery: replay the same answer for a still-pending PermissionRequest, otherwise no-op
@@ -210,8 +239,9 @@ export function ingestHook(body: any, headers: Record<string, string | undefined
       const ours = !!d.db.query(`select 1 from commands c where c.task_uuid=? and json_extract(c.payload_json,'$.target') is null
           and exists (select 1 from events e where e.causation_id=c.id and e.type='command.running' and e.process_generation=?) and (
           (c.kind='stop' and (c.state='running' or (c.state='applied' and c.applied_at>=?)))
-          or (c.kind='resume' and c.state='running'))`)
-        .get(task.uuid, endGen, now() - 60_000);
+          or (c.state='running' and (c.kind='resume' or (c.kind='send' and exists
+            (select 1 from events r where r.causation_id=c.id and r.type='command.resume_started' and r.process_generation=?)))))`)
+        .get(task.uuid, endGen, now() - 60_000, endGen);
       const unexpected = ["starting", "running"].includes(task.status) && !task.paused && !ours;
       d.log.emit({ type: "process.ended", task_uuid: task.uuid, process_generation: endGen, payload: { generation: endGen, reason: body.reason ?? "other", crashed: unexpected } });
       if (unexpected) d.onCrash(loadTask(d.db, task.uuid)!, `SessionEnd(${body.reason ?? "other"}) while running`);

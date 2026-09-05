@@ -25,6 +25,47 @@ test("wall-clock cap interrupts, daily ceiling pauses, per-turn tool cap trips",
     expect(g.countToolCall("x", "p1")).toBe(false); expect(g.countToolCall("x", "p1")).toBe(false); expect(g.countToolCall("x", "p1")).toBe(true); expect(g.countToolCall("x", "p2")).toBe(false);
   } finally { setNow(null); }
 });
+
+test("a resumed attempt gets its own wall-clock window, preserved across server restarts", async () => {
+  const s = await buildTestApp(); const t0 = Date.now(); setNow(() => t0);
+  const id = s.seedTask("running", { size: "small", started_at: t0 - 8 * 3600_000 });
+  try {
+    s.log.emit({ type: "process.started", task_uuid: id, process_generation: 2, payload: { generation: 2, session_id: "resumed-session" } });
+    s.permits.acquire({ holder_kind: "task", holder_id: `task:${id}`, task_uuid: id });
+    new UsageGuard(s.db, s.log, s.ctx.cfg, s.svc).tick();
+    expect(loadTask(s.db, id)!.status).toBe("running");
+    setNow(() => t0 + 19 * 60_000);
+    new UsageGuard(s.db, s.log, s.ctx.cfg, s.svc).tick();
+    expect(loadTask(s.db, id)!.status).toBe("running");
+    setNow(() => t0 + 21 * 60_000);
+    new UsageGuard(s.db, s.log, s.ctx.cfg, s.svc).tick();
+    expect(loadTask(s.db, id)!.status).toBe("cancelled");
+  } finally { setNow(null); }
+});
+
+test("the new slot protects a pending restart, and a paused task does not expire", async () => {
+  const s = await buildTestApp(); const t0 = Date.now(); setNow(() => t0);
+  try {
+    const id = s.seedTask("starting", { size: "small", started_at: t0 - 8 * 3600_000 });
+    s.permits.acquire({ holder_kind: "task", holder_id: `task:${id}`, task_uuid: id });
+    const paused = s.seedTask("running", { size: "small", started_at: t0 - 8 * 3600_000, paused: true });
+    new UsageGuard(s.db, s.log, s.ctx.cfg, s.svc).tick();
+    expect(loadTask(s.db, id)!.status).toBe("starting");
+    expect(loadTask(s.db, paused)!.status).toBe("running");
+  } finally { setNow(null); }
+});
+
+test("repairing a missing permit during recovery does not renew an existing process deadline", async () => {
+  const s = await buildTestApp(); const t0 = Date.now(); setNow(() => t0 - 21 * 60_000);
+  try {
+    const id = s.seedTask("running", { size: "small", started_at: t0 - 21 * 60_000 });
+    s.log.emit({ type: "process.started", task_uuid: id, process_generation: 1, payload: { generation: 1, session_id: loadTask(s.db, id)!.session_id } });
+    setNow(() => t0);
+    s.permits.acquire({ holder_kind: "task", holder_id: `task:${id}`, task_uuid: id, reason: "recovery" });
+    new UsageGuard(s.db, s.log, s.ctx.cfg, s.svc).tick();
+    expect(loadTask(s.db, id)!.status).toBe("cancelled");
+  } finally { setNow(null); }
+});
 test("transcript offsets persist in meta (restart-safe) and reset when the file shrinks; a stuck subagent lease is reclaimed by wall-clock", async () => {
   const s = await buildTestApp(); const t = s.seedTask("running"); const task = loadTask(s.db, t)!;
   const f = join(mkdtempSync(join(tmpdir(), "relay-usage-")), "t.jsonl"); writeFileSync(f, line(100, 50));

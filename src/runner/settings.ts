@@ -1,5 +1,9 @@
 import { INJECTED_HOOK_EVENTS } from "../hooks/ingest.ts";
 
+// These observations change process/task lifetime and must survive an unavailable gateway.
+// Decision hooks stay HTTP: a replay cannot authorize a tool call or answer a live permission prompt.
+const DURABLE_HOOK_EVENTS = new Set(["SessionStart", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"]);
+
 const q = (a: string) => (/[\s"']/.test(a) ? JSON.stringify(a) : a);
 /** relay binary for command hooks (shell-quoted): absolute so launchd's minimal PATH cannot break SessionStart/guard hooks (roadmap §7).
  *  A compiled binary's execPath resolves symlinks to the versioned Cellar path — map it back to <prefix>/bin/relay so `brew upgrade` does not orphan hooks. */
@@ -20,7 +24,7 @@ export function buildSettingsJson(p: { port: number; allowPush: boolean; maxAgen
   const http = { type: "http", url: `${api}/api/hooks`, headers: { Authorization: `Bearer ${p.hookToken ?? ""}`, "X-Relay-Task": task, "X-Relay-Gen": gen }, timeout: 3 };
   const cmdArgs = ` --task ${q(task)} --gen ${gen} --url ${q(api)}${p.home ? ` --home ${q(p.home)}` : ""}`;
   const hooks: Record<string, unknown> = {};
-  for (const e of INJECTED_HOOK_EVENTS) hooks[e] = e === "SessionStart" ? [{ hooks: [{ type: "command", command: `${bin} hook SessionStart${cmdArgs}`, timeout: 3 }] }] : [{ hooks: [http] }];
+  for (const e of INJECTED_HOOK_EVENTS) hooks[e] = DURABLE_HOOK_EVENTS.has(e) ? [{ hooks: [{ type: "command", command: `${bin} hook ${e}${cmdArgs}`, timeout: 5 }] }] : [{ hooks: [http] }];
   hooks.PermissionRequest = [{ hooks: [{ ...http, timeout: 900 }] }];   // relay answers when the user clicks Allow/Deny (auto-deny after 14 min)
   hooks.PreToolUse = [
     { matcher: "Agent", hooks: [http] },

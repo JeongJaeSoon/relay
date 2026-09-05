@@ -12,10 +12,15 @@ export function parseMarker(text: string) {
   return { kind: m[1] as "done" | "question" | "blocked", body, options };
 }
 const firstParagraph = (s: string) => s.trim().split(/\n\s*\n|\n/)[0]?.trim().slice(0, 300) ?? "";
+const TERMINAL_BACKGROUND = new Set(["completed", "done", "failed", "killed", "cancelled", "stopped"]);
+// A named teammate can be idle between assignments while still alive. Missing
+// and unfamiliar statuses remain blocking; neither idle nor a done marker proves exit.
+const backgroundContinues = (entry: unknown) => !entry || typeof entry !== "object"
+  || !TERMINAL_BACKGROUND.has(String((entry as { status?: unknown }).status));
 
 /** Roadmap B4 Stop row: what the end of a turn means for the task. */
 export function verdict(body: { last_assistant_message?: string; background_tasks?: unknown[]; session_crons?: unknown[] }, task: Task): Verdict {
-  if ((body.background_tasks?.length ?? 0) > 0 || (body.session_crons?.length ?? 0) > 0) return { status: "running", summary: null, question: null, reason: "background work continues" };
+  if (body.background_tasks?.some(backgroundContinues) || (body.session_crons?.length ?? 0) > 0) return { status: "running", summary: null, question: null, reason: "background work continues" };
   const msg = String(body.last_assistant_message ?? "").trim();
   if (!msg) return task.status === "waiting_input" && task.question ? { status: "waiting_input", summary: null, question: task.question, reason: "question still pending" } : { status: "needs_review", summary: null, question: null, reason: "empty last_assistant_message" };
   const mk = parseMarker(msg);

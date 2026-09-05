@@ -91,6 +91,61 @@ describe("ingestHook", () => {
     const s = setup(); const r = ingestHook({ session_id: "ghost", hook_event_name: "Stop", transcript_path: "/t", cwd: "/x" }, {}, s.deps);
     expect(r.status).toBe(202); expect(s.db.query("select count(*) c from events where task_uuid is null").get()).toEqual({ c: 1 });
   });
+  test("same-prompt Stop retries dedupe, but background completion and a changed final reply both reach verdict", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    const waiting = { hook_event_name: "Stop", prompt_id: "shared-turn", last_assistant_message: "Waiting", background_tasks: [{ id: "a", type: "subagent", status: "running" }, { id: "b", type: "shell", status: "running" }], session_crons: [] };
+    s.post(waiting); s.post({ ...waiting, background_tasks: [...waiting.background_tasks].reverse() });
+    expect(s.stops).toHaveLength(1);
+    const finished = { ...waiting, background_tasks: [], last_assistant_message: "RELAY: done\nIntegrated and tested." };
+    s.post(finished); s.post(finished);
+    expect(s.stops).toHaveLength(2);
+    // Background state alone is meaningful even if the assistant's text is unchanged.
+    s.post({ ...finished, background_tasks: [{ id: "a", type: "subagent", status: "completed" }] });
+    expect(s.stops).toHaveLength(3);
+    expect(s.db.query("select count(*) c from events where type='hook.Stop'").get()).toEqual({ c: 3 });
+    const scheduled = { ...finished, session_crons: [{ id: "cron-1", schedule: "each minute" }] };
+    s.post(scheduled); s.post({ ...scheduled, session_crons: [{ schedule: "each minute", id: "cron-1" }] });
+    expect(s.stops).toHaveLength(4); // cron changes matter; JSON key ordering does not
+  });
+  test("Stop retry compatibility with legacy ids preserves changed final replies", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    const old = { hook_event_name: "Stop", prompt_id: "legacy-turn", last_assistant_message: "Waiting", background_tasks: [{ id: "a", type: "subagent", status: "running" }], session_crons: [] };
+    s.log.emit({ type: "hook.Stop", task_uuid: "u1", process_generation: 1, source_session_id: "sess-1", source_event_id: "stop:legacy-turn", turn_id: "legacy-turn", payload: old });
+    s.post(old); expect(s.stops).toHaveLength(0);
+    const final = { ...old, background_tasks: [], last_assistant_message: "RELAY: done\nFinished." };
+    s.post(final); s.post(final); expect(s.stops).toHaveLength(1);
+    expect(s.db.query("select count(*) c from events where type='hook.Stop'").get()).toEqual({ c: 2 });
+  });
+  test("HTTP Stop and its redacted spool retry share the same completion identity", () => {
+    for (const spoolFirst of [false, true]) {
+      const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+      const prefix = "RELAY: done\nVerified a sample authorization header: ";
+      const raw = { hook_event_name: "Stop", prompt_id: "transport-retry", last_assistant_message: prefix + "Bearer " + "x".repeat(24), background_tasks: [], session_crons: [] };
+      const spooled = { ...raw, last_assistant_message: prefix + "[redacted:bearer]" };
+      if (spoolFirst) { s.post(spooled, "u1", { replay: true }); s.post(raw); }
+      else { s.post(raw); s.post(spooled, "u1", { replay: true }); }
+      expect(s.stops).toHaveLength(1);
+      expect(s.db.query("select count(*) c from events where type='hook.Stop'").get()).toEqual({ c: 1 });
+      s.post({ ...spooled, last_assistant_message: "RELAY: done\nA different verified result." });
+      expect(s.stops).toHaveLength(2);
+    }
+  });
+  test("legacy Stop retries compare the complete redacted blob when the event payload was capped", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
+    const old = { hook_event_name: "Stop", prompt_id: "large-legacy-turn", last_assistant_message: "x".repeat(70_000) + "\nRELAY: done\nVerified.", background_tasks: [], session_crons: [] };
+    const stored = s.log.emit({ type: "hook.Stop", task_uuid: "u1", process_generation: 1, source_session_id: "sess-1", source_event_id: "stop:large-legacy-turn", turn_id: "large-legacy-turn", payload: old });
+    expect(stored?.truncated).toBe(true);
+    s.post(old, "u1", { replay: true }); expect(s.stops).toHaveLength(0);
+    s.post({ ...old, last_assistant_message: old.last_assistant_message + " Another result." }); expect(s.stops).toHaveLength(1);
+  });
+  test("identical Stop payloads in distinct generations do not collide; old replay stays stale", () => {
+    const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup", relay_gen: 1 });
+    const stop = { hook_event_name: "Stop", prompt_id: "same-turn", last_assistant_message: "RELAY: done\nFinished.", background_tasks: [] };
+    s.post({ ...stop, relay_gen: 1 }); expect(s.stops).toHaveLength(1);
+    s.post({ hook_event_name: "SessionStart", source: "resume", relay_gen: 2 });
+    s.post({ ...stop, relay_gen: 2 }); expect(s.stops).toHaveLength(2);
+    s.post({ ...stop, relay_gen: 1 }); expect(s.stops).toHaveLength(2);
+  });
   test("SessionEnd while running (no stop command of ours) is a crash; PostToolUse(SendMessage) records message.sent; Notification nudges", () => {
     const s = setup(); s.post({ hook_event_name: "SessionStart", source: "startup" });
     s.post({ hook_event_name: "PostToolUse", tool_name: "SendMessage", tool_use_id: "tuS", tool_input: { to: "relay:T-02 x", message: "hi" }, tool_response: { success: true } });

@@ -10,6 +10,7 @@ import { commandId } from "../core/ids.ts";
 import type { AgentRow, AgentRunner, RmOutcome, SpawnSpec } from "../runner/runner.ts";
 import { pendingCleanup } from "./cleanup.ts";
 import { log as slog } from "../log.ts";
+import { getMeta } from "../db/db.ts";
 
 export type CommandPayload =
   | { kind: "spawn"; spec: SpawnSpec }
@@ -166,7 +167,10 @@ export class Outbox {
   /** Drains the task's queue head-first (a pending stop/rm is always the head). Stops on: empty queue (re-run if enqueue raced us), a blocked/held head (an external trigger — Stop hook, attach release, retry — re-runs), or an unknown/failed head. Awaiting run() awaits the in-flight pass too (recovery relies on that). */
   run(taskUuid: string): Promise<void> {
     const cur = this.inflight.get(taskUuid); if (cur) { this.again.add(taskUuid); return cur; }
-    const p = this.loop(taskUuid).then((stop) => { this.inflight.delete(taskUuid); const again = this.again.delete(taskUuid); if (stop === "empty" && again) return this.run(taskUuid); }, (e) => { this.inflight.delete(taskUuid); this.again.delete(taskUuid); throw e; });
+    // The scheduler may grant a slot after this pass saw `queued` and blocked,
+    // but before its promise settles. Recheck that external trigger as well as
+    // an empty queue; held/failed I/O still requires a later explicit trigger.
+    const p = this.loop(taskUuid).then((stop) => { this.inflight.delete(taskUuid); const again = this.again.delete(taskUuid); if ((stop === "empty" || stop === "blocked") && again) return this.run(taskUuid); }, (e) => { this.inflight.delete(taskUuid); this.again.delete(taskUuid); throw e; });
     this.inflight.set(taskUuid, p); return p;
   }
   private async loop(taskUuid: string): Promise<"empty" | "blocked" | "held" | "error"> {
@@ -199,6 +203,9 @@ export class Outbox {
   }
   /** B1 gate. A slot is only ever granted by the scheduler (status=starting), so spawn/resume never run for a merely `queued` task. `stop`/`rm` always run (kill switch and close win over attach; the API refuses user-initiated interrupt/close while attached). */
   private canRun(cmd: Command, t: Task): boolean {
+    // Replayed completion hooks can call run() before recovery has reconciled identity and commands.
+    // Even cleanup must wait: stop/rm against the pre-replay identity can target the wrong generation.
+    if (getMeta(this.db, "recovering") === "1") return false;
     const k = cmd.kind;
     // A reap has no urgency and may take the shared worktree with it, so unlike a real stop/rm it waits for detach.
     if (k === "rm" && this.db.query("select 1 from commands where task_uuid=? and kind='stop' and state in ('pending','running','unknown','failed')").get(t.uuid)) return false;
@@ -365,6 +372,10 @@ export class Outbox {
           this.log.emit({ type: "command.unknown", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: "no delivery evidence yet — waiting for the marker echo" } }); return;
         }
         if (!t.session_id) throw new Error("no session_id to resume");
+        // A normal follow-up is stored as `send`, but this transport stops and
+        // forks the process just like `resume`. Record the chosen transport
+        // before either hook can arrive; socket sends grant no such exemption.
+        this.log.emit({ type: "command.resume_started", task_uuid: t.uuid, causation_id: cmd.id, process_generation: t.process_generation, payload: { id: cmd.id } });
         if (live?.alive && live.short_id) { await this.runner.stop(live.short_id); if (!(await this.waitGone(live.short_id))) throw new Error("stop not confirmed"); }
         const gen = t.process_generation + 1;
         const r = await this.runner.resume({ sessionId: t.session_id, cwd: live?.cwd ?? t.worktree_path ?? process.cwd(), name: `relay:${t.display_id} ${t.title}`, settingsJson: this.deps.settingsJson(t, gen), prompt: text, env: this.deps.env(t, gen) });
