@@ -18,7 +18,7 @@ const PROC: Record<string, string> = { none: "not started", starting: "starting"
 export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
   const parent = t.parent_uuid ? ctx.tasks[t.parent_uuid] : null;
   return { id: t.display_id, uuid: t.uuid, num: t.num, title: t.title, project: ctx.projects.find((p) => p.id === t.project_id)?.name ?? t.project_id, size: t.size, status: stKey(t.status), statusLabel: stLabel(t.status),
-    step: TERMINAL.has(t.status) && t.last_summary ? t.last_summary : t.last_step ?? (t.question ? `❓ ${t.question.text}` : t.last_summary ?? ""), startedAt: t.started_at ? new Date(t.started_at) : null, endedAt: t.ended_at ? new Date(t.ended_at) : null,
+    step: t.status === "waiting_input" && t.question ? `❓ ${t.question.text}` : t.status === "queued" ? "Waiting for an agent slot" : TERMINAL.has(t.status) && t.last_summary ? t.last_summary : t.last_step ?? t.last_summary ?? "", startedAt: t.started_at ? new Date(t.started_at) : null, endedAt: t.ended_at ? new Date(t.ended_at) : null,
     question: t.status === "waiting_input" && t.question ? { q: t.question.text, chips: t.question.options.length ? t.question.options : ["OK"] } : null,
     sub: !!t.parent_uuid, parent: parent?.display_id ?? null, children: Object.values(ctx.tasks).filter((c) => c.parent_uuid === t.uuid && c.status !== "closed").sort((a, b) => a.num - b.num).map((c) => c.display_id),
     sid: t.short_id ?? "—", proc: t.process_state === "alive" ? (t.turn_state === "busy" ? "running" : "idle") : PROC[t.process_state] ?? t.process_state, gen: t.process_generation, attached: t.attach_state !== "none" ? t.attached_by : null,
@@ -95,11 +95,26 @@ const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label
  *  while the task is waiting, and chatQuestion reads `t.question.q`. Checking only that the task exists is the shape that
  *  took the whole sync() down on reload (#24) — and came back once already, so the branch now lives here, where a test can reach it. */
 export const promotedQuestionTask = (m: Pick<Message, "role">, task: DemoTask | undefined): DemoTask | null => (m.role === "question" && task?.question ? task : null);
+/** Successful detail loads are cached; a failed request can be selected again without evicting a newer load. */
+export function createDetailLoader<T>(fetchDetail: (uuid: string) => Promise<T>) {
+  let selected: { uuid: string } | null = null;
+  return (uuid: string): Promise<T> | null => {
+    if (selected?.uuid === uuid) return null;
+    const attempt = { uuid }; selected = attempt;
+    return fetchDetail(uuid).catch(error => { if (selected === attempt) selected = null; throw error; });
+  };
+}
 export function installAdapter() {
-  const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0; let loadedDetail: string | null = null;
+  const S = D.S; const notifs = createNotifQueue(); const badgeRows = new Map<string, HTMLElement>(); const drawn = new Set<string>(); let raf = 0;
+  const loadDetail = createDetailLoader(api.taskDetail);
+  const selectionKey = "relay-selected-task"; let restoreSelection = true;
+  const submitMessage = api.createMessageSender();
   const ctx = (): Ctx => ({ projects: store.state.projects, tasks: store.state.tasks });
   const relay = {
-    send: (text: string, ask = false, askTask?: string) => run("send", api.sendMessage(text, { ask, askTask })),
+    send: async (text: string, ask = false, askTask?: string) => {
+      try { await submitMessage(text, { ask, askTask }); return true; }
+      catch (e) { note(`Send failed — your draft is still here. ${(e as Error).message}`); return false; }
+    },
     answer: (t: DemoTask, choice: string) => run("answer", api.answer(t.uuid, choice)),
     stop: (t: DemoTask) => run("stop", api.interrupt(t.uuid)), restart: (t: DemoTask) => run("restart", api.retry(t.uuid)), archive: (t: DemoTask) => run("archive", api.close(t.uuid)),
     attach: async (t: DemoTask) => { try { const { command } = await api.attachLease(t.uuid); await navigator.clipboard?.writeText(command).catch(() => {}); note(`Copied to clipboard: ${command} (run it in a terminal — relay attach releases the lease when it ends)`); } catch (e) { note(`attach failed: ${(e as Error).message}`); } },
@@ -108,7 +123,7 @@ export function installAdapter() {
     registerProject: (p: { name: string; path: string; description: string; keywords: string[] }) => run("project registration", api.registerProject(p)), removeProject: (id: string) => run("project removal", api.removeProject(id)),
     redispatch: (messageId: string) => run("retry", api.redispatch(messageId)),
     stopForeign: (key: string) => run("stop", api.stopForeign(key)),           // the one write the dashboard can aim at a session relay does not own
-    loadDetail: (t: DemoTask) => { if (loadedDetail === t.uuid) return; loadedDetail = t.uuid; api.taskDetail(t.uuid).then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).filter((e) => isTimelineEvent(e.type)).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
+    loadDetail: (t: DemoTask) => { const request = loadDetail(t.uuid); if (!request) return; request.then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).filter((e) => isTimelineEvent(e.type)).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
   };
   D.relay = relay;
   const syncTasks = (uuids: Iterable<string>) => {
@@ -173,11 +188,23 @@ export function installAdapter() {
     const foreignChanged = all || d.foreign; if (foreignChanged) syncForeign();
     if (all || d.messages.size || d.tasks.size) { syncLedger(); if (!all && !tasksChanged && !foreignChanged) D.renderLedger(); }   // otherwise relayout() → refresh() draws it
     if (tasksChanged || foreignChanged || all) D.relayout();                   // one layout+render per animation frame, whatever arrived
+    if (all && restoreSelection) {
+      restoreSelection = false;
+      const saved = sessionStorage.getItem(selectionKey);
+      const task = saved ? demoOf(saved) : null;
+      if (task) D.select(task.id); else sessionStorage.removeItem(selectionKey);
+    }
   };
   store.subscribe((f) => {
     if (f) { if (f.type === "task.created" || f.type === "task.updated") notifs.observe(f.task); }
     else for (const t of Object.values(store.state.tasks)) notifs.observe(t);  // snapshot or connection change: re-baseline, and notify for whatever moved while we were disconnected
     if (!raf) raf = requestAnimationFrame(sync);
   });
-  const origSelect = D.select; D.select = (id: string | null) => { origSelect(id); const t = id ? S.tasks.get(id) : null; if (t) relay.loadDetail(t); };   // first selection pulls the 200-event history
+  const origSelect = D.select; D.select = (id: string | null) => {
+    origSelect(id); const t = id ? S.tasks.get(id) : null;
+    if (t) { sessionStorage.setItem(selectionKey, t.uuid); relay.loadDetail(t); }
+    else sessionStorage.removeItem(selectionKey);
+  };   // persist the UUID, since display IDs can be reused by a fresh database
+  const origClear = D.clearSel; D.clearSel = () => { sessionStorage.removeItem(selectionKey); origClear(); };
+  const origForeign = D.selectForeign; D.selectForeign = (key: string) => { sessionStorage.removeItem(selectionKey); origForeign(key); };
 }

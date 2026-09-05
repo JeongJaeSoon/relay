@@ -47,3 +47,50 @@ describe("ws resync completion", () => {
     expect(store.state.conn).toBe("ok");
   });
 });
+
+describe("snapshot failure recovery", () => {
+  test("an HTTP failure closes the socket and retries initial sync", async () => {
+    store.reset(); let requests = 0;
+    const stop = connect({ url: "ws://failure/ws", WebSocketImpl: FakeWS as any, fetchImpl: (async () => ++requests === 1
+      ? { ok: false, status: 503, json: async () => ({}) }
+      : { ok: true, json: async () => snapshot }) as any });
+    try {
+      await FakeWS.last.onmessage({ data: JSON.stringify({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} }) });
+      expect(store.state.conn).toBe("reconnecting");
+      await Bun.sleep(1100);
+      expect(FakeWS.last.url).not.toContain("from_seq");
+      await FakeWS.last.onmessage({ data: JSON.stringify({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} }) });
+      expect(requests).toBe(2); expect(store.state.conn).toBe("ok");
+    } finally { stop(); }
+  });
+  test("a late snapshot from a disconnected socket cannot roll back the current state", async () => {
+    store.reset(); let finishOld!: (r: any) => void; let requests = 0;
+    const stop = connect({ url: "ws://race/ws", WebSocketImpl: FakeWS as any, fetchImpl: (() => ++requests === 1
+      ? new Promise(r => { finishOld = r; })
+      : Promise.resolve({ ok: true, json: async () => ({ ...snapshot, as_of_seq: 20 }) })) as any });
+    try {
+      const old = FakeWS.last;
+      const pending = old.onmessage({ data: JSON.stringify({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} }) });
+      old.close(); await Bun.sleep(1100);
+      await FakeWS.last.onmessage({ data: JSON.stringify({ seq: 20, idx: 0, type: "hello", as_of_seq: 20, state: {} }) });
+      finishOld({ ok: true, json: async () => snapshot }); await pending;
+      expect(store.state.seq).toBe(20); expect(store.state.conn).toBe("ok");
+    } finally { stop(); }
+  });
+});
+
+test("a stalled snapshot closes its socket and retries even when fetch never settles", async () => {
+  store.reset(); let requests = 0; let signal!: AbortSignal;
+  const stop = connect({ url: "ws://stalled/ws", WebSocketImpl: FakeWS as any, snapshotTimeoutMs: 20,
+    fetchImpl: ((_url: string, init: RequestInit) => { signal = init.signal!; requests++;
+      return requests === 1 ? new Promise(() => {}) : Promise.resolve({ ok: true, json: async () => snapshot }); }) as any });
+  try {
+    const old = FakeWS.last;
+    void old.onmessage({ data: JSON.stringify({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} }) });
+    await Bun.sleep(50);
+    expect(signal.aborted).toBe(true); expect(store.state.conn).toBe("reconnecting");
+    await Bun.sleep(1100); expect(FakeWS.last).not.toBe(old);
+    await FakeWS.last.onmessage({ data: JSON.stringify({ seq: 5, idx: 0, type: "hello", as_of_seq: 5, state: {} }) });
+    expect(requests).toBe(2); expect(store.state.conn).toBe("ok");
+  } finally { stop(); }
+});

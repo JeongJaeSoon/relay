@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Keep message drafts and scoped Ask context on failed submission. Wait for acknowledgement and
+  reuse the request ID on retry so a lost acknowledgement does not create a duplicate task.
+- Recover from failed or stalled initial snapshots, retry failed detail loads, and ignore late
+  responses from disconnected WebSockets. Coalesce identical in-flight message requests.
+- Restore the selected task after refresh, show active questions and queue captions in graph
+  cards, and preserve line breaks and long text in messages.
+- Make compact layouts usable with a task-list drawer, bounded scrolling settings/notifications,
+  corrected detail placement, chat-container-aware request ledger and unobstructed graph controls.
+- Fit first-launch guidance below Gateway in both graph layouts so an empty session list does
+  not overlap zoom controls or clip at narrow widths.
+- Record source-checkout QA, real Claude worker execution and its limits in `docs/QA-2026-09-05.md`.
+
 ## 0.1.4
 
 A dashboard regression that #24 fixed and then unfixed in its own second commit, and a script that

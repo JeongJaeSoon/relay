@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { isAsk, stripAsk } from "@shared/ask.ts";
-import { sendMessage } from "../src/api.ts";
+import { createMessageSender, sendMessage } from "../src/api.ts";
 import { badgeParts } from "../src/adapter.ts";
 import { requestRows } from "../src/ledger.ts";
 
@@ -11,6 +11,27 @@ const capture = () => {
   globalThis.fetch = (async (_url: string, init: any) => { bodies.push(JSON.parse(init.body)); return new Response(JSON.stringify({ message_id: "m" }), { status: 202 }); }) as any;
   return bodies;
 };
+
+test("a lost acknowledgement retries the same request ID, while a successful repeat is new", async () => {
+  const bodies: any[] = []; const sender = createMessageSender();
+  globalThis.fetch = (async (_url: string, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    if (bodies.length === 1) throw new Error("ack lost after server accepted");
+    return new Response(JSON.stringify({ message_id: "m" }), { status: 202 });
+  }) as any;
+  await expect(sender("myapp refactor")).rejects.toThrow("ack lost");
+  await sender("myapp refactor"); await sender("myapp refactor");
+  expect(bodies[0].client_message_id).toBe(bodies[1].client_message_id);
+  expect(bodies[2].client_message_id).not.toBe(bodies[1].client_message_id);
+});
+
+test("changing the failed draft's Ask scope allocates a new request ID", async () => {
+  const bodies: any[] = []; const sender = createMessageSender();
+  globalThis.fetch = (async (_url: string, init: any) => { bodies.push(JSON.parse(init.body)); throw new Error("offline"); }) as any;
+  await expect(sender("why?", { askTask: "u1" })).rejects.toThrow();
+  await expect(sender("why?", { askTask: "u2" })).rejects.toThrow();
+  expect(bodies[0].client_message_id).not.toBe(bodies[1].client_message_id);
+});
 
 test("the ? gesture is recognised and stripped", () => {
   expect(isAsk("? why")).toBe(true); expect(isAsk("?why")).toBe(true); expect(isAsk("why?")).toBe(false);
@@ -51,4 +72,14 @@ test("the ask chip reads the declaration, not the text", () => {
   expect(requestRows([m("? why did T-02 fail", true)], {})[0].text).toBe("why did T-02 fail");
   // ...but a `?` body from a non-typing source is the request, and the reader must show what was actually sent.
   expect(requestRows([{ ...m("? please fix the parser"), source: "github" }], {})[0].text).toBe("? please fix the parser");
+});
+
+test("identical concurrent sends share one in-flight POST", async () => {
+  let finish!: (r: Response) => void; let calls = 0;
+  globalThis.fetch = (() => { calls++; return new Promise(r => { finish = r; }); }) as any;
+  const sender = createMessageSender();
+  const first = sender("myapp refactor"), second = sender("myapp refactor");
+  expect(calls).toBe(1);
+  finish(new Response(JSON.stringify({ message_id: "m" }), { status: 202 }));
+  expect(await first).toEqual({ message_id: "m" }); expect(await second).toEqual({ message_id: "m" });
 });

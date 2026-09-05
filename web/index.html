@@ -93,7 +93,7 @@ button,input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 /* ---------- app frame ---------- */
 #app{
   display:grid;position:relative;
-  grid-template-columns:var(--sbw,248px) 1fr var(--dw,296px);
+  grid-template-columns:var(--sbw,248px) minmax(0,1fr) var(--dw,296px);
   grid-template-rows:48px auto minmax(0,1fr) var(--chh,232px); /* 2행 = 상태 배너(없으면 0) */
   height:100vh;height:100dvh;
 }
@@ -107,6 +107,7 @@ header{
 .brand{display:flex;align-items:center;gap:8px;font-size:var(--fs-brand);font-weight:700;letter-spacing:-.01em}
 .brand .mark{width:10px;height:10px;border-radius:3px;background:var(--accent);flex:none}
 .hdr-actions{display:flex;align-items:center;gap:6px}
+#sidebarBtn{display:none}
 .icon-btn{
   width:30px;height:30px;border-radius:7px;cursor:pointer;position:relative;
   background:var(--surface);border:1px solid var(--line-strong);color:var(--text);
@@ -238,6 +239,7 @@ header{
   position:absolute;left:12px;bottom:12px;display:flex;gap:12px;align-items:center;
   background:var(--surface);border:1px solid var(--line);border-radius:8px;
   padding:6px 12px;font-size:var(--fs-micro);color:var(--muted);box-shadow:var(--shadow-sm);
+  max-width:calc(100% - 24px);flex-wrap:wrap;row-gap:6px;
 }
 .legend span{display:flex;align-items:center;gap:5px}
 .canvas-tools{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:6px}
@@ -248,7 +250,7 @@ header{
 }
 .ct-btn:hover{background:var(--surface2)}
 #emptyHint{
-  position:absolute;left:264px;top:40px;width:400px;display:flex;flex-direction:column;
+  position:absolute;left:32px;top:110px;width:224px;display:flex;flex-direction:column;
   gap:4px;color:var(--muted);pointer-events:none;font-size:var(--fs-small);
 }
 #emptyHint .big{font-size:var(--fs-title);font-weight:700;color:var(--text)}
@@ -302,7 +304,7 @@ header{
 
 /* chat dock */
 .chat{
-  display:flex;flex-direction:column;min-height:0;position:relative;
+  display:flex;flex-direction:column;min-height:0;min-width:0;position:relative;container-type:inline-size;
   background:var(--surface);border-top:1px solid var(--line-strong);
 }
 .chat-h{
@@ -340,7 +342,7 @@ header{
 .lg-empty{color:var(--muted);font-size:var(--fs-micro);padding:4px 0;display:flex;flex-direction:column;gap:7px;align-items:flex-start}
 .pill.pulse{animation:lgPulse 1s ease-in-out infinite}
 @keyframes lgPulse{50%{opacity:.35}}
-@media (max-width:1100px){#ledger{display:none}}
+@container (max-width:760px){#ledger{display:none}}
 #msgs{ /* 스크롤 컨테이너는 패널 전체 폭, 내용 열만 920px 중앙 정렬 → 스크롤바가 가장자리에 붙음 */
   flex:1;overflow-y:auto;padding:10px 20px;display:grid;grid-template-columns:minmax(0,920px);justify-content:center;align-content:start;gap:8px;
 }
@@ -350,6 +352,8 @@ header{
 .m-sys{background:var(--surface2);border:1px solid var(--line);border-radius:12px 12px 12px 3px;
   padding:7px 12px;font-size:var(--fs-body)}
 .m-note{justify-self:center;font-size:var(--fs-micro);color:var(--muted)}
+.m-user,.m-sys{white-space:pre-wrap;overflow-wrap:anywhere}
+.m-note,.lg-msg,.lg-ans,.d-body,.tl-row pre{overflow-wrap:anywhere}
 .m-badges{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
 .badge{
   font-family:var(--font-mono);font-size:var(--fs-micro);color:var(--muted);
@@ -364,7 +368,7 @@ header{
 .m-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
 .chat-in{display:flex;align-items:flex-end;gap:8px;padding:10px 20px 12px;border-top:1px solid var(--line);justify-content:center} /* flex-end: the input grows upward, Send stays on the baseline */
 #input{
-  flex:0 1 820px;min-height:38px;padding:7px 14px;border-radius:9px;line-height:1.5;resize:none;overflow-y:auto;
+  flex:0 1 820px;min-width:0;min-height:38px;padding:7px 14px;border-radius:9px;line-height:1.5;resize:none;overflow-y:auto;
   max-height:clamp(38px,calc(var(--chh,232px) - 115px),186px); /* 8 lines at most, minus the dock chrome (33px header + 22px row padding) and 60px kept for the message list */
   background:var(--surface);border:1px solid var(--line-strong);
 }
@@ -375,6 +379,7 @@ header{
   background:var(--accent);color:var(--accent-ink);font-size:var(--fs-body);
 }
 #sendBtn:hover{filter:brightness(1.07)}
+#sendBtn:disabled,#askBtn:disabled{opacity:.6;cursor:wait}
 #askBtn{
   flex:none;white-space:nowrap;height:38px;padding:0 14px;border-radius:9px;cursor:pointer;font-weight:600;
   background:var(--surface);color:var(--muted);border:1px solid var(--line-strong);font-size:var(--fs-body);
@@ -393,7 +398,8 @@ header{
 #notifBtn.has .nb{display:inline-flex}
 #notifBtn.dnd{color:var(--muted)}
 #notifBtn.dnd::after{content:"";position:absolute;left:50%;top:50%;width:18px;height:2px;margin:-1px 0 0 -9px;background:currentColor;transform:rotate(-40deg);border-radius:1px} /* 방해 금지 = 벨에 사선 */
-#toasts{position:fixed;right:12px;top:56px;width:320px;display:flex;flex-direction:column;gap:8px;z-index:60}
+#toasts{position:absolute;right:54px;top:12px;width:320px;max-width:calc(100% - 66px);display:flex;flex-direction:column;gap:8px;z-index:19;pointer-events:none}
+#toasts .ncard{pointer-events:auto}
 .ncard{
   position:relative;background:var(--surface);border:1px solid var(--line-strong);
   border-radius:10px;box-shadow:var(--shadow-lg);padding:8px 30px 8px 17px;cursor:pointer;
@@ -450,6 +456,9 @@ input[type="checkbox"]{accent-color:var(--accent)}
   box-shadow:var(--shadow-lg);z-index:70;overflow:hidden;
 }
 #settings.open{display:flex;animation:drop .16s ease}
+#settings{max-height:calc(100dvh - 68px);overflow-y:auto}
+#settings>*{flex-shrink:0}
+#settings,#notifCenter{max-width:calc(100vw - 24px)}
 .set-body{display:flex;flex-direction:column}
 .set-row{display:flex;align-items:center;justify-content:space-between;gap:10px;height:46px;padding:0 14px;font-size:var(--fs-small)}
 .set-row+.set-row{border-top:1px solid var(--line)}
@@ -578,13 +587,40 @@ input[type="checkbox"]{accent-color:var(--accent)}
 
 /* narrow screens: detail becomes an overlay */
 @media (max-width:980px){
-  #app{grid-template-columns:200px 1fr 0}
+  #app{--sbw:200px;grid-template-columns:var(--sbw) minmax(0,1fr) 0}
+  #app .chat{grid-column:1/-1}
+  #app .sidebar{grid-row:3}
   .rz-sb,.rz-dt{display:none}
   .detail{display:none}
   .detail.open{
-    display:flex;position:absolute;right:0;top:calc(48px + var(--bh,0px));bottom:var(--chh,232px);width:296px;z-index:20;
+    display:flex;position:absolute;grid-area:auto;right:0;top:calc(48px + var(--bh,0px));bottom:var(--chh,232px);width:296px;max-width:100%;z-index:20;
     box-shadow:var(--shadow-lg);
   }
+  #minimap{display:none!important} /* the wrapping legend uses this space */
+}
+@media (max-width:640px){
+  #app{grid-template-columns:minmax(0,1fr)}
+  #app .canvas{grid-column:1}
+  #app .sidebar{display:none}
+  #app.compact-sb-open .sidebar{display:block;position:absolute;grid-area:auto;left:0;top:calc(48px + var(--bh,0px));bottom:var(--chh,232px);width:min(280px,85vw);z-index:25;box-shadow:var(--shadow-lg)}
+  #sidebarBtn{display:flex}
+  header{gap:8px;padding:0 10px}
+  .brand{gap:5px}
+  .conn{min-width:0}
+  #connTxt{max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hdr-actions{gap:4px;flex:none}
+  .chat-h{padding:7px 12px}
+  .chat-h .sub{display:none}
+  .chat-in{padding:8px 10px 10px;gap:6px}
+  #input{padding:7px 10px}
+  #sendBtn,#askBtn{padding:0 10px}
+  #msgs{padding:10px 12px}
+  .m-user,.m-row{max-width:94%}
+  .legend{gap:6px 10px;padding:6px 8px}
+}
+@media (max-height:600px){
+  #app{--chh:min(200px,45dvh)}
+  #app.hide-ch{--chh:0px}
 }
 @media (prefers-reduced-motion:reduce){
   .node.st-run,.node.sel.st-run,.node.fresh.st-run{animation:none}
@@ -602,6 +638,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
     <div class="brand"><span class="mark"></span>relay</div>
     <span class="conn" id="conn"><i></i><span id="connTxt">Connected</span></span>
     <div class="hdr-actions">
+      <button id="sidebarBtn" class="icon-btn" aria-label="Toggle task list" aria-expanded="false" aria-controls="sidebar" title="Task list">☰</button>
       <button id="palBtn" class="icon-btn" aria-label="Command palette" title="Command palette (⌘⇧P)">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
       </button>
@@ -630,9 +667,9 @@ input[type="checkbox"]{accent-color:var(--accent)}
         <div class="lane-label" id="laneLabel">Queue</div>
         <div class="lane-label" id="foreignLabel">Outside relay · watching only</div>
         <div id="emptyHint">
-          <div class="big">← Tasks stack up here</div>
-          <div>Start from the chat below · ⌘⇧P command palette</div>
-          <div>Anything over the concurrency limit (10) queues under the gateway</div>
+          <div class="big">Your tasks appear here</div>
+          <div>Send a message below to start.</div>
+          <div>Use ⌘⇧P for commands.</div>
         </div>
         <div id="nodes"></div>
       </div>
@@ -650,6 +687,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
         <button class="ct-btn" id="zfit" aria-label="Fit to view" title="Fit to view · resume auto-fit">⤢</button>
       </div>
       <div id="minimap" aria-hidden="true"></div>
+      <div id="toasts" aria-live="polite"></div>
     </section>
 
     <aside class="detail" id="detail" aria-label="Task detail">
@@ -684,7 +722,6 @@ input[type="checkbox"]{accent-color:var(--accent)}
   </footer>
 </div>
 
-<div id="toasts" aria-live="polite"></div>
 <div id="notifCenter" role="dialog" aria-label="Notifications">
   <div class="nc-h">Notifications</div>
   <div class="nc-body"></div>

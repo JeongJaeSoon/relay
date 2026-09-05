@@ -1,5 +1,8 @@
 # relay dashboard — browser QA
 
+Latest pass: [2026-09-05 QA report](../docs/QA-2026-09-05.md), covering real Claude execution,
+network failure recovery and desktop/tablet/compact viewport fixes.
+
 Vanilla dashboard: the demo engine (`src/app.js`) rendered from server state by six TS modules
 (`consts`/`store`/`ws`/`api`/`notify`/`ledger`/`adapter`), built into one self-contained
 `web/dist/index.html` by `scripts/build-web.ts`. Zero runtime dependencies, zero external references.
@@ -117,8 +120,7 @@ rAF로 합쳐 한 프레임에 `relayout()` 1회만 부르므로, 훅이 몰려�
 
 ## 남은 관찰
 
-- 대기열 카드 본문이 비어 있다 — 서버가 queued 태스크에 `last_step: null`을 주고, 데모는 "슬롯 대기 중
-  (n/m 사용)"을 보여줬다. `대기 n` pill이 상태를 말하므로 v1은 이대로 둔다.
+- 대기열 카드의 빈 본문은 2026-09-05 QA에서 `Waiting for an agent slot` 안내로 수정했다.
 - 보관 후에도 그 태스크가 선택된 채로 상세에 남는다(데모는 `S.sel`을 비웠다). 사이드바가 closed 태스크를
   계속 보여주므로 선택 상태 자체는 유효하다.
-- 토스트 스택이 캔버스 우상단 줌 버튼(+/−)을 5초간 가린다.
+- 토스트는 2026-09-05 QA에서 캔버스 내부의 줌 버튼 옆으로 이동했다.

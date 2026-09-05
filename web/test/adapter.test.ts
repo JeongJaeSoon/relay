@@ -7,10 +7,10 @@ test("toDemoTask maps status/label/step/question/children into the demo shape", 
   const parent = base("u1", "waiting_input", { question: { text: "어느 파일?", options: ["a.txt", "b.txt"], asked_at: 1, source: "marker" } }); const child = base("u2", "running", { display_id: "T-03.1", parent_uuid: "u1", agent_type: "relay-explore", num: -3001 });
   const tasks = { u1: parent, u2: child };
   const d = toDemoTask(parent, { ...ctx, tasks }); expect(d).toMatchObject({ id: "T-03", uuid: "u1", project: "myapp", status: "wait", statusLabel: "Needs input", question: { q: "어느 파일?", chips: ["a.txt", "b.txt"] }, children: ["T-03.1"], sub: false, sid: "ab12", branch: "relay-abc" });
-  expect(d.startedAt).toBeInstanceOf(Date); expect(d.step).toBe("Edit src/auth.ts");
+  expect(d.startedAt).toBeInstanceOf(Date); expect(d.step).toBe("❓ 어느 파일?");
   const c = toDemoTask(child, { ...ctx, tasks }); expect(c).toMatchObject({ id: "T-03.1", sub: true, parent: "T-03", status: "run", agentType: "relay-explore" });
   expect(toDemoTask(base("u3", "needs_review", { last_summary: "테스트 실패" }), ctx)).toMatchObject({ status: "wait", statusLabel: "Needs review", step: "테스트 실패" });
-  expect(toDemoTask(base("u4", "queued", { started_at: null, queued_at: 7, qhead: true }), ctx)).toMatchObject({ status: "queue", queuedAt: 7, qhead: true, startedAt: null });
+  expect(toDemoTask(base("u4", "queued", { started_at: null, queued_at: 7, qhead: true }), ctx)).toMatchObject({ status: "queue", queuedAt: 7, qhead: true, startedAt: null, step: "Waiting for an agent slot" });
 });
 test("badgeParts follows dispatch_state; closeConfirmUuid parses the server's close prompt", () => {
   const m = (st: string, extra: Record<string, unknown> = {}) => ({ id: "m1", role: "user", source: "user", client_message_id: "c", dispatch_state: st, text: "auth 리팩토링", task_uuid: null, reply_to_task_uuid: null, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: 1, ...extra }) as any;

@@ -119,7 +119,7 @@ function renderLedger(){
 function setLedgerFilter(f){ledgerFilter=f;renderLedger()}
 
 /* ================= server actions (window.relay, installed by web/src/adapter.ts) ================= */
-function send(text){text=text.trim();if(!text)return;relay.send(text,askActive(),askTask&&askTask.uuid)}  /* the server echoes the message as chat.message — no optimistic row */
+function send(text){text=text.trim();if(!text||(askActive()&&!text.replace(ASK_RE,"").trim()))return Promise.resolve(false);return relay.send(text,askActive(),askTask&&askTask.uuid)}  /* resolve only after the server acknowledges the message */
 function answerQuestion(t,choice){if(t.status!=="wait")return;relay.answer(t,choice)}
 function stopTask(t){relay.stop(t)}
 function restartTask(t){relay.restart(t)}
@@ -167,8 +167,6 @@ function layout(){
   const laneX=parseFloat(gwEl.style.left)||32;
   const laneY0=(parseFloat(gwEl.style.top)||ROW_Y0)+gwEl.offsetHeight+40;
   queued.forEach((t,i)=>{t.x=laneX;t.y=laneY0+i*76});
-  const eh=document.getElementById("emptyHint");
-  eh.style.top=((parseFloat(gwEl.style.top)||ROW_Y0)+6)+"px";eh.style.left=(parseFloat(gwEl.style.left)+gwEl.offsetWidth+36)+"px";
   const ll=document.getElementById("laneLabel");
   ll.style.display=queued.length?"block":"none";
   ll.style.left=(laneX+34)+"px";ll.style.top=(laneY0-19)+"px";
@@ -506,10 +504,10 @@ function famOf(id){ /* a unit of work = the top-level task plus its subagents */
   const s=new Set();const t=id&&S.tasks.get(id);if(!t||t.status==="closed")return s;
   const r=(t.sub&&S.tasks.get(t.parent))||t;s.add(r.id);r.children.forEach(c=>s.add(c));return s;
 }
-function select(id){S.sel=id;S.fsel=null;refresh()}
-function selectForeign(key){S.fsel=key;S.sel=null;refresh()} /* mutually exclusive with a task selection — there is only one detail panel */
+function select(id){S.sel=id;S.fsel=null;closeCompactSidebar();refresh()}
+function selectForeign(key){S.fsel=key;S.sel=null;closeCompactSidebar();refresh()} /* mutually exclusive with a task selection — there is only one detail panel */
 function clearSel(){S.sel=null;S.fsel=null;refresh()}
-$("#dClose").addEventListener("click",clearSel);
+$("#dClose").addEventListener("click",()=>clearSel());
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
     if(PAL.open){closePalette();return}
@@ -540,9 +538,18 @@ function graphBoxes(){
   });
   return boxes;
 }
+/* Empty guidance is part of the fitted scene, below the gateway and clear of zoom controls. */
+function emptyHintBox(){
+  if(tasksArr().some(t=>t.status!=="closed"))return null;
+  const hint=$("#emptyHint");
+  hint.style.left=gwEl.offsetLeft+"px";
+  hint.style.top=(gwEl.offsetTop+gwEl.offsetHeight+20)+"px";
+  hint.style.width=Math.max(160,Math.min(400,canvas.clientWidth-96))+"px";
+  return {x:hint.offsetLeft,y:hint.offsetTop,w:hint.offsetWidth,h:hint.offsetHeight};
+}
 function fit(){
   view.manual=false;$("#zfit").classList.remove("manual");
-  const boxes=graphBoxes();
+  const boxes=graphBoxes();const hint=emptyHintBox();if(hint)boxes.push(hint);
   const minX=Math.min(...boxes.map(b=>b.x)),minY=Math.min(...boxes.map(b=>b.y));
   const maxX=Math.max(...boxes.map(b=>b.x+b.w)),maxY=Math.max(...boxes.map(b=>b.y+b.h));
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
@@ -578,7 +585,7 @@ canvas.addEventListener("wheel",e=>{
 },{passive:false});
 let pan=null;
 canvas.addEventListener("pointerdown",e=>{
-  if(e.target.closest(".node")||e.target.closest(".gw")||e.target.closest("button")||e.target.closest("#minimap"))return;
+  if(e.target.closest(".node,.gw,button,#minimap,#toasts"))return;
   pan={sx:e.clientX,sy:e.clientY,ox:view.x,oy:view.y,moved:false};
   canvas.classList.add("panning");canvas.setPointerCapture(e.pointerId);
 });
@@ -599,7 +606,7 @@ function zoomBy(f){ /* zoom about the canvas centre */
 $("#zin").addEventListener("click",()=>zoomBy(1.25));
 $("#zout").addEventListener("click",()=>zoomBy(1/1.25));
 $("#zfit").addEventListener("click",fit);
-let rzT;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{if(S.autofit&&!view.manual)fit();else updateMinimap()},120)});
+let rzT;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{renderAsk();if(S.autofit&&!view.manual)fit();else updateMinimap()},120)});
 
 /* ================= minimap ================= */
 const mmEl=$("#minimap");
@@ -872,7 +879,14 @@ function applyPanels(){
   appEl.classList.toggle("hide-ch",!RZ.ch);
   updateMinimap();
 }
-function togglePanel(which){RZ[which]=!RZ[which];applyPanels();fit();saveRZ()}
+function closeCompactSidebar(){appEl.classList.remove("compact-sb-open");$("#sidebarBtn").setAttribute("aria-expanded","false")}
+function togglePanel(which){
+  if(which==="sb"&&window.matchMedia("(max-width:640px)").matches){
+    const open=appEl.classList.toggle("compact-sb-open");$("#sidebarBtn").setAttribute("aria-expanded",String(open));return;
+  }
+  RZ[which]=!RZ[which];applyPanels();fit();saveRZ();
+}
+$("#sidebarBtn").addEventListener("click",()=>togglePanel("sb"));
 function setAlign(a){RZ.align=a;applyAlign();fit();saveRZ();renderSettings()}
 function setGraphLayout(m){S.layout=m;layout();refresh();fit();animateEdges();renderSettings()}
 function makeResizer(sel,onMove,onReset){
@@ -1024,7 +1038,8 @@ kedEl.addEventListener("click",e=>{if(e.target===kedEl)closeKeysEd()});
 
 /* ================= input ================= */
 const input=$("#input"),chatForm=$("#chatForm"),DRAFT="relay-draft";
-const askBtn=$("#askBtn");
+const askBtn=$("#askBtn"),sendBtn=$("#sendBtn");
+let sending=false;
 const PH={msg:"Type a message — Enter to send, Shift+Enter for a new line",ask:"Ask a question — answered here, never turned into a task"};
 let askTask=null;   /* the task an Ask is about — a question, never a message to the worker */
 /* The toggle and a typed `?` are the same declaration; the canonical marker lives in shared/ask.ts, the server decides. */
@@ -1034,17 +1049,29 @@ const askActive=()=>askOn||!!askTask||ASK_RE.test(input.value);
 function renderAsk(){
   const a=askActive();
   askBtn.setAttribute("aria-pressed",a?"true":"false");
-  input.placeholder=askTask?"Ask about "+askTask.id+" — read from its transcript, never sent to the worker":a?PH.ask:PH.msg;
+  const compact=input.clientWidth>0&&input.clientWidth<360;
+  input.placeholder=askTask?"Ask about "+askTask.id+(compact?"…":" — read from its transcript, never sent to the worker"):compact?(a?"Ask a question…":"Message…"):a?PH.ask:PH.msg;
+  autogrow();
 }
-function askAbout(t){askTask={uuid:t.uuid,id:t.id};askOn=true;renderAsk();input.focus()}
+function askAbout(t){if(sending)return;askTask={uuid:t.uuid,id:t.id};askOn=true;renderAsk();input.focus()}
 askBtn.addEventListener("click",()=>{
   if(askActive()){askOn=false;askTask=null;input.value=input.value.replace(ASK_RE,"");autogrow()}else askOn=true;
   renderAsk();input.focus();
 });
-function autogrow(){input.style.height="auto";input.style.height=input.scrollHeight+(input.offsetHeight-input.clientHeight)+"px"} /* +border: box-sizing is border-box but scrollHeight is not. CSS max-height caps it, then it scrolls */
-chatForm.addEventListener("submit",e=>{
+function autogrow(){input.style.height="auto";if(input.value)input.style.height=input.scrollHeight+(input.offsetHeight-input.clientHeight)+"px"} /* empty drafts stay one row; placeholder wrapping must not enlarge the composer */
+chatForm.addEventListener("submit",async e=>{
   e.preventDefault(); /* the keydown below is what guards Enter mid-IME-composition */
-  send(input.value);input.value="";askTask=null;localStorage.removeItem(DRAFT);autogrow();renderAsk();  /* the toggle is a mode and stays on; the task scope is per-question */
+  if(sending||!input.value.trim())return;
+  sending=true;sendBtn.disabled=true;askBtn.disabled=true;input.readOnly=true;
+  sendBtn.textContent="Sending…";
+  try{
+    if(await send(input.value)){
+      input.value="";askTask=null;localStorage.removeItem(DRAFT); /* preserve draft and scope on failure */
+    }
+  }finally{
+    sending=false;sendBtn.disabled=false;askBtn.disabled=false;input.readOnly=false;sendBtn.textContent="Send";
+    autogrow();renderAsk();input.focus();
+  }
 });
 input.addEventListener("input",()=>{autogrow();renderAsk();localStorage.setItem(DRAFT,input.value)});
 input.addEventListener("keydown",e=>{
