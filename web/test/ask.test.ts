@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { isAsk, stripAsk } from "@shared/ask.ts";
-import { sendMessage } from "../src/api.ts";
+import { createMessageSender, sendMessage } from "../src/api.ts";
 import { badgeParts } from "../src/adapter.ts";
 import { requestRows } from "../src/ledger.ts";
 
@@ -11,6 +11,27 @@ const capture = () => {
   globalThis.fetch = (async (_url: string, init: any) => { bodies.push(JSON.parse(init.body)); return new Response(JSON.stringify({ message_id: "m" }), { status: 202 }); }) as any;
   return bodies;
 };
+
+test("a lost acknowledgement retries the same request ID, while a successful repeat is new", async () => {
+  const bodies: any[] = []; const sender = createMessageSender();
+  globalThis.fetch = (async (_url: string, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    if (bodies.length === 1) throw new Error("ack lost after server accepted");
+    return new Response(JSON.stringify({ message_id: "m" }), { status: 202 });
+  }) as any;
+  await expect(sender("myapp refactor")).rejects.toThrow("ack lost");
+  await sender("myapp refactor"); await sender("myapp refactor");
+  expect(bodies[0].client_message_id).toBe(bodies[1].client_message_id);
+  expect(bodies[2].client_message_id).not.toBe(bodies[1].client_message_id);
+});
+
+test("changing the failed draft's Ask scope allocates a new request ID", async () => {
+  const bodies: any[] = []; const sender = createMessageSender();
+  globalThis.fetch = (async (_url: string, init: any) => { bodies.push(JSON.parse(init.body)); throw new Error("offline"); }) as any;
+  await expect(sender("why?", { askTask: "u1" })).rejects.toThrow();
+  await expect(sender("why?", { askTask: "u2" })).rejects.toThrow();
+  expect(bodies[0].client_message_id).not.toBe(bodies[1].client_message_id);
+});
 
 test("the ? gesture is recognised and stripped", () => {
   expect(isAsk("? why")).toBe(true); expect(isAsk("?why")).toBe(true); expect(isAsk("why?")).toBe(false);
