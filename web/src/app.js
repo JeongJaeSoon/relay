@@ -25,12 +25,21 @@ Theme.init();
 
 /* ================= state ================= */
 const ROW_H=128, SUB_ROW=102, COL_TASK=312, COL_SUB=596, ROW_Y0=40;
-const COL_FOREIGN=900, FOREIGN_ROW=104; /* column for sessions relay did not start: never joined to the gateway by an edge */
+const COL_FOREIGN=900, NODE_GAP=18; /* outside sessions have no gateway edge; measured heights keep the cards apart */
 const S={tasks:new Map(),foreign:new Map(),sel:null,fsel:null,maxw:10, /* default 10, no hard cap — going over is a soft warning */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
 const STATUS_LABEL={run:"Running",wait:"Needs input",queue:"Queued",done:"Done",err:"Error",cancelled:"Cancelled",closed:"Archived"};
 
 const tasksArr=()=>[...S.tasks.values()];
 const foreignArr=()=>[...S.foreign.values()];
+// Subagents belong to their parent's active graph group. History stays in S.tasks,
+// but archived/missing parents and compressed queue cards have no child lane.
+function graphTaskVisible(t){
+  if(!t||t.status==="closed")return false;
+  if(!t.sub)return true;
+  const p=S.tasks.get(t.parent);
+  return !!p&&p.status!=="closed"&&p.status!=="queue";
+}
+const graphTasks=()=>tasksArr().filter(graphTaskVisible);
 
 /* ================= chat ================= */
 const msgs=$("#msgs");
@@ -135,10 +144,13 @@ const queuedTasks=()=>tasksArr().filter(t=>t.status==="queue").sort(queueOrder);
 /* ================= layout & graph ================= */
 const world=$("#world"),nodesBox=$("#nodes"),edgesSvg=$("#edges"),gwEl=$("#gw"),canvas=$("#canvas");
 function layout(){
-  const notSub=tasksArr().filter(t=>!t.sub&&t.status!=="closed");
+  // Populate text and classes before measuring: fonts, status and long metadata can change card height.
+  renderNodes();
+  const height=t=>document.getElementById("node-"+t.id).offsetHeight;
+  const notSub=graphTasks().filter(t=>!t.sub);
   const active=notSub.filter(t=>t.status!=="queue");
   const queued=notSub.filter(t=>t.status==="queue").sort(queueOrder);
-  const kidsOf=t=>t.children.map(id=>S.tasks.get(id)).filter(c=>c&&c.status!=="closed");
+  const kidsOf=t=>t.children.map(id=>S.tasks.get(id)).filter(graphTaskVisible);
   if(S.layout==="tree"){
     /* steps: the gateway is pinned top-left, tasks stack downwards, subs stack from their parent's row */
     gwEl.style.left="32px";gwEl.style.top=ROW_Y0+"px";
@@ -148,17 +160,22 @@ function layout(){
       const kids=kidsOf(t);
       if(kids.length){
         let sy=cursor;
-        kids.forEach(c=>{c.x=COL_SUB;c.y=sy;sy+=SUB_ROW});
-        cursor=Math.max(cursor+ROW_H,sy+26);
+        kids.forEach(c=>{c.x=COL_SUB;c.y=sy;sy+=Math.max(SUB_ROW,height(c)+NODE_GAP)});
+        cursor=Math.max(cursor+ROW_H,cursor+height(t)+NODE_GAP,sy+26);
       }else{
-        cursor+=ROW_H;
+        cursor+=Math.max(ROW_H,height(t)+NODE_GAP);
       }
     });
   }else{
     /* radial: the gateway sits at the vertical centre and everything curves outwards from it */
-    active.forEach((t,i)=>{t.x=COL_TASK;t.y=ROW_Y0+i*ROW_H});
+    let cursor=ROW_Y0;
     active.forEach(t=>{
-      kidsOf(t).forEach((c,i)=>{c.x=COL_SUB;c.y=t.y+(i===0?-58:66)});
+      const kids=kidsOf(t);
+      const groupHeight=Math.max(height(t),kids.reduce((sum,c)=>sum+height(c)+NODE_GAP,0)-NODE_GAP);
+      t.x=COL_TASK;t.y=cursor+(groupHeight-height(t))/2;
+      let sy=cursor;
+      kids.forEach(c=>{c.x=COL_SUB;c.y=sy;sy+=height(c)+NODE_GAP});
+      cursor+=Math.max(ROW_H,groupHeight+NODE_GAP);
     });
     const ys=active.map(t=>t.y);
     const gy=ys.length?ys.reduce((a,b)=>a+b,0)/ys.length+22:ROW_Y0;
@@ -173,7 +190,8 @@ function layout(){
   ll.style.left=(laneX+34)+"px";ll.style.top=(laneY0-19)+"px";
   /* sessions outside relay: stacked in their own column, with no edge to anything */
   const fs=foreignArr();
-  fs.forEach((f,i)=>{f.x=COL_FOREIGN;f.y=ROW_Y0+i*FOREIGN_ROW});
+  let fy=ROW_Y0;
+  fs.forEach(f=>{f.x=COL_FOREIGN;f.y=fy;fy+=document.getElementById("fnode-"+f.key).offsetHeight+NODE_GAP});
   const fl=document.getElementById("foreignLabel");
   fl.style.display=fs.length?"block":"none";
   fl.style.left=COL_FOREIGN+"px";fl.style.top=(ROW_Y0-19)+"px";
@@ -206,7 +224,7 @@ function elapsedText(t){
 function renderNodes(){
   const fam=famOf(S.sel);canvas.classList.toggle("focus",fam.size>0);canvas.classList.toggle("paused",S.paused);
   tasksArr().forEach(t=>{
-    if(t.status==="closed"){
+    if(!graphTaskVisible(t)){
       const dead=document.getElementById("node-"+t.id);
       if(dead)dead.remove();
       return;
@@ -215,6 +233,7 @@ function renderNodes(){
     n.className="node st-"+t.status+(t.sub?" sub":"")+(!t.sub&&t.status==="queue"?" queued":"")+(S.sel===t.id?" sel":"")+(fam.has(t.id)?" rel":"")+(n.dataset.fresh?" fresh":"");
     n.style.left=t.x+"px";n.style.top=t.y+"px";
     n.querySelector(".n-title").textContent=t.title;
+    n.querySelector(".n-title").title=t.title;
     let pillTxt=t.status==="run"&&S.paused?"Stopped":(t.statusLabel||STATUS_LABEL[t.status]);
     if(!t.sub&&t.status==="queue"){
       const qi=queuedTasks().filter(x=>!x.sub).indexOf(t);
@@ -227,10 +246,15 @@ function renderNodes(){
     n.querySelector(".n-step").textContent=t.step;
     n.querySelector(".n-elapsed").textContent=elapsedText(t);
     n.querySelector(".br").textContent=t.sub?"":t.branch||"";
+    n.querySelector(".br").title=t.branch||"";
     n.setAttribute("aria-label",t.title+" — "+(t.statusLabel||STATUS_LABEL[t.status]));
   });
+  // A replacement snapshot can omit a parent entirely; remove its old DOM too.
+  nodesBox.querySelectorAll(".node:not(.foreign)").forEach(n=>{
+    if(!graphTaskVisible(S.tasks.get(n.id.slice(5))))n.remove();
+  });
   renderForeignNodes();
-  $("#emptyHint").style.display=tasksArr().some(t=>t.status!=="closed")?"none":"flex";
+  $("#emptyHint").style.display=graphTasks().length?"none":"flex";
 }
 /* ---- sessions outside relay: observation-only nodes (dashed, no status colour, no gateway edge) ---- */
 function foreignElapsed(f){
@@ -282,8 +306,7 @@ function drawIn(path,t){ /* draw a new node's edge in, parent → child */
 function renderEdges(){
   edgesSvg.textContent="";const fam=famOf(S.sel);
   const tree=S.layout==="tree", A=22; /* tree: anchored on the node's top (its title row) — the first row comes out horizontal */
-  tasksArr().forEach(t=>{
-    if(t.status==="closed")return;
+  graphTasks().forEach(t=>{
     if(!t.sub&&t.status==="queue")return; /* queued tasks are chained below instead */
     const n=document.getElementById("node-"+t.id);if(!n)return;
     let x1,y1;
@@ -502,7 +525,7 @@ function renderForeignDetail(body,f){
   acts.append(b);body.append(acts);
 }
 function famOf(id){ /* a unit of work = the top-level task plus its subagents */
-  const s=new Set();const t=id&&S.tasks.get(id);if(!t||t.status==="closed")return s;
+  const s=new Set();const t=id&&S.tasks.get(id);if(!graphTaskVisible(t))return s;
   const r=(t.sub&&S.tasks.get(t.parent))||t;s.add(r.id);r.children.forEach(c=>s.add(c));return s;
 }
 function select(id){S.sel=id;S.fsel=null;closeCompactSidebar();refresh()}
@@ -528,7 +551,7 @@ function applyView(smooth){
   updateMinimap();
 }
 function graphBoxes(){
-  const boxes=tasksArr().filter(t=>t.status!=="closed").map(t=>{
+  const boxes=graphTasks().map(t=>{
     const n=document.getElementById("node-"+t.id);
     return n?{x:t.x,y:t.y,w:n.offsetWidth,h:n.offsetHeight,st:t.status}:null;
   }).filter(Boolean);
@@ -541,7 +564,7 @@ function graphBoxes(){
 }
 /* Empty guidance is part of the fitted scene, below the gateway and clear of zoom controls. */
 function emptyHintBox(){
-  if(tasksArr().some(t=>t.status!=="closed"))return null;
+  if(graphTasks().length)return null;
   const hint=$("#emptyHint");
   hint.style.left=gwEl.offsetLeft+"px";
   hint.style.top=(gwEl.offsetTop+gwEl.offsetHeight+20)+"px";
@@ -554,13 +577,15 @@ function fit(){
   const minX=Math.min(...boxes.map(b=>b.x)),minY=Math.min(...boxes.map(b=>b.y));
   const maxX=Math.max(...boxes.map(b=>b.x+b.w)),maxY=Math.max(...boxes.map(b=>b.y+b.h));
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
-  view.k=Math.max(MINZ,Math.min(1,(cw-64)/(maxX-minX),(ch-64)/(maxY-minY)));
+  // Reserve the right toolbar column, including when the outside lane is the rightmost content.
+  const left=28,right=60,top=24,bottom=64;
+  view.k=Math.max(MINZ,Math.min(1,(cw-left-right)/(maxX-minX),(ch-top-bottom)/(maxY-minY)));
   if(S.layout==="tree"){ /* top-left anchor */
-    view.x=28-minX*view.k;
-    view.y=24-minY*view.k;
+    view.x=left-minX*view.k;
+    view.y=top-minY*view.k;
   }else{ /* radial: centred */
-    view.x=(cw-(maxX-minX)*view.k)/2-minX*view.k;
-    view.y=(ch-(maxY-minY)*view.k)/2-minY*view.k;
+    view.x=left+(cw-left-right-(maxX-minX)*view.k)/2-minX*view.k;
+    view.y=top+(ch-top-bottom-(maxY-minY)*view.k)/2-minY*view.k;
   }
   applyView(true);
 }
@@ -613,9 +638,9 @@ let rzT;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout((
 const mmEl=$("#minimap");
 let mmMap=null;
 function updateMinimap(){
-  const hasTasks=tasksArr().some(t=>t.status!=="closed")||S.foreign.size>0;
+  const hasTasks=graphTasks().length>0||S.foreign.size>0;
   mmEl.style.display=hasTasks?"":"none";
-  if(!hasTasks)return;
+  if(!hasTasks){mmEl.textContent="";mmMap=null;return;}
   const boxes=graphBoxes();
   const pad=44;
   /* extent = the node area ∪ the current viewport, so the minimap keeps the screen's proportions */
