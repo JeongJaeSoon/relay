@@ -8,6 +8,7 @@ import { now } from "../core/clock.ts";
 import { EventLog, loadTask, type EmitInput } from "../core/events.ts";
 import { commandId } from "../core/ids.ts";
 import type { AgentRow, AgentRunner, RmOutcome, SpawnSpec } from "../runner/runner.ts";
+import { pendingCleanup } from "./cleanup.ts";
 import { log as slog } from "../log.ts";
 
 export type CommandPayload =
@@ -110,7 +111,7 @@ export class Outbox {
       if (r.kind === "spawn") { this.log.emit({ type: "command.requeued", task_uuid: r.task_uuid, payload: { id: r.id } }); out.requeued.push(r.id); }
       else {
         this.log.emit({ type: "command.unknown", task_uuid: r.task_uuid, causation_id: r.id, payload: { id: r.id, error: "relay restarted during execution" } }); out.unknown.push(r.id);
-        if (r.kind === "rm" && !(JSON.parse(r.payload_json) as CommandPayload & { target?: ReapTarget }).target) this.parkStrandedClose(r.task_uuid, r.id, "relay restarted during execution");
+        if (r.kind === "rm") this.parkStrandedClose(r.task_uuid, r.id, "relay restarted during execution");
       }
     }
     return out;
@@ -121,6 +122,19 @@ export class Outbox {
   private parkStrandedClose(taskUuid: string, commandId: string, error: string) {
     const t = loadTask(this.db, taskUuid); if (!t || ["closed", "error"].includes(t.status)) return;
     this.log.emit({ type: "task.status_changed", task_uuid: taskUuid, causation_id: commandId, payload: { status: "error", patch: { status: "error", ended_at: t.ended_at ?? now(), last_summary: `close did not finish — the session may still be registered: ${error}` } } });
+  }
+  /** A close is complete only after the final generation's disposal has confirmed its result. */
+  private finishClose(taskUuid: string, commandId: string) {
+    const own = this.db.query("select id, state from commands where task_uuid=? and kind='rm' and json_extract(payload_json,'$.target') is null order by rowid desc limit 1").get(taskUuid) as { id: string; state: string } | null;
+    if (own?.state !== "applied" || pendingCleanup(this.db, taskUuid).length) return;
+    const t = loadTask(this.db, taskUuid)!;
+    if (t.status === "closed") return;
+    if (t.worktree_path && existsSync(t.worktree_path)) {
+      const error = `sessions removed but worktree still exists (${t.worktree_path})`;
+      this.log.emit({ type: "command.failed", task_uuid: taskUuid, payload: { id: own.id, error } });
+      this.parkStrandedClose(taskUuid, commandId, error); return;
+    }
+    this.log.emit({ type: "task.status_changed", task_uuid: taskUuid, causation_id: commandId, payload: { status: "closed", patch: { status: "closed", closed_at: t.closed_at ?? now(), ended_at: t.ended_at ?? now(), question: null, qhead: false, ...(t.last_summary?.startsWith("close did not finish") || t.last_summary?.startsWith("claude rm kept") ? { last_summary: "Session cleanup completed." } : {}) } } });
   }
   /** Promotion, source 1 and 2: the marker echoed in a UserPromptSubmit hook (idle delivery) or in a reply frame the
    *  worker sent back over the inbox socket (mid-turn delivery). */
@@ -164,7 +178,7 @@ export class Outbox {
       const cmd = rowToCommand(row); const task = loadTask(this.db, taskUuid)!;
       if (!this.canRun(cmd, task)) return "blocked";                          // stays pending (I3, B1)
       this.log.emit({ type: "command.running", task_uuid: taskUuid, causation_id: cmd.id, process_generation: task.process_generation, payload: { id: cmd.id } });   // the generation this command acts on: a resume names the one it is about to interrupt
-      try { await this.apply(cmd, task); }
+      try { await this.apply(cmd, task); if (cmd.kind === "rm") this.finishClose(taskUuid, cmd.id); }
       catch (e) {
         if (e instanceof HeldError) { this.log.emit({ type: "command.requeued", task_uuid: taskUuid, payload: { id: cmd.id } }); return "held"; }
         this.log.emit({ type: "command.unknown", task_uuid: taskUuid, causation_id: cmd.id, payload: { id: cmd.id, error: String(e).slice(0, 300) } });   // B3: retries are manual (confirm/retry)
@@ -178,7 +192,7 @@ export class Outbox {
         // `closed` is projected from its RESULT, so an rm that ends `unknown` leaves the task in whatever status it
         // had while the sweep guard is satisfied by the row and the session stays registered. Park it where a
         // refusal parks it — visible, named, and counted by `relay doctor`.
-        if (cmd.kind === "rm" && !(cmd.payload as CommandPayload & { target?: ReapTarget }).target) this.parkStrandedClose(taskUuid, cmd.id, String(e).slice(0, 200));
+        if (cmd.kind === "rm") this.parkStrandedClose(taskUuid, cmd.id, String(e).slice(0, 200));
         slog.warn("command failed", { id: cmd.id, e: String(e) }); return "error";
       }
     }
@@ -227,7 +241,7 @@ export class Outbox {
     {
       if (kind === "stop") { await this.runner.stop(shortId); if (!(await this.waitGone(shortId))) throw new Error("superseded stop not confirmed"); }
       else {
-        const r = await this.runner.rm(shortId);
+        const r = await this.removeSession(t, shortId);
         // Phase 0 (`capabilities.json:448`): a kept worktree means the SESSION is still registered, so recording this
         // as applied is relay believing a cleanup that did not happen — the third root of the leak. `failed` keeps it
         // visible and retryable; `unknown` would be dishonest (the refusal is known, not ambiguous) and would wedge
@@ -236,9 +250,8 @@ export class Outbox {
         if (r.worktreeKept) {
           const why = keptReason(r, t.worktree_path);
           this.log.emit({ type: "worktree.kept", task_uuid: t.uuid, causation_id: cmd.id, payload: { short_id: shortId, worktree_path: r.keptPath ?? t.worktree_path, reason: `kept the superseded session — ${why}` } });
-          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: `claude rm kept the superseded session — ${why}` } }); return;
+          this.log.emit({ type: "command.failed", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, error: `claude rm kept the superseded session — ${why}` } }); this.parkStrandedClose(t.uuid, cmd.id, why); return;
         }
-        await this.verifyRemoved(shortId);
       }
     }
     this.applied(cmd, t, { reaped: shortId }); return;
@@ -250,6 +263,19 @@ export class Outbox {
     const alive = rows.filter(r => r.alive && (identities.some(i => (i.session_id && r.session_id === i.session_id) || (i.short_id && r.short_id === i.short_id))
       || (t.worktree_path && (r.cwd === t.worktree_path || jobWorktree(r.short_id) === t.worktree_path))));
     if (alive.length) throw new Error(`cleanup blocked: live sessions share the worktree: ${alive.map(r => r.short_id ?? r.session_id ?? "unknown").join(", ")}`);
+  }
+  /** Keep ownership proof until the shared worktree is gone, including successful deregistration of a fork. */
+  private async removeSession(t: Task, shortId: string): Promise<RmOutcome> {
+    const dir = t.worktree_path; const owner = readOwner(dir);
+    const ours = owner?.task_uuid === t.uuid && owner.relay_instance_id === this.deps.instanceId();
+    if (ours && dir) unlinkSync(join(dir, OWNER_FILE));
+    try {
+      const result = await this.runner.rm(shortId);
+      if (!result.worktreeKept) await this.verifyRemoved(shortId);
+      return result;
+    } finally {
+      if (ours && dir && !existsSync(join(dir, OWNER_FILE))) writeOwner(dir, owner!);
+    }
   }
   private async verifyRemoved(shortId: string) {
     if ((await this.runner.list(true)).some(r => r.short_id === shortId)) throw new Error(`rm not confirmed: ${shortId} remains registered`);
@@ -343,11 +369,13 @@ export class Outbox {
       }
       case "rm": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "rm"); return; }
-        this.assertStopped(loadTask(this.db, t.uuid)!, await this.runner.list(true));
-        // Drop our own stamp first: `claude rm` keeps a worktree that has uncommitted changes, and an untracked
-        // `.relay-owner` would be exactly that (measured 2026-08-31). Reconcile no longer needs it once we are removing.
-        if (t.worktree_path) { try { unlinkSync(join(t.worktree_path, OWNER_FILE)); } catch {} }
-        const r = t.short_id ? await this.runner.rm(t.short_id) : { worktreeKept: false };
+        const current = loadTask(this.db, t.uuid)!;
+        const rows = await this.runner.list(true); this.assertStopped(current, rows);
+        const row = rows.find(r => (current.session_id && r.session_id === current.session_id) || (!current.session_id && current.short_id && r.short_id === current.short_id));
+        if (row && !row.short_id) throw new Error("rm target has no short id");
+        const r = row?.short_id ? await this.removeSession(current, row.short_id) : current.worktree_path && existsSync(current.worktree_path)
+          ? { worktreeKept: true, reason: "session absent from roster but worktree still exists", keptPath: current.worktree_path }
+          : { worktreeKept: false };
         // `claude rm` keeps the SESSION, not just the worktree, when that worktree has uncommitted or unpushed work
         // (Phase 0 ④). Recording that as applied is what let close report success while leaving a session registered
         // forever — `capabilities.json:448` called it: "B3's rm row must treat this as NOT applied … otherwise
@@ -372,10 +400,7 @@ export class Outbox {
           if (t.status !== "closed") this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "error", patch: { status: "error", ended_at: t.ended_at ?? now(), last_summary: error } } });
           return;
         }
-        if (t.short_id) await this.verifyRemoved(t.short_id);
         this.applied(cmd, t, { worktreeKept: false });
-        // After `applied`, so the task is never `closed` while its own rm is still running (I5).
-        this.log.emit({ type: "task.status_changed", task_uuid: t.uuid, causation_id: cmd.id, payload: { status: "closed", patch: { status: "closed", closed_at: t.closed_at ?? now(), ended_at: t.ended_at ?? now(), question: null, qhead: false } } });
         return;
       }
     }

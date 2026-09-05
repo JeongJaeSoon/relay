@@ -2,7 +2,7 @@
 
 ## Scope and baseline
 
-Started from refreshed `origin/main` `1cd3ebe` (PR #52). That PR's 357-pass dashboard QA remains recorded in [the original report](QA-2026-09-05.md). This pass addresses a bounded part of [#37](https://github.com/JeongJaeSoon/relay/issues/37): cleanup command evidence, stop-before-remove barriers, and late spawn/resume acknowledgement races.
+Started from refreshed `origin/main` `1cd3ebe` (PR #52). That PR's 357-pass dashboard QA remains recorded in [the original report](QA-2026-09-05.md). This pass addresses a bounded part of [#37](https://github.com/JeongJaeSoon/relay/issues/37): cleanup command evidence, stop-before-remove barriers, complete close/retry behavior, and late spawn/resume acknowledgement races.
 
 ## Reproduced defects and fixes
 
@@ -19,7 +19,7 @@ Started from refreshed `origin/main` `1cd3ebe` (PR #52). That PR's 357-pass dash
 Four new failure tests failed on the original implementation (25 pass / 4 fail), then passed after the fix. HTTP/dispatcher/hook integration tests exercise a forked worker, close during an in-flight superseded stop, retry through the API, preservation of a foreign row, doctor convergence, and SessionStart/SessionEnd preceding the resume result. A native runner test uses a real failing executable; a roster test refuses false rm success.
 
 - TypeScript check and web build passed.
-- Full suite: **368 pass / 2 opt-in skip / 0 fail**, 1,605 assertions, 56 files.
+- Full suite: **375 pass / 2 opt-in skip / 0 fail**, 1,631 assertions, 56 files.
 - Independent compiled binary smoke passed (version, HTTP/token injection, fail-closed command guard).
 
 ## Actual Claude and server evidence
@@ -41,7 +41,7 @@ Four new failure tests failed on the original implementation (25 pass / 4 fail),
 
 ## Remaining acceptance criteria
 
-**#37 remains open.** This change does not establish the full reconciliation invariant. Still required: durable identity before successful launcher recording; unknown-spawn adoption/close reconciliation; missing-hook generation reconstruction and short-ID enrichment; supervisor restarts after an earlier successful stop; final-close coordination across every rm; ownership-stamp retention on refusal/unknown outcomes; and an explicit stale/orphan classification for every owned roster row. The dashboard needs a dedicated cleanup retry action (its current Restart resumes work), and a successful retry should replace the stale failure summary. Native liveness vocabulary also requires further measurement: this CLI reports a completed row as `done` while Relay retains hook-reported `alive` until reconciliation.
+**#37 remains open.** This change does not establish the full reconciliation invariant. Still required: durable identity before successful launcher recording; unknown-spawn adoption/close reconciliation; missing-hook generation reconstruction and short-ID enrichment; supervisor restarts after an earlier successful stop; and an explicit stale/orphan classification for every owned roster row. Native liveness vocabulary also requires further measurement: this CLI reports a completed row as `done` while Relay retains hook-reported `alive` until reconciliation.
 
 #42 follows complete #37 acceptance. #44 launchd/attach/socket/attached-worker operational gates and #47/#48 remain separate open work.
 
@@ -50,3 +50,19 @@ Four new failure tests failed on the original implementation (25 pass / 4 fail),
 Manual review found that an unknown older stop must block removal without blocking a pending stop of the current worker. Pending stops now run first, and unknown stops still gate every rm. Stop also resolves the immutable session identity against a fresh full roster, treating an absent identity as already stopped instead of calling a stale/reused short ID. Added regressions cover both cases.
 
 The actual compiled `relay doctor` after real cleanup reported `owned session cleanup: converged`, `sessions relay could not deregister: none`, and DB integrity `ok`. Other doctor checks are separate environment/capability gates.
+
+
+## Complete close and cleanup retry
+
+Follow-up QA reproduced a second failure: the current session's rm completed while an earlier generation's rm was still running, so the task became `closed` too early. Close now finalizes only after every outstanding stop/rm resolves. A refusal or unknown result for any generation keeps the task visible, and a successful retry clears its obsolete cleanup failure summary. A surviving worktree is reported as unfinished cleanup even if its roster row is absent.
+
+The native CLI can remove a resumed session row while leaving the original shared worktree in place. Ownership proof is therefore preserved while that directory exists, through both successful fork deregistration and refusal/unknown outcomes. A fresh full roster makes a retry after actual removal idempotent.
+
+The task response/snapshot derives `cleanup_pending` from the command ledger. Error task details and request cards offer **Retry cleanup**, which calls `POST /api/tasks/<uuid>/retry-cleanup`; it retries outstanding cleanup commands without spawning or resuming a worker. Ordinary Restart is refused while removal remains unfinished. Doctor and the server share the pending-cleanup query.
+
+Actual follow-up runs used tasks `0e179dfa-feb1-493e-a516-4a6f06e1411c` (T-02) and `8945f987-86db-47ef-a8a6-240419a8b088` (T-03), two generations each. A deliberately uncommitted `qa-preserve.txt` made real Claude rm refuse. T-02 exposed the shared-stamp loss, which was fixed and reverified from a fresh T-03 spawn: both the test file and `.relay-owner` survived the refusal. Only the deliberately created test file was then removed.
+
+The browser reloaded T-02 and showed Retry cleanup in its detail and both request cards. Clicking it closed T-02 without a new worker. T-03 was retried through the same endpoint. Final checks: all three tasks closed, all seven real QA session rows absent, every cleanup command applied, only the sample main worktree/branch remained at `d0a6196e8b19861f46108e91636a5e10862edc84`, and both external sessions remained untouched.
+
+![Cleanup-specific action](qa/2026-09-05/owned/retry-cleanup.png)
+![Cleanup completed without a new worker](qa/2026-09-05/owned/cleanup-complete.png)

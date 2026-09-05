@@ -206,6 +206,7 @@ describe("Outbox", () => {
   });
   test("a task's own rm that ends unknown parks the task in error — `closed` is projected from that result, so it must not vanish", async () => {
     const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+    s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
     s.runner.rm = async () => { throw new Error("claude: command not found"); };
     s.ob.enqueue("u1", "rm1", { kind: "rm" }); await s.ob.run("u1");
     expect(s.states()).toEqual(["unknown"]);
@@ -214,6 +215,7 @@ describe("Outbox", () => {
   });
   test("a relay restart mid-rm parks the task the same way — that path never reaches the catch", async () => {
     const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+    s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
     s.ob.enqueue("u1", "rm1", { kind: "rm" }); s.db.run("update commands set state='running'");
     s.ob.enqueue("u1", "reap", { kind: "rm", target: { session_id: "sid-old", short_id: null } }); s.db.run("update commands set state='running' where id like 'rm:%'");
     expect(s.ob.reconcileRunning().unknown.length).toBeGreaterThan(0);
@@ -221,6 +223,7 @@ describe("Outbox", () => {
   });
   test("a worktree locked because the session is still exiting holds the rm instead of recording a refusal", async () => {
     const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+    s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
     s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", keptPath: "/p/wt", retryable: true };
     s.ob.enqueue("u1", "rm1", { kind: "rm" }); await s.ob.run("u1");
     expect(s.states()).toEqual(["pending"]);                                                           // still queued, not refused
@@ -247,6 +250,7 @@ describe("Outbox", () => {
     const t0 = Date.now(); setNow(() => t0);
     try {
       const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped", worktree_path: "/p/wt" });
+      s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
       s.runner.keepWorktree = { reason: "worktree is locked — in use by another live session, or locked by hand", keptPath: "/p/wt", retryable: true };
       s.ob.enqueue("u1", "rm1", { kind: "rm" }); await s.ob.run("u1");
       expect(s.states()).toEqual(["pending"]);                                                         // inside the window: still assumed to be the session exiting
@@ -259,6 +263,7 @@ describe("Outbox", () => {
   });
   test("a refused rm never resurrects an already-closed task, and an applied one never restarts its retention clock", async () => {
     const s = setup(); s.mk("u1", "closed", { session_id: "sid", short_id: "fake1", process_state: "stopped", closed_at: 500, ended_at: 400 });
+    s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
     s.runner.keepWorktree = { reason: "worktree has commits that are not pushed anywhere", keptPath: "/p/wt" };
     s.ob.enqueue("u1", "rec1", { kind: "rm" }); await s.ob.run("u1");                                  // what recovery queues for a closed task still on the roster
     expect(loadTask(s.db, "u1")!.status).toBe("closed");                                               // first boot after upgrading must not resurrect every leaked session
@@ -327,6 +332,7 @@ describe("owned generation cleanup barriers", () => {
 
 test("rm success text without actual deregistration remains unknown", async () => {
   const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+    s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
   s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
   s.runner.rm = async () => ({ worktreeKept: false });
   s.ob.enqueue("u1", "close", { kind: "rm" }); await s.ob.run("u1");
@@ -353,4 +359,40 @@ test("stop retries reconcile an absent identity and do not call a reused short i
   s.ob.enqueue("u1", "close-stop", { kind: "stop", reason: "close" }); await s.ob.run("u1");
   expect(s.states()).toEqual(["applied"]);
   expect(s.runner.rows.get("reused")!.alive).toBe(true);
+});
+
+for (const outcome of ["refused", "unknown"] as const) test(`ownership stamp survives ${outcome} rm`, async () => {
+  const s = setup(); const dir = mkdtempSync(join(tmpdir(), "relay-stamp-"));
+  const stamp = { relay_instance_id: "inst", task_uuid: "u1", session_id: "sid" };
+  writeFileSync(join(dir, ".relay-owner"), JSON.stringify(stamp));
+  s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped", worktree_path: dir });
+  s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
+  s.runner.rm = async () => {
+    expect(readOwner(dir)).toBeNull();
+    if (outcome === "unknown") throw new Error("rm acknowledgement lost");
+    return { worktreeKept: true, reason: "uncommitted changes" };
+  };
+  s.ob.enqueue("u1", "close", { kind: "rm" }); await s.ob.run("u1");
+  expect(readOwner(dir)).toEqual(stamp);
+  expect(loadTask(s.db, "u1")!.status).toBe("error");
+});
+
+test("retry after own rm succeeded but its acknowledgement was lost uses roster absence", async () => {
+  const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
+  s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
+  s.runner.rm = async short => { s.runner.rows.delete(short); throw new Error("lost acknowledgement"); };
+  const c = s.ob.enqueue("u1", "close", { kind: "rm" }); await s.ob.run("u1");
+  expect(s.states()).toEqual(["unknown"]);
+  s.ob.retry(c.id); await s.ob.run("u1");
+  expect(s.states()).toEqual(["applied"]); expect(loadTask(s.db,"u1")!.status).toBe("closed");
+});
+
+test("successful fork deregistration preserves the stamp for the remaining shared worktree", async () => {
+  const s=setup(); const dir=mkdtempSync(join(tmpdir(),"relay-shared-stamp-"));
+  const owner={relay_instance_id:"inst",task_uuid:"u1",session_id:"sid"}; writeFileSync(join(dir,".relay-owner"),JSON.stringify(owner));
+  s.mk("u1","done",{session_id:"sid",short_id:"fake1",process_state:"stopped",worktree_path:dir});s.live("u1");s.runner.rows.get("fake1")!.alive=false;
+  // A resumed Claude row may deregister without owning/removing the original worktree.
+  s.ob.enqueue("u1","close",{kind:"rm"});await s.ob.run("u1");
+  expect(readOwner(dir)).toEqual(owner);
+  expect(loadTask(s.db,"u1")!.status).toBe("error");
 });

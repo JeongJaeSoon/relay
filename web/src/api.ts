@@ -42,3 +42,5 @@ export const registerProject = (p: { name: string; path: string; description: st
 export const stopForeign = (sessionId: string) => api.post(`/foreign/${encodeURIComponent(sessionId)}/stop`);
 export const redispatch = (id: string) => api.post(`/messages/${id}/redispatch`); export const confirmCommand = (id: string) => api.post(`/commands/${id}/confirm`); export const retryCommand = (id: string) => api.post(`/commands/${id}/retry`);
 export const taskDetail = (uuid: string) => api.get<{ task: unknown; events: unknown[]; commands: unknown[] }>(`/tasks/${uuid}`);
+
+export const retryCleanup = (uuid: string) => api.post(`/tasks/${uuid}/retry-cleanup`);

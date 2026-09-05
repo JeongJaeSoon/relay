@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSyn
 import { homedir } from "node:os"; import { join } from "node:path";
 import { loadConfig, paths } from "../config.ts";
 import type { Database } from "bun:sqlite";
+import { pendingCleanup } from "../lifecycle/cleanup.ts";
+export { pendingCleanup } from "../lifecycle/cleanup.ts";
 import { openDb } from "../db/db.ts";
 import { NativeSessionRunner } from "../runner/native.ts";
 import type { AgentRow } from "../runner/runner.ts";
@@ -16,15 +18,6 @@ export const checkPerms = (p: string, mode: number): Check => { if (!existsSync(
  *  cannot tell. Relay records both honestly and stops there, so this is the only place they can be counted. A
  *  transient lock is not here on purpose — that rm is still pending and clears itself. */
 export const keptSessions = (db: Database) => db.query("select t.display_id, t.worktree_path from tasks t where exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state in ('failed','unknown') and json_extract(c.payload_json,'$.target') is null) and not exists (select 1 from commands c where c.task_uuid=t.uuid and c.kind='rm' and c.state='applied' and json_extract(c.payload_json,'$.target') is null)").all() as { display_id: string; worktree_path: string | null }[];
-/** Includes superseded generations and in-flight cleanup: a successful older rm cannot hide a newer failure. */
-export const pendingCleanup = (db: Database) => db.query(`select c.id, c.kind, c.state, c.error, t.display_id, t.worktree_path,
-  coalesce(json_extract(c.payload_json,'$.target.session_id'),t.session_id) session_id
-  from commands c join tasks t on t.uuid=c.task_uuid
-  where c.kind in ('stop','rm') and c.state in ('pending','running','unknown','failed')
-  and not exists (select 1 from commands newer where newer.task_uuid=c.task_uuid and newer.kind=c.kind
-    and newer.rowid>c.rowid and newer.state='applied'
-    and json_extract(newer.payload_json,'$.target.session_id') is json_extract(c.payload_json,'$.target.session_id'))
-  order by c.rowid`).all() as { id: string; kind: string; state: string; error: string | null; display_id: string; worktree_path: string | null; session_id: string | null }[];
 /** Roster rows no task accounts for. `close()` cannot reach these and `keptSessions` cannot see them: a task whose
  *  spawn never recorded a short id keeps `process_state='none'`, so close queues no stop and its rm is a no-op
  *  (`t.short_id ? runner.rm(...) : { worktreeKept: false }`) — the task closes cleanly with nothing in `commands` to

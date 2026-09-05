@@ -1,6 +1,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { EventEnvelope, Message, Project, SystemState, Task, WsFrame } from "@shared/types.ts";
 import type { Config } from "../config.ts";
+import { pendingCleanup } from "../lifecycle/cleanup.ts";
 import { now } from "./clock.ts";
 
 type DistributiveOmit<T, K extends keyof any> = T extends unknown ? Omit<T, K> : never;
@@ -13,7 +14,7 @@ export function rowToTask(r: any): Task {
   const { question_json, summary_json, ...rest } = r;
   return { ...rest, paused: !!r.paused, qhead: !!r.qhead, question: J(question_json), summary_json: J(summary_json) };
 }
-export const loadTask = (db: Database, uuid: string): Task | null => { const r = db.query("select * from tasks where uuid=?").get(uuid); return r ? rowToTask(r) : null; };
+export const loadTask = (db: Database, uuid: string): Task | null => { const r = db.query("select * from tasks where uuid=?").get(uuid); return r ? { ...rowToTask(r), cleanup_pending: pendingCleanup(db, uuid).some(c => c.kind === "rm") } : null; };
 export const rowToMessage = (r: any): Message => ({ ...r, ask: !!r.ask, dispatch_json: J(r.dispatch_json) });
 export const loadMessage = (db: Database, id: string): Message | null => { const r = db.query("select * from messages where id=?").get(id); return r ? rowToMessage(r) : null; };
 export const rowToProject = (r: any): Project => ({ ...r, keywords: J(r.keywords_json) ?? [], is_git: !!r.is_git });

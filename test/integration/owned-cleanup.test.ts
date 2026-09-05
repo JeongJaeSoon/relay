@@ -75,3 +75,36 @@ test("SessionStart and SessionEnd arriving before resume returns survive its ack
   expect(t.process_state).toBe("crashed");
   expect(s.db.query("select count(*) n from process_instances where task_uuid=? and ended_at is null").get(s.uuid)).toEqual({ n: 0 });
 });
+
+test("close stays visible until every generation rm settles, including a retry after actual removal", async () => {
+  const s = await forkedTask(); const rm = s.runner.rm.bind(s.runner);
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(r => enter=r), gate = new Promise<void>(r => release=r);
+  s.runner.rm = async short => { if(short===s.first){enter();await gate; await rm(short);throw new Error("lost acknowledgement after removal");}return rm(short); };
+  await s.req("POST", `/api/tasks/${s.uuid}/close`); await entered;
+  const before = loadTask(s.db,s.uuid)!.status;
+  release(); await s.outbox.run(s.uuid);
+  expect(before).not.toBe("closed");
+  expect(loadTask(s.db,s.uuid)!.status).toBe("error");
+  const unknown = s.db.query("select id from commands where kind='rm' and state='unknown'").get() as any;
+  s.runner.rm = rm;
+  await s.req("POST", `/api/commands/${unknown.id}/retry`); await s.outbox.run(s.uuid);
+  expect(loadTask(s.db,s.uuid)!.status).toBe("closed");
+  expect(loadTask(s.db,s.uuid)!.last_summary).not.toContain("close did not finish");
+  expect(s.runner.rows.size).toBe(0); expect(s.invariants()).toEqual([]);
+});
+
+test("cleanup retry from the dashboard retries disposal without spawning another worker", async () => {
+  const s = await forkedTask(); s.runner.keepWorktree = { reason: "uncommitted changes" };
+  await s.req("POST", `/api/tasks/${s.uuid}/close`); await s.outbox.run(s.uuid);
+  const snap = await (await s.req("GET", "/api/tasks")).json() as any;
+  expect(snap.tasks.find((t:any)=>t.uuid===s.uuid).cleanup_pending).toBe(true);
+  expect(loadTask(s.db,s.uuid)!.cleanup_pending).toBe(true);
+  expect((await s.req("POST", `/api/tasks/${s.uuid}/retry`)).status).toBe(409);
+  const starts = s.runner.calls.filter(c=>["spawn","resume"].includes(c.kind)).length;
+  s.runner.keepWorktree = null;
+  expect((await s.req("POST", `/api/tasks/${s.uuid}/retry-cleanup`)).status).toBe(200); await s.outbox.run(s.uuid);
+  expect(loadTask(s.db,s.uuid)).toMatchObject({ status: "closed", cleanup_pending: false });
+  expect(s.runner.calls.filter(c=>["spawn","resume"].includes(c.kind))).toHaveLength(starts);
+  expect(s.runner.rows.size).toBe(0);
+});

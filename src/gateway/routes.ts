@@ -1,3 +1,4 @@
+import { pendingCleanup } from "../lifecycle/cleanup.ts";
 import { Hono } from "hono";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -79,7 +80,12 @@ export function apiRoutes(ctx: AppContext) {
   api.post("/tasks/:id/answer", async (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (t.status !== "waiting_input") return bad(c, `not waiting for input (${t.status}) — use POST /api/messages`, 409); const b = z.object({ text: z.string().min(1) }).safeParse(await c.req.json()); if (!b.success) return bad(c, "text required"); if (!S.tasks.answer(t.uuid, b.data.text, null)) return bad(c, "the permission request already expired (auto-denied) — the worker moved on", 409); return c.json({ ok: true }); });
   api.post("/tasks/:id/interrupt", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (["closed", "cancelled"].includes(t.status)) return bad(c, `cannot interrupt in ${t.status}`, 409); const a = attached(c, t); if (a) return a; S.tasks.interrupt(t.uuid); return c.json({ ok: true }); });
   api.post("/tasks/:id/close", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); const a = attached(c, t); if (a) return a; S.tasks.close(t.uuid); return c.json({ ok: true }); });
-  api.post("/tasks/:id/retry", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (!["error", "cancelled", "needs_review"].includes(t.status)) return bad(c, `cannot retry in ${t.status}`, 409); const a = attached(c, t); if (a) return a; S.tasks.retry(t.uuid); return c.json({ ok: true }); });
+  api.post("/tasks/:id/retry-cleanup", (c) => {
+    const t = withTask(c); if (!t) return bad(c, "not found", 404); const a = attached(c, t); if (a) return a;
+    for (const command of pendingCleanup(ctx.db, t.uuid)) if (["failed", "unknown"].includes(command.state)) S.outbox.retry(command.id);
+    S.outbox.kick(t.uuid); return c.json({ ok: true });
+  });
+  api.post("/tasks/:id/retry", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (!["error", "cancelled", "needs_review"].includes(t.status)) return bad(c, `cannot retry in ${t.status}`, 409); const a = attached(c, t); if (a) return a; if (t.cleanup_pending) return bad(c, "cleanup is unfinished — use Retry cleanup", 409); S.tasks.retry(t.uuid); return c.json({ ok: true }); });
   api.post("/tasks/:id/attach-lease", async (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); const b = z.object({ by: z.string().default("cli") }).parse(await c.req.json().catch(() => ({}))); return c.json(S.tasks.attachLease(t.uuid, b.by)); });
   api.delete("/tasks/:id/attach-lease", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); S.tasks.releaseAttach(t.uuid); return c.json({ ok: true }); });
   api.post("/projects", async (c) => {
