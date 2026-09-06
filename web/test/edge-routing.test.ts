@@ -68,6 +68,14 @@ test("gateway routes avoid every queue card in tree and radial layouts, includin
   for (const mode of ["tree", "radial"]) for (const width of [260, 340]) {
     const { paths, boxes, queue, gateway } = render(mode, width);
     for (const path of paths.slice(0, 3)) {
+      expect(path.d).not.toMatch(/[HVQ]/);
+      const segments = path.d!.split(" C");
+      expect(segments).toHaveLength(3);
+      const first = segments[1]!.split(" ").map(Number), second = segments[2]!.split(" ").map(Number);
+      // Both tangents at the join are vertical and point in the same direction.
+      expect(first[2]).toBe(first[4]);
+      expect(second[0]).toBe(first[4]);
+      expect((first[5]! - first[3]!) * (second[1]! - first[5]!)).toBeGreaterThanOrEqual(0);
       const points = sample(path.d!);
       for (const q of queue) {
         const box = boxes.get(`node-${q.id}`)!;
@@ -75,7 +83,7 @@ test("gateway routes avoid every queue card in tree and radial layouts, includin
           && p.y >= box.offsetTop && p.y <= box.offsetTop + box.offsetHeight);
         expect(hits).toHaveLength(0);
       }
-      // The long vertical segment runs in the clear gutter, not over the queue's title.
+      // The descending curve stays in the clear gutter, away from queue titles.
       const ys = points.filter(p => p.y > gateway.offsetTop + gateway.offsetHeight + 40);
       if (ys.length) expect(Math.min(...ys.map(p => p.x))).toBeGreaterThanOrEqual(gateway.offsetLeft + width + 24 - 1e-6);
     }

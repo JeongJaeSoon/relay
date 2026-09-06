@@ -484,11 +484,11 @@ function renderEdges(){
     const path=document.createElementNS("http://www.w3.org/2000/svg","path");
     const cx=Math.round((x1+x2)/2); /* the same S-bezier in both layouts — the first row has y1==y2, so it falls out horizontal */
     if(!t.sub&&qs.length){
-      // Leave the gateway horizontally before turning: a Bezier fan otherwise
-      // sweeps through the wider queue cards stacked underneath the gateway.
-      const bend=Math.max(x1+24,queueRight+24),direction=Math.sign(y2-y1);
-      const radius=Math.min(12,Math.abs(y2-y1)/2,Math.max(0,(x2-bend)/2));
-      path.setAttribute("d",`M${x1} ${y1} H${bend-radius} Q${bend} ${y1} ${bend} ${y1+direction*radius} V${y2-direction*radius} Q${bend} ${y2} ${bend+radius} ${y2} H${x2}`);
+      // Two tangent-matched curves clear the queue before descending. Keeping
+      // the second curve's control points in the gutter prevents card overlap.
+      const bend=Math.max(x1+24,queueRight+24);
+      const turnY=y1+Math.sign(y2-y1)*Math.min(24,Math.abs(y2-y1)/3);
+      path.setAttribute("d",`M${x1} ${y1} C${x1+(bend-x1)*.6} ${y1} ${bend} ${y1} ${bend} ${turnY} C${bend} ${turnY+(y2-turnY)*.5} ${bend} ${y2} ${x2} ${y2}`);
     }else{
       path.setAttribute("d","M"+x1+" "+y1+" C"+cx+" "+y1+" "+cx+" "+y2+" "+x2+" "+y2);
     }
