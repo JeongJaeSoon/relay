@@ -34,6 +34,7 @@ test("palette defaults to Cmd K on macOS and Ctrl K elsewhere, with matching hin
 test("saved palette overrides remain active and appear in the shortcut hints", () => {
   const c = shortcuts("MacIntel", { palette: "mod+shift+p" });
   expect(c.nodes["#palBtn"].title).toBe("Command palette (⌘⇧P)");
+  expect(c.nodes["#paletteHint"].textContent).toBe("Use ⌘⇧P for commands.");
   expect(c.press("k", { metaKey: true })).toEqual({ opened: 0, prevented: false });
   expect(c.press("P", { metaKey: true, shiftKey: true })).toEqual({ opened: 1, prevented: true });
   const disabled = shortcuts("MacIntel", { palette: "" });
