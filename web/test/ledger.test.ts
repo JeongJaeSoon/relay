@@ -11,7 +11,7 @@ test("a needs_confirm request that was never resolved stays waiting for the user
   const m = msg({ text: "어디에 던지면 좋을지 모르겠을때 물어보도록", dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-02", confidence: "low" } });
   // routing into an errored task emits the decision's badge row first — the prompt after it is the one that says why this stalled
   const badge = msg({ role: "system", dispatch_state: "direct", text: "dispatcher · route_to_task · T-02" });
-  const prompt = msg({ role: "system", dispatch_state: "direct", text: "Routing needs confirmation (confidence=low, candidate: route_to_task T-02). Which task? T-02 relay cli / T-03 freee-mcp" });
+  const prompt = msg({ role: "system", dispatch_state: "direct", text: "Routing needs confirmation (confidence=low, candidate: route_to_task T-02). Which task? T-02 alpha-app / T-03 beta-service" });
   const r = one(m, {}, [badge, prompt]);
   expect(r).toMatchObject({ disposition: "needs_confirm", dispositionLabel: "Waiting for your confirmation", state: "Waiting for you", st: "wait", bucket: "needs_you", answerKind: "question", actions: ["redispatch"] });
   expect(r.answer).toContain("Which task?");
@@ -23,7 +23,7 @@ test("a needs_confirm request that was never resolved stays waiting for the user
 test("a request routed into a task that is now in error surfaces the failure and offers the restart", () => {
   const t = task("u2", "T-02", "error", { last_summary: null });
   const m = msg({ text: "모든 작업이 완료되면 자동 종료되는 기능", task_uuid: "u2", dispatch_json: { action: "route_to_task", task_id: "T-02", confidence: "high" } });
-  const err = msg({ role: "error", dispatch_state: "direct", task_uuid: "u2", text: "✖ T-02 relay cli — Session ended (other) — use Restart to --resume" });
+  const err = msg({ role: "error", dispatch_state: "direct", task_uuid: "u2", text: "✖ T-02 sample cli — Session ended (other) — use Restart to --resume" });
   const r = one(m, byId(t), [err]);
   expect(r).toMatchObject({ disposition: "routed", dispositionLabel: "Routed into T-02", taskId: "T-02", taskStatus: "error", state: "Error", st: "err", bucket: "needs_you", answerKind: "error", actions: ["restart"] });
   expect(r.answer).toContain("Session ended");
@@ -37,16 +37,16 @@ test("a fast-path status query is answered by the row that follows it", () => {
 });
 
 test("a direct dispatcher answer is read off the recorded decision, not off the chat rows", () => {
-  const m = msg({ text: "relay 는 지금 몇 버전이야?", dispatch_json: { action: "answer_directly", answer: "0.1.1", confidence: "high" } });
+  const m = msg({ text: "sample 는 지금 몇 버전이야?", dispatch_json: { action: "answer_directly", answer: "0.1.1", confidence: "high" } });
   expect(one(m)).toMatchObject({ disposition: "answered", dispositionLabel: "Answered by the dispatcher", state: "Answered", bucket: "settled", answer: "0.1.1", answerKind: "answer" });
   // decision recorded without the answer text (older rows): the promoted dispatcher_answer row is the fallback
   expect(one(msg({ dispatch_json: { action: "answer_directly", confidence: "high" } }), {}, [msg({ role: "dispatcher_answer", dispatch_state: "direct", text: "0.1.1" })]).answer).toBe("0.1.1");
 });
 
 test("a completed task's summary is the answer to the request that started it", () => {
-  const t = task("u1", "T-01", "done", { last_summary: "Updated freee-mcp to 1.4.0; bun test passes.", ended_at: 9 });
-  const m = msg({ text: "freee mcp 를 최신으로 갱신해줘", task_uuid: "u1", dispatch_json: { action: "new_task", project: "freee-mcp", title: "update", confidence: "high" } });
-  expect(one(m, byId(t))).toMatchObject({ disposition: "new_task", dispositionLabel: "Started T-01", state: "Done", st: "done", bucket: "settled", answer: "Updated freee-mcp to 1.4.0; bun test passes.", answerKind: "summary", actions: [] });
+  const t = task("u1", "T-01", "done", { last_summary: "Updated beta-service to 1.4.0; bun test passes.", ended_at: 9 });
+  const m = msg({ text: "예제 서비스를 최신으로 갱신해줘", task_uuid: "u1", dispatch_json: { action: "new_task", project: "beta-service", title: "update", confidence: "high" } });
+  expect(one(m, byId(t))).toMatchObject({ disposition: "new_task", dispositionLabel: "Started T-01", state: "Done", st: "done", bucket: "settled", answer: "Updated beta-service to 1.4.0; bun test passes.", answerKind: "summary", actions: [] });
 });
 
 test("a running task is in flight; a waiting task hands back its question and an answer action", () => {
@@ -84,9 +84,9 @@ test("sessions relay only watches produce no ledger row and no action target", (
 test("the stranded requests come first, then the in-flight ones, newest first inside each tier", () => {
   const tasks = byId(task("u1", "T-01", "done", { last_summary: "ok" }), task("u2", "T-02", "error"), task("u3", "T-03", "running"));
   const rows = requestRows([
-    msg({ id: "a", created_at: 1, text: "freee mcp 를 최신으로 갱신해줘", task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } }),
-    msg({ id: "b", created_at: 2, text: "relay 의 cli 버전도 tui 로", task_uuid: "u2", dispatch_json: { action: "new_task", confidence: "high" } }),
-    msg({ id: "c", created_at: 3, text: "freee-mcp 에 추가로 개발할 요소가 잇을까?", task_uuid: "u3", dispatch_json: { action: "new_task", confidence: "high" } }),
+    msg({ id: "a", created_at: 1, text: "예제 서비스를 최신으로 갱신해줘", task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } }),
+    msg({ id: "b", created_at: 2, text: "sample 의 cli 버전도 tui 로", task_uuid: "u2", dispatch_json: { action: "new_task", confidence: "high" } }),
+    msg({ id: "c", created_at: 3, text: "beta-service 에 추가로 개발할 요소가 잇을까?", task_uuid: "u3", dispatch_json: { action: "new_task", confidence: "high" } }),
     msg({ id: "d", created_at: 4, text: "모든 작업이 완료되면 자동 종료되는 기능", task_uuid: "u2", dispatch_json: { action: "route_to_task", task_id: "T-02", confidence: "high" } }),
     msg({ id: "e", created_at: 5, text: "프롬프트가 입력될때 goal 기능이", dispatch_state: "needs_confirm" }),
     msg({ id: "f", created_at: 6, text: "myapp refactor auth", dispatch_state: "needs_confirm" }),
@@ -125,8 +125,8 @@ test("two requests in flight: each needs_confirm row shows its own reason, not t
   const B = msg({ id: "B", text: "myapp 인증 리팩토링", dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: "T-07", confidence: "high" } });
   const sys = (text: string) => msg({ role: "system", dispatch_state: "direct", text });
   const rows = requestRows([A, B,
-    sys("dispatcher · route_to_task · T-01"), sys("Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay / T-06 myapp"),
-    sys("dispatcher · route_to_task · T-07"), sys("Routing needs confirmation (task T-07 not found, candidate: route_to_task T-07). Which task? T-05 relay / T-06 myapp"),
+    sys("dispatcher · route_to_task · T-01"), sys("Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 sample / T-06 myapp"),
+    sys("dispatcher · route_to_task · T-07"), sys("Routing needs confirmation (task T-07 not found, candidate: route_to_task T-07). Which task? T-05 sample / T-06 myapp"),
   ], {});
   const by = Object.fromEntries(rows.map((r) => [r.id, r]));
   expect(by.A.answer).toContain("task T-01 not found");
@@ -147,7 +147,7 @@ test("two status queries in a row: each gets its own answer, not the other's", (
 // A direct answer records its text in the decision AND emits the chat row. The row still has to be consumed, or it is
 // left over and claimed by the next request that has only the row to read.
 test("an answer already in the decision still consumes its chat row", () => {
-  const a = msg({ id: "a", text: "relay 는 지금 몇 버전이야?", dispatch_json: { action: "answer_directly", answer: "0.1.2", confidence: "high" } });
+  const a = msg({ id: "a", text: "sample 는 지금 몇 버전이야?", dispatch_json: { action: "answer_directly", answer: "0.1.2", confidence: "high" } });
   const b = msg({ id: "b", text: "지금 뭐 돌아가?", dispatch_state: "fastpath" });
   const ans = (text: string) => msg({ role: "dispatcher_answer", dispatch_state: "direct", text });
   const by = Object.fromEntries(requestRows([a, b, msg({ role: "system", dispatch_state: "direct", text: "dispatcher · answer_directly" }), ans("0.1.2"), ans("Running 2 · Queued 0")], {}).map((r) => [r.id, r]));
@@ -160,11 +160,11 @@ test("an answer already in the decision still consumes its chat row", () => {
 test("a worker summary between two requests belongs to its task, and claims no reply", () => {
   const t = task("u1", "T-01", "done", { last_summary: null });
   const started = msg({ id: "a", text: "freee mcp 갱신", task_uuid: "u1", dispatch_json: { action: "new_task", confidence: "high" } });
-  const summary = msg({ role: "worker_summary", dispatch_state: "direct", task_uuid: "u1", text: "Updated freee-mcp to 1.4.0." });
+  const summary = msg({ role: "worker_summary", dispatch_state: "direct", task_uuid: "u1", text: "Updated beta-service to 1.4.0." });
   const status = msg({ id: "b", text: "지금 뭐 돌아가?", dispatch_state: "fastpath" });
   const ans = msg({ role: "dispatcher_answer", dispatch_state: "direct", text: "Running 0 · Queued 0" });
   const by = Object.fromEntries(requestRows([started, summary, status, ans], byId(t)).map((r) => [r.id, r]));
-  expect(by.a).toMatchObject({ answer: "Updated freee-mcp to 1.4.0.", answerKind: "summary" });
+  expect(by.a).toMatchObject({ answer: "Updated beta-service to 1.4.0.", answerKind: "summary" });
   expect(by.b.answer).toBe("Running 0 · Queued 0");
 });
 
@@ -195,7 +195,7 @@ test("a waiting task whose question is gone offers no answer action", () => {
 // cases differ only in when B was sent. Serialised was correct before the fix and has to stay correct.
 test("serialised and overlapped arrivals both keep each reason on its own request", () => {
   const req = (id: string, at: number, text: string, tid: string) => msg({ id, created_at: at, text, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: tid, confidence: "high" } });
-  const prm = (at: number, tid: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text: `Routing needs confirmation (task ${tid} not found, candidate: route_to_task ${tid}). Which task? T-05 relay` });
+  const prm = (at: number, tid: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text: `Routing needs confirmation (task ${tid} not found, candidate: route_to_task ${tid}). Which task? T-05 sample` });
   const reasons = (ms: any[]) => Object.fromEntries(requestRows(ms, {}).map((r) => [r.id, r.answer]));
 
   // A is answered before B is even sent
@@ -216,7 +216,7 @@ test("serialised and overlapped arrivals both keep each reason on its own reques
 test("a drained backlog gives every request its own reply, in order", () => {
   const ids = ["r1", "r2", "r3"];
   const reqs = ids.map((id, i) => msg({ id, created_at: 1000 + i, text: `요청 ${i + 1}`, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: `T-0${i + 1}`, confidence: "high" } }));
-  const prompts = ids.map((_, i) => msg({ role: "system", dispatch_state: "direct", created_at: 2000 + i, text: `Routing needs confirmation (task T-0${i + 1} not found). Which task? T-05 relay` }));
+  const prompts = ids.map((_, i) => msg({ role: "system", dispatch_state: "direct", created_at: 2000 + i, text: `Routing needs confirmation (task T-0${i + 1} not found). Which task? T-05 sample` }));
   const by = Object.fromEntries(requestRows([...reqs, ...prompts], {}).map((r) => [r.id, r]));
   for (const [i, id] of ids.entries()) expect(by[id].answer).toContain(`task T-0${i + 1} not found`);
   expect(needsYou(Object.values(by) as any)).toBe(3);
@@ -245,14 +245,14 @@ test("a reply to an errored task keeps its own reason and takes nothing from the
   const chain = (id: string, at: number, tid: string) => msg({ id, created_at: at, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: tid, confidence: "high" } });
   const sys = (at: number, text: string) => msg({ role: "system", dispatch_state: "direct", created_at: at, text });
   const reply = (id: string, at: number) => msg({ id, created_at: at, dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
-  const ERR = "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 relay";
+  const ERR = "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 sample";
   const errored = byId(task("u9", "T-09", "error"));                // the snapshot carries every task that is not closed
   const rows = (ms: any[]) => Object.fromEntries(requestRows(ms, errored).map((r) => [r.id, r.answer]));
 
   const by = rows([chain("A", 1000, "T-01"), chain("B", 2000, "T-02"), chain("C", 3000, "T-03"), reply("M", 4000), sys(4001, ERR),
-    sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay"),
-    sys(6000, "Routing needs confirmation (task T-02 not found, candidate: route_to_task T-02). Which task? T-05 relay"),
-    sys(7000, "Routing needs confirmation (task T-03 not found, candidate: route_to_task T-03). Which task? T-05 relay")]);
+    sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 sample"),
+    sys(6000, "Routing needs confirmation (task T-02 not found, candidate: route_to_task T-02). Which task? T-05 sample"),
+    sys(7000, "Routing needs confirmation (task T-03 not found, candidate: route_to_task T-03). Which task? T-05 sample")]);
   expect(by.M).toBe(ERR);                             // the off-chain row keeps its own reason …
   expect(by.A).toContain("task T-01 not found");      // … and the chain rows are untouched by it
   expect(by.B).toContain("task T-02 not found");
@@ -260,14 +260,14 @@ test("a reply to an errored task keeps its own reason and takes nothing from the
 
   // ulid() is not monotonic and created_at is milliseconds, so the prompt can sort just ahead of its own message
   const tied = rows([chain("A", 1000, "T-01"), sys(4000, ERR), reply("zM", 4000),
-    sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 relay")]);
+    sys(5000, "Routing needs confirmation (task T-01 not found, candidate: route_to_task T-01). Which task? T-05 sample")]);
   expect(tied.zM).toBe(ERR);
   expect(tied.A).toContain("task T-01 not found");
 });
 
 test("a reply to an errored task, on its own, reads its reason and offers the restart", () => {
   const m = msg({ text: "그럼 이걸로 진행해줘", dispatch_state: "needs_confirm", task_uuid: "u9", reply_to_task_uuid: "u9" });
-  const prompt = msg({ role: "system", dispatch_state: "direct", text: "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 relay" });
+  const prompt = msg({ role: "system", dispatch_state: "direct", text: "Routing needs confirmation (T-09 is in the error state — restart it first). Which task? T-05 sample" });
   const r = one(m, byId(task("u9", "T-09", "error")), [prompt]);
   // the target is in error, so the row offers Restart alongside the redispatch
   expect(r).toMatchObject({ disposition: "needs_confirm", state: "Waiting for you", bucket: "needs_you", answerKind: "question", actions: ["redispatch", "restart"] });
@@ -315,8 +315,8 @@ test("an unnameable off-chain prompt degrades its own row and no other", () => {
 // rows displayed a reason from a request they had nothing to do with, on the user's own data.
 test("a pre-0.1.1 snapshot: every request keeps its own reason, in either language", () => {
   const NT = { action: "new_task", confidence: "low" };
-  const ko = (id: string, at: number) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text: "라우팅 확인 필요 (confidence=low, 후보: new_task). 어느 작업인가요? T-02 relay / T-03 myapp" });
-  const en = (id: string, at: number) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text: "Routing needs confirmation (T-02 is in the error state — restart it first). Which task? T-02 relay" });
+  const ko = (id: string, at: number) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text: "라우팅 확인 필요 (confidence=low, 후보: new_task). 어느 작업인가요? T-02 sample / T-03 myapp" });
+  const en = (id: string, at: number) => msg({ id, role: "system", dispatch_state: "direct", created_at: at, text: "Routing needs confirmation (T-02 is in the error state — restart it first). Which task? T-02 sample" });
   const by = Object.fromEntries(requestRows([
     msg({ id: "R1", created_at: 1000, text: "request 1", dispatch_state: "needs_confirm", dispatch_json: NT }), ko("K1", 1100),
     msg({ id: "R2", created_at: 2000, text: "request 2", dispatch_state: "needs_confirm", dispatch_json: NT }), ko("K2", 2100),

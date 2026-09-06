@@ -100,6 +100,12 @@ const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label
 // asked_at before creating the chat row. Older rows must retain their original text.
 export const promotedQuestionTask = (m: Pick<Message, "role" | "created_at">, task: DemoTask | undefined): DemoTask | null =>
   m.role === "question" && task?.question && task.question.askedAt != null && m.created_at >= task.question.askedAt ? task : null;
+/** Calendar boundaries use the viewer's local day, matching the date rendered by chatDaySeparator.
+ *  The persisted timestamp remains the source of truth; this never consults the current time. */
+export const messageDayKey = (createdAt: number): string | null => {
+  const d = new Date(createdAt); if (!Number.isFinite(d.getTime())) return null;
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+};
 /** Successful detail loads are cached; a failed request can be selected again without evicting a newer load. */
 export function createDetailLoader<T>(fetchDetail: (uuid: string) => Promise<T>) {
   let selected: { uuid: string } | null = null;
@@ -162,8 +168,8 @@ export function installAdapter() {
     if (b.task) row.append(D.ttagBtn(b.task)); if (b.retry) { const r = D.el("button", "nc-btn", "Retry"); r.addEventListener("click", () => relay.redispatch(m.id)); row.append(r); }
     return row;
   };
-  let messageScope = new Set<string>();
-  const clearMessages = () => { D.msgs.replaceChildren(); drawn.clear(); badgeRows.clear(); };
+  let messageScope = new Set<string>(); let lastMessageDay: string | null = null;
+  const clearMessages = () => { D.msgs.replaceChildren(); drawn.clear(); badgeRows.clear(); lastMessageDay = null; };
   const syncMessages = () => {
     const visible = S.showHistory ? store.state.messages : currentMessages(store.state.messages, store.state.tasks);
     const ids = visible.map(m => m.id);
@@ -181,13 +187,17 @@ export function installAdapter() {
       if (isDispatcherBadgeRow(m)) { drawn.add(id); continue; }                   // the badge chips under the user message already say this
       if (drawn.has(id)) { const old = badgeRows.get(id); if (old && m.role === "user") { const fresh = badgeRow(m); old.replaceWith(fresh); badgeRows.set(id, fresh); } continue; }
       drawn.add(id); const task = demoOf(m.task_uuid);
+      const day = messageDayKey(m.created_at);
+      if (day && day !== lastMessageDay) { D.chatDaySeparator?.(m.created_at); lastMessageDay = day; }
       // Snapshots retain recent messages after old archived tasks disappear. Preserve
       // sender identity without inventing a live task or offering task controls.
-      const sender = task ?? (m.task_uuid ? { uuid: m.task_uuid, id: m.task_uuid.slice(0, 8), title: "Historical session", history: true } : null);
-      if (m.role === "user") { D.chatUser(plain(m)); const wrap = D.el("div", "m-receipt"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
-      else if (promotedQuestionTask(m, task)) D.chatQuestion(task!);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
-      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid && store.state.tasks[uuid] && store.state.tasks[uuid].status !== "closed") { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(sender, m.text); }
-      else D.chatMsg(sender, m.text);                                    // worker_summary | error | dispatcher_answer
+      const agent = task ?? (m.task_uuid ? { uuid: m.task_uuid, id: m.task_uuid.slice(0, 8), title: "Historical session", history: true } : null);
+      if (m.role === "user") { D.chatUser(plain(m), m.created_at); const wrap = D.el("div", "m-receipt"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
+      else if (promotedQuestionTask(m, task)) D.chatQuestion(task!, m.created_at);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
+      // A system/dispatcher row is Relay even when it refers to a task. task_uuid is
+      // an association, not evidence that that agent authored the row.
+      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid && store.state.tasks[uuid] && store.state.tasks[uuid].status !== "closed") { const wrap = D.chatMsg(null, m.text.split(" [close confirm")[0], m.created_at); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); } else D.chatMsg(null, m.text, m.created_at); }
+      else D.chatMsg(m.role === "dispatcher_answer" ? null : agent, m.text, m.created_at);
     }
     if (!visible.length) {
       const empty = D.el("div", "conversation-empty", S.showHistory ? "No conversation history yet." : "No conversations for current tasks. Send a message to begin, or open History.");

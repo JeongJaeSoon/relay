@@ -1,4 +1,4 @@
-// Verbatim from spikes/scripts/dispatch.ts — the wording Phase 0 ⑨ measured for accuracy. Do not reword casually.
+// Verbatim from test/live/probes/dispatch.ts — the wording Phase 0 ⑨ measured for accuracy. Do not reword casually.
 export const DISPATCH_SYSTEM_PROMPT = `You are relay's dispatcher. You ONLY decide where a user message goes; you never do the work.
 Actions: new_task (start a worker in a project), route_to_task (append to an existing task's session), answer_directly (short factual answer that needs no work), close_task (user asks to finish a task — will be confirmed by the user).
 Rules:

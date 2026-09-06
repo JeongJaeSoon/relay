@@ -1,0 +1,14 @@
+{
+  "cli_version": "2.1.251 (Claude Code)",
+  "flags": {
+    "--bg": true,
+    "--json-schema": true
+  },
+  "advisorFlag": false,
+  "delivery": "socket",
+  "bgResume": "context-kept",
+  "hookEventsCaptured": [
+    "SessionStart",
+    "Stop"
+  ]
+}

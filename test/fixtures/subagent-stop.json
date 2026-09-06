@@ -1,7 +1,7 @@
 {
   "session_id": "2465db61-b45e-4fac-9060-fc9a5905a7db",
-  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-permit/2465db61-b45e-4fac-9060-fc9a5905a7db.jsonl",
-  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-permit",
+  "transcript_path": "/fixtures/transcripts/fixture.jsonl",
+  "cwd": "/workspace/sample/.claude/worktrees/fixture",
   "prompt_id": "2ef563f4-2048-4d31-a636-871607316549",
   "permission_mode": "auto",
   "agent_id": "af4623282d57fc21e",
@@ -11,14 +11,14 @@
   },
   "hook_event_name": "SubagentStop",
   "stop_hook_active": false,
-  "agent_transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-permit/2465db61-b45e-4fac-9060-fc9a5905a7db/subagents/agent-af4623282d57fc21e.jsonl",
-  "last_assistant_message": "Findings (directory listing after 15s sleep):\n\n- /Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-permit/.git — 108 bytes (worktree gitdir pointer file)\n- /Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-permit/.gitignore — 19 bytes\n- /Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-permit/README.md — 29 bytes\n\nDirectory contains only these 3 files (plus `.`/`..`); no other entries present.",
+  "agent_transcript_path": "/fixtures/transcripts/fixture.jsonl",
+  "last_assistant_message": "RELAY: done\\nSynthetic subagent completed an example inspection.",
   "background_tasks": [
     {
       "id": "af4623282d57fc21e",
       "type": "subagent",
       "status": "running",
-      "description": "sleep then list files A",
+      "description": "example inspection",
       "agent_type": "relay-explore"
     }
   ],

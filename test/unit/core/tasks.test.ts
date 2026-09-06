@@ -5,7 +5,7 @@ import { parseConfig } from "../../../src/config.ts";
 import { PermitPool } from "../../../src/core/permits.ts";
 import { Scheduler } from "../../../src/core/queue.ts";
 import { Outbox } from "../../../src/lifecycle/outbox.ts";
-import { FakeRunner } from "../../../src/runner/fake.ts";
+import { FakeRunner } from "../../helpers/fake-runner.ts";
 import { TaskService } from "../../../src/core/tasks.ts";
 import { ulid } from "../../../src/core/ids.ts";
 import { ingestHook } from "../../../src/hooks/ingest.ts";

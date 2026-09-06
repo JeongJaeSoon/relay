@@ -1,12 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
+import { createServer } from "node:net";
 const calls: any[] = []; let srv: ReturnType<typeof Bun.serve>;
-beforeAll(() => {
-  const home = mkdtempSync(join(tmpdir(), "relay-cli-")); process.env.RELAY_HOME = home; writeFileSync(join(home, "api-token"), "TOK"); writeFileSync(join(home, "config.toml"), "port = 8899\n");   // per file: own home + own port (shared module cache)
-  srv = Bun.serve({ port: 8899, hostname: "127.0.0.1", async fetch(req) { const u = new URL(req.url); calls.push([req.method, u.pathname, req.headers.get("authorization"), req.method === "POST" ? await req.json() : null]);
+const availablePort = async () => { const reservation = createServer(); await new Promise<void>((resolve, reject) => reservation.once("error", reject).listen(0, "127.0.0.1", resolve)); const address = reservation.address(); if (!address || typeof address === "string") throw new Error("no port"); await new Promise<void>((resolve) => reservation.close(() => resolve())); return address.port; };
+beforeAll(async () => {
+  const home = mkdtempSync(join(tmpdir(), "relay-cli-")); process.env.RELAY_HOME = home; writeFileSync(join(home, "api-token"), "TOK");
+  srv = Bun.serve({ port: await availablePort(), hostname: "127.0.0.1", async fetch(req) { const u = new URL(req.url); calls.push([req.method, u.pathname, req.headers.get("authorization"), req.method === "POST" ? await req.json() : null]);
     if (u.pathname === "/api/messages") return Response.json({ message_id: "m1" }, { status: 202 });
     if (u.pathname === "/api/tasks") return Response.json({ as_of_seq: 1, tasks: [{ uuid: "u1", display_id: "T-01", status: "running", title: "인증 리팩토링", project_id: "p", started_at: Date.now() - 65_000, ended_at: null, short_id: "ab12", parent_uuid: null }], projects: [{ id: "p", name: "myapp" }], state: {}, messages: [] });
     return Response.json({ ok: true }); } });
+  writeFileSync(join(home, "config.toml"), `port = ${srv.port}\n`);   // per file: own home + OS-assigned port (shared module cache)
 });
 afterAll(() => srv.stop(true));
 async function capture(fn: () => Promise<void>) { const w = process.stdout.write.bind(process.stdout); let out = ""; (process.stdout as any).write = (s: string) => { out += s; return true; }; try { await fn(); } finally { (process.stdout as any).write = w; } return out; }
@@ -23,7 +26,9 @@ describe("relay cli", () => {
   });
   test("pause/resume-all hit the endpoints", async () => { const { runCli } = await import("../../../src/cli/index.ts"); await capture(() => runCli("pause", [])); await capture(() => runCli("resume-all", [])); expect(calls.some((c) => c[1] === "/api/pause")).toBe(true); expect(calls.some((c) => c[1] === "/api/resume-all")).toBe(true); });
   test("a dead server throws RelayDown instead of exiting the process", async () => {
-    const { client, RelayDown } = await import("../../../src/cli/client.ts"); process.env.RELAY_HOME = mkdtempSync(join(tmpdir(), "relay-cli-dead-")); writeFileSync(join(process.env.RELAY_HOME, "config.toml"), "port = 8897\n");
+    const { client, RelayDown } = await import("../../../src/cli/client.ts"); process.env.RELAY_HOME = mkdtempSync(join(tmpdir(), "relay-cli-dead-"));
+    const deadPort = await availablePort();
+    writeFileSync(join(process.env.RELAY_HOME, "config.toml"), `port = ${deadPort}\n`);
     await expect(client().get("/tasks")).rejects.toBeInstanceOf(RelayDown);
   });
 });

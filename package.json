@@ -6,14 +6,21 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "spike": "bun run",
     "build:web": "bun scripts/build-web.ts",
     "compile": "sh scripts/compile.sh",
     "test:web": "bun test web/test",
-    "dev:fake": "bun scripts/dev-fake.ts"
+    "dev:fake": "bun test/support/dev-server.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run build:web && bun run typecheck && bun test",
+    "test:unit": "bun test test/unit",
+    "test:integration": "bun test test/integration",
+    "test:binary": "bun scripts/test-binary.ts",
+    "test:live": "RELAY_E2E=1 bun test test/live/e2e-cli.test.ts",
+    "dev:ui": "bun test/support/ui/serve.ts"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.0"
+    "@types/bun": "^1.4.0",
+    "typescript": "5.9.3"
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",

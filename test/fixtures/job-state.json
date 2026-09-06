@@ -1,0 +1,27 @@
+{
+  "state": "working",
+  "detail": "synthetic fixture",
+  "tempo": "active",
+  "output": null,
+  "children": null,
+  "linkScanOffset": 0,
+  "template": "bg",
+  "respawnFlags": [
+    "-n",
+    "relay:fixture",
+    "--model",
+    "claude-sonnet-5"
+  ],
+  "providerEnv": {},
+  "intent": "synthetic instruction",
+  "name": "relay:fixture",
+  "nameSource": "fixture",
+  "sessionId": "18181818-1818-4818-8818-181818181818",
+  "resumeSessionId": "18181818-1818-4818-8818-181818181818",
+  "daemonShort": "18181818",
+  "cwd": "/workspace/fixture-sandbox",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:01.000Z",
+  "firstTerminalAt": null,
+  "backend": "daemon"
+}

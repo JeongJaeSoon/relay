@@ -429,7 +429,7 @@ body[data-request-layout="dividers"] .lg-row+.lg-row::before{border-color:var(--
   flex:1;min-width:0;overflow-y:auto;padding:14px var(--chat-gutter);display:grid;grid-template-columns:minmax(0,1200px);justify-content:center;align-content:start;gap:12px;
 }
 .m-user{justify-self:end;max-width:64%;background:var(--accent-soft);border:1px solid var(--line);
-  border-radius:12px 12px 3px 12px;padding:10px 12px;font-size:var(--fs-body)}
+  border-radius:12px 12px 3px 12px;padding:10px 12px;font-size:var(--fs-body);display:flex;gap:8px;align-items:flex-end}
 .m-row{justify-self:start;max-width:86%;min-width:0;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
 .m-sender{display:flex;align-items:center;gap:6px;max-width:100%;font-size:var(--fs-micro);line-height:1.5;color:var(--muted)}
 .m-receipt{justify-self:end;max-width:78%;min-width:0;margin-top:-6px}
@@ -446,6 +446,11 @@ span.ttag.agent-tag{cursor:default}
 #conversationStatus{padding:8px var(--chat-gutter);color:var(--muted);font-size:var(--fs-small);line-height:1.5;overflow-wrap:anywhere}
 .m-sys{background:var(--surface2);border:1px solid var(--line);border-radius:12px 12px 12px 3px;
   padding:10px 12px;font-size:var(--fs-body);max-width:100%}
+.m-copy{min-width:0}
+.m-time{margin-left:8px;white-space:nowrap;color:var(--muted);font-size:var(--fs-micro);line-height:1.5;font-variant-numeric:tabular-nums}
+.m-user .m-time{margin-left:auto}
+.m-day-separator{justify-self:stretch;display:flex;align-items:center;gap:10px;color:var(--muted);font-size:var(--fs-micro);line-height:1.4;text-align:center}
+.m-day-separator::before,.m-day-separator::after{content:"";height:1px;flex:1;background:var(--line)}
 .m-note{justify-self:center;max-width:100%;font-size:var(--fs-micro);line-height:1.5;color:var(--muted)}
 .m-user,.m-sys{min-width:0;box-sizing:border-box;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
 .m-note,.lg-msg,.lg-ans,.d-body,.tl-row pre{overflow-wrap:anywhere}
