@@ -52,6 +52,14 @@ if(params.has('dark'))Theme.set('dark');else Theme.set('light');
 if(params.has('missing')){const f=S.foreign.get('synthetic-foreign-0');if(f){f.cwd='—';f.directoryPath=null}}
 if(params.has('root')){const f=S.foreign.get('synthetic-foreign-0');if(f){f.cwd='/';f.directoryPath='/'}}
 relayout();
+if(params.has('notifications')){
+ N.dnd=true;N.open=false;
+ const task=[...S.tasks.values()][0];
+ if(task)for(const kind of ['wait','err','done'])for(let i=0;i<3;i++){
+  notify(kind,{...task,title:'Synthetic '+kind+' notification '+(i+1)},i===0?'긴 알림 본문도 두 줄 안에서 읽을 수 있는지 확인합니다. '+stress:'Synthetic notification: select to inspect the task.');
+ }
+ renderNotif();renderSettings();
+}
 if(params.has('updates')){
  let update=0;
  setInterval(()=>{[renderSidebar,renderLedger,refresh][update++%3]()},1000);

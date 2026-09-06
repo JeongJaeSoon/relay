@@ -4,6 +4,7 @@ import { runInNewContext } from "node:vm";
 import { createStore } from "../src/store.ts";
 import { stKey, stLabel } from "../src/consts.ts";
 import { requestRows } from "../src/ledger.ts";
+import { currentMessages, currentRequestRows } from "../src/conversation-scope.ts";
 import { diffNotifs } from "../src/notify.ts";
 import { chatFor } from "../../src/core/promote.ts";
 import { stripAsk } from "../../shared/ask.ts";
@@ -21,6 +22,7 @@ class Node {
   append(...nodes: Node[]) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
   replaceWith(node: Node) { const parent = this.parent!; parent.children[parent.children.indexOf(this)] = node; node.parent = parent; }
   addEventListener() {}
+  replaceChildren(...nodes: Node[]) { this.children = []; this.append(...nodes); }
 }
 const task = (extra: Record<string, unknown> = {}) => ({
   uuid: "agent-uuid", display_id: "T-01", num: 1, project_id: "p", title: "Agent one", status: "running", size: "normal", effort: "high", model: "claude-opus", process_state: "alive", process_generation: 1, turn_state: "busy", attach_state: "none", question: null, created_at: 1, ...extra,
@@ -33,7 +35,7 @@ function setup(saved?: string) {
   const storage = new Map(saved ? [["relay-selected-task", saved]] : []);
   const msgs = new Node("div"); const S = { tasks: new Map(), foreign: new Map(), sel: null as string | null, fsel: null as string | null };
   const context: any = {
-    store, stKey, stLabel, requestRows, diffNotifs, stripAsk,
+    store, stKey, stLabel, requestRows, currentMessages, currentRequestRows, diffNotifs, stripAsk,
     api: { createMessageSender: () => async () => {}, taskDetail: async () => { calls.push("loadDetail"); return { events: [] }; } },
     S, msgs, LEDGER: [], location: { port: "18814" },
     sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
@@ -120,6 +122,9 @@ test("retained messages from a removed task preserve historical UUID identity th
     message("m3", "question", "Historical question?", { task_uuid: uuid }),
     message("m4", "system", "System notice", { task_uuid: null }),
   ], []);
+  expect(h.msgs.children.some(n => n.dataset.agent === uuid)).toBe(false);
+  expect(h.context.LEDGER).toHaveLength(0);
+  h.context.setConversationHistory(true);
   const [summary, question, system] = h.msgs.children.filter(n => n.className === "m-row");
   expect(summary.dataset).toEqual({ agent: uuid, sender: "Historical session", history: "true" });
   expect(question.dataset.agent).toBe(uuid);
@@ -128,4 +133,20 @@ test("retained messages from a removed task preserve historical UUID identity th
   expect(h.context.LEDGER[0].taskUuids).toEqual([uuid]);
   expect(h.context.LEDGER[0].taskIds).toEqual([]);
   expect(h.S.tasks.size).toBe(0); // no phantom manageable task
+});
+
+
+test("closing a task hides its messages and requests immediately; History restores read-only records", () => {
+  const h = setup();
+  h.snapshot([message("m1", "user", "Check"), message("m2", "question", "Continue?")], [task({ status: "done" })]);
+  expect(h.context.LEDGER).toHaveLength(1);
+  expect(h.msgs.children.some(n => n.textContent === "Continue?")).toBe(true);
+  h.store.applyFrame({ type: "task.updated", seq: 1, idx: 0, task: task({status: "closed"}) }); h.flush();
+  expect(h.context.LEDGER).toHaveLength(0);
+  expect(h.msgs.children.some(n => n.textContent === "Continue?")).toBe(false);
+  h.context.setConversationHistory(true);
+  expect(h.msgs.children.some(n => n.textContent === "Continue?")).toBe(true);
+  expect(h.context.LEDGER[0]).toMatchObject({state: "Archived", bucket: "settled", actions: []});
+  h.context.setConversationHistory(false);
+  expect(h.context.LEDGER).toHaveLength(0);
 });

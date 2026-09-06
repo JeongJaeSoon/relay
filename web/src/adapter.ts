@@ -4,6 +4,7 @@ import { stripAsk } from "@shared/ask.ts";
 import * as api from "./api.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
 import { requestRows } from "./ledger.ts";
+import { currentMessages, currentRequestRows } from "./conversation-scope.ts";
 import { diffNotifs, type NotifKind } from "./notify.ts";
 import { store } from "./store.ts";
 export interface DemoTaskCore { cleanup: boolean; id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { key?: string; askedAt?: number; q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
@@ -26,12 +27,12 @@ export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
 }
 /** A session relay only watches. Deliberately NOT a DemoTask: it has no id, project, size, permit, branch or verdict,
  *  and the graph must never let one be mistaken for a task relay is running. */
-export interface DemoForeign { key: string; title: string; sid: string; short: string; cwd: string; directoryPath: string | null; state: "running" | "idle" | "unknown"; stateLabel: string; kind: string; pid: number | null; startedAt: Date | null; firstSeen: Date; lastSeen: Date }
+export interface DemoForeign { key: string; title: string; sid: string; short: string; cwd: string; directoryPath: string | null; state: "running" | "idle" | "done" | "stopped" | "failed" | "unknown"; canStop: boolean; managed: boolean; stateLabel: string; kind: string; pid: number | null; startedAt: Date | null; firstSeen: Date; lastSeen: Date }
 export function toDemoForeign(f: ForeignSession): DemoForeign {
   const dir = (f.cwd ?? "").replace(/\/+$/, "");
-  const state = f.busy == null ? "unknown" : f.busy ? "running" : "idle";     // `agents --json` says nothing about a session it reports no status for
+  const state = f.state ?? (f.busy == null ? "unknown" : f.busy ? "running" : "idle");     // `agents --json` says nothing about a session it reports no status for
   return { key: f.session_id, title: f.name?.trim() || dir.split("/").pop() || `session ${f.session_id.slice(0, 8)}`,
-    sid: f.session_id, short: f.short_id ?? "—", cwd: dir || (f.cwd ? "/" : "—"), directoryPath: f.cwd || null, state, stateLabel: { running: "Running", idle: "Idle", unknown: "Unknown" }[state],
+    sid: f.session_id, short: f.short_id ?? "—", cwd: dir || (f.cwd ? "/" : "—"), directoryPath: f.cwd || null, state, canStop: f.can_stop ?? false, managed: f.managed ?? false, stateLabel: { running: "Running", idle: "Idle", done: "Done", stopped: "Stopped", failed: "Failed", unknown: "Unknown" }[state],
     kind: f.kind === "bg" ? "background" : f.kind ?? "", pid: f.pid, startedAt: f.started_at ? new Date(f.started_at) : null, firstSeen: new Date(f.first_seen), lastSeen: new Date(f.last_seen) };
 }
 const demoOf = (uuid: string | null | undefined): DemoTask | undefined => { if (!uuid) return undefined; const t = store.state.tasks[uuid]; return t ? D.S?.tasks?.get(t.display_id) ?? undefined : undefined; };
@@ -161,8 +162,20 @@ export function installAdapter() {
     if (b.task) row.append(D.ttagBtn(b.task)); if (b.retry) { const r = D.el("button", "nc-btn", "Retry"); r.addEventListener("click", () => relay.redispatch(m.id)); row.append(r); }
     return row;
   };
-  const syncMessages = (ids: Iterable<string>) => {
-    const byId = new Map(store.state.messages.map((m) => [m.id, m]));
+  let messageScope = new Set<string>();
+  const clearMessages = () => { D.msgs.replaceChildren(); drawn.clear(); badgeRows.clear(); };
+  const syncMessages = () => {
+    const visible = S.showHistory ? store.state.messages : currentMessages(store.state.messages, store.state.tasks);
+    const ids = visible.map(m => m.id);
+    const nextScope = new Set(ids);
+    // A task archive/reopen can change visibility without a new chat frame.
+    const removed = [...messageScope].some(id => !nextScope.has(id));
+    const reordered = [...messageScope].some((id, index) => ids[index] !== id);
+    const scrollTop = D.msgs.scrollTop;
+    if (removed || reordered) clearMessages();
+    messageScope = nextScope;
+    const empty = document.getElementById?.("conversationEmpty"); empty?.remove();
+    const byId = new Map(visible.map((m) => [m.id, m]));
     for (const id of ids) {
       const m = byId.get(id); if (!m) continue;
       if (isDispatcherBadgeRow(m)) { drawn.add(id); continue; }                   // the badge chips under the user message already say this
@@ -173,13 +186,35 @@ export function installAdapter() {
       const sender = task ?? (m.task_uuid ? { uuid: m.task_uuid, id: m.task_uuid.slice(0, 8), title: "Historical session", history: true } : null);
       if (m.role === "user") { D.chatUser(plain(m)); const wrap = D.el("div", "m-receipt"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
       else if (promotedQuestionTask(m, task)) D.chatQuestion(task!);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
-      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(sender, m.text); }
+      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid && store.state.tasks[uuid] && store.state.tasks[uuid].status !== "closed") { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(sender, m.text); }
       else D.chatMsg(sender, m.text);                                    // worker_summary | error | dispatcher_answer
     }
-    D.scrollChat?.();
+    if (!visible.length) {
+      const empty = D.el("div", "conversation-empty", S.showHistory ? "No conversation history yet." : "No conversations for current tasks. Send a message to begin, or open History.");
+      empty.id = "conversationEmpty"; D.msgs.append(empty);
+    }
+    if (removed) D.msgs.scrollTop = scrollTop; else D.scrollChat?.();
   };
   /** The ledger is derived, never accumulated: a task changing status changes the disposition of every request that landed in it. */
-  const syncLedger = () => { D.LEDGER.length = 0; D.LEDGER.push(...requestRows(store.state.messages, store.state.tasks)); };
+  const syncLedger = () => {
+    const rows = requestRows(store.state.messages, store.state.tasks);
+    const current = currentRequestRows(rows, store.state.tasks);
+    const currentIds = new Set(current.map(r => r.id));
+    const displayed = S.showHistory ? rows.map(r => currentIds.has(r.id) ? r : { ...r, bucket: "settled", state: "Archived", st: "closed", actions: [], answerKind: r.answerKind === "question" ? null : r.answerKind, answer: r.answerKind === "question" ? null : r.answer }) : current;
+    D.LEDGER.length = 0; D.LEDGER.push(...displayed);
+  };
+  const historyToggle = document.getElementById?.("historyToggle");
+  const setHistory = (show: boolean) => {
+    S.showHistory = show;
+    historyToggle?.setAttribute("aria-pressed", String(show));
+    if (historyToggle) historyToggle.textContent = show ? "Hide history" : "Show history";
+    const label = document.getElementById?.("conversationScopeLabel"); if (label) label.textContent = show ? "Including past conversations" : "Current conversations";
+    clearMessages(); messageScope.clear();
+    syncMessages(); syncLedger(); D.renderLedger();
+  };
+  historyToggle?.addEventListener("click", () => setHistory(!S.showHistory));
+  // Also used by empty-state navigation without changing any task data.
+  D.setConversationHistory = setHistory;
   const syncEvents = (uuids: Iterable<string>) => { for (const uuid of uuids) { const t = demoOf(uuid); if (!t) continue; const list = store.state.events[uuid] ?? []; const have = new Set(t.events.map((e) => e.id)); for (const e of list) if (!have.has(e.seq) && isTimelineEvent(e.type)) t.events.push(eventLine(e)); if (t.events.length > 200) t.events.splice(0, t.events.length - 200); if (S.sel === t.id) D.refresh(); } };
   const flushNotifs = () => {                                                  // decisions were made at frame time; the DOM work happens here, once per render
     const { ops, chips } = notifs.drain();
@@ -188,10 +223,13 @@ export function installAdapter() {
   };
   const sync = () => {
     raf = 0; const d = store.drain(); const all = d.all;
+    if (all) for (const [id, task] of S.tasks) {
+      if (!store.state.tasks[task.uuid]) { S.tasks.delete(id); if (S.sel === id) S.sel = null; }
+    }
     const tasksChanged = syncTasks(all ? Object.keys(store.state.tasks) : d.tasks);
     flushNotifs();                                                             // after syncTasks so S.tasks holds the demo task the notification points at
     if (all || d.sys || d.projects) syncSystem();
-    if (all || d.messages.size) syncMessages(all ? store.state.messages.map((m) => m.id) : d.messages);
+    if (all || d.messages.size || d.tasks.size) syncMessages();
     if (d.events.size) syncEvents(d.events);
     const foreignChanged = all || d.foreign; if (foreignChanged) syncForeign();
     if (all || d.messages.size || d.tasks.size) { syncLedger(); if (!all && !tasksChanged && !foreignChanged) D.renderLedger(); }   // otherwise relayout() → refresh() draws it

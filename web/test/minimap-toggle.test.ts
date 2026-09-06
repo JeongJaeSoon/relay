@@ -56,3 +56,33 @@ test("focusing a task from overview resets the minimap toggle to readable mode",
   expect(button.attributes["aria-pressed"]).toBe("false");
   expect(button.title).toBe("Fit all tasks");
 });
+
+test("resizing the minimap recomputes viewport scale from its visible surface", () => {
+  const source = app.slice(app.indexOf("function updateMinimap(){"), app.indexOf("function mmJump(e){"));
+  const surface: any = { clientWidth: 170, clientHeight: 114, textContent: "", append() {} };
+  const c: any = { mmEl: surface, mmShell: { style: {} }, graphTasks: () => [{}], S: { foreign: new Map() }, graphBoxes: () => [{ x: 0, y: 0, w: 320, h: 100, st: "run" }], view: { x: 0, y: 0, k: 1 }, canvas: { clientWidth: 800, clientHeight: 400 }, el: () => ({ style: {} }) };
+  runInNewContext(source, c);
+  c.updateMinimap();
+  const initial = c.mmMap.mk;
+  surface.clientWidth = 258;surface.clientHeight = 174;
+  c.updateMinimap();
+  expect(c.mmMap.mk).toBeGreaterThan(initial);
+  expect(c.mmMap.mk).toBe(Math.min(258 / 888, 174 / 488));
+});
+
+
+test("readable view anchors the first retained Claude session when no Relay task exists", () => {
+  const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  const fit = app.slice(app.indexOf("function fit("), app.indexOf("function readable("));
+  const session = { key: "retained", x: 1120, y: 32 };
+  const context: any = {
+    S: { layout: "tree", sel: null, fsel: null }, view: {},
+    graphBoxes: () => [{ x: 32, y: 32, w: 260, h: 62 }, { x: 1120, y: 32, w: 300, h: 110 }],
+    emptyHintBox: () => null, graphTasks: () => [], foreignArr: () => [session],
+    canvas: { clientWidth: 676, clientHeight: 550 }, $: () => ({ classList: { remove() {} } }), applyView() {},
+  };
+  runInNewContext(fit + "fit(1);", context);
+  expect(context.view.x + session.x).toBe(28);
+  expect(context.view.y + session.y).toBe(24);
+  expect(context.view.k).toBe(1);
+});

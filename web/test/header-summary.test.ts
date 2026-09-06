@@ -12,14 +12,14 @@ test("plain header activity exposes quota, pause and estimated usage without a d
   const ctx: any = { $: () => host, S, runningCount: () => 15, tasksArr: () => [{ status: "queue" }, { status: "run" }], el: (_tag: string, cls: string, text: string) => ({ cls, text }) };
   runInNewContext(code, ctx);
   ctx.renderHeaderSummary();
-  expect(host.children.map((n: any) => n.text)).toEqual(["Agents 15/24", "queued 1", "Today ≈ 91k tok (est.)", "⏸ paused ⚠"]);
+  expect(host.children.map((n: any) => n.text)).toEqual(["Workers 15/24", "queued 1", "Today ≈ 91k tok (est.)", "⏸ paused ⚠"]);
   expect(host["aria-label"]).toContain("queued 1");
   expect(host["aria-label"]).toContain("over the soft limit");
   expect(flags.warn).toBe(true);
   S.dailyCeiling = null; S.paused = false; S.usage = 0; host.children=[];
   ctx.renderHeaderSummary();
   expect(flags.warn).toBe(false);
-  expect(host.children.map((n: any) => n.text)).toEqual(["Agents 15/24", "queued 1", "Today ≈ 0k tok (est.)"]);
+  expect(host.children.map((n: any) => n.text)).toEqual(["Workers 15/24", "queued 1", "Today ≈ 0k tok (est.)"]);
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   expect(html).toContain('<div id="headerSummary"');
   expect(html).not.toContain('<details id="headerSummary"');

@@ -13,7 +13,7 @@ function scene(width: number, height: number, layout: string, populated = false,
   const gateway = { offsetLeft: 32, offsetTop: 32, offsetWidth: 210, offsetHeight: 54 };
   const view = { x: 0, y: 0, k: 1, manual: true, overview: false };
   const tasks = populated ? [{ id: "T-01", x: 310, y: 32, status: "done" }] : [];
-  const context = { view, S: { layout }, MINZ: .2, canvas: { clientWidth: width, clientHeight: height }, gwEl: gateway,
+  const context = { view, S: { layout, foreign: new Map(outside ? [["outside", {}]] : []) }, MINZ: .2, canvas: { clientWidth: width, clientHeight: height }, gwEl: gateway,
     $: (selector: string) => selector === "#emptyHint" ? hint : { classList: { remove() {} } },
     tasksArr: () => tasks, graphTasks: () => tasks, foreignArr: () => outside ? [{ key: "outside", x: 900, y: 40 }] : [], document: { getElementById: () => ({ offsetWidth: 230, offsetHeight: 107 }) }, applyView() {} };
   runInNewContext(fitCode + "\nfit();", context);

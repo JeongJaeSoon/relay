@@ -217,7 +217,9 @@ function ledgerRowEl(r){
   const pill=el("span","pill st-"+r.st+(r.disposition==="deciding"?" pulse":""));
   const mark=r.st==="done"?el("span","completion-mark","✓"):el("i","dot");mark.setAttribute("aria-hidden","true");
   pill.append(mark,el("span",null,r.state));
-  st.append(pill,el("span","lg-disp",r.dispositionLabel));
+  const hasAgent=r.taskIds.some(id=>S.tasks.has(id));
+  const disposition=hasAgent&&r.dispositionLabel==="Sent to "+r.taskId?"Sent":r.dispositionLabel;
+  st.append(pill,el("span","lg-disp",disposition));
   r.taskIds.forEach(id=>{const tt=S.tasks.get(id);if(tt)st.append(ttagBtn(tt,()=>jumpToRequest(r,id)))}); /* split requests can navigate to each agent */
   const known=new Set(r.taskIds.map(id=>S.tasks.get(id)).filter(Boolean).map(agentKey));
   (r.taskUuids||[]).filter(uuid=>!known.has(uuid)).forEach(uuid=>{
@@ -231,15 +233,36 @@ function ledgerRowEl(r){
   r.actions.forEach(a=>{
     if(a==="answer")return; /* Answer options live in Messages; requests link to the conversation. */
     const spec=LEDGER_ACTS[a];if(!spec)return;
-    const b=el("button","chip",spec.label);b.addEventListener("click",()=>spec.run(r));acts.append(b);
+    const label=a==="redispatch"&&r.disposition==="needs_confirm"?"Recheck routing":spec.label;
+    const b=el("button","chip",label);
+    if(a==="redispatch")b.title=r.disposition==="needs_confirm"?"Ask Relay to evaluate this request again. Add project or task details in Messages if clarification is needed.":"Retry the failed request";
+    b.addEventListener("click",()=>spec.run(r));acts.append(b);
   });
   if(acts.childElementCount)row.append(acts);
   const expand=el("button","lg-expand",expandedRequests.has(r.id)?"Less":"More");
-  expand.setAttribute("aria-label","Expand request: "+r.text);expand.setAttribute("aria-expanded",String(expandedRequests.has(r.id)));
-  expand.addEventListener("click",()=>{const open=row.classList.toggle("open");expand.textContent=open?"Less":"More";expand.setAttribute("aria-expanded",String(open));if(open)expandedRequests.add(r.id);else expandedRequests.delete(r.id)});
+  expand.dataset.focusKey="request-expand:"+r.id;expand.hidden=!expandedRequests.has(r.id);
+  expand.setAttribute("aria-label",(expandedRequests.has(r.id)?"Collapse":"Expand")+" request: "+r.text);expand.setAttribute("aria-expanded",String(expandedRequests.has(r.id)));
+  expand.addEventListener("click",()=>{const open=row.classList.toggle("open");expand.textContent=open?"Less":"More";expand.setAttribute("aria-label",(open?"Collapse":"Expand")+" request: "+r.text);expand.setAttribute("aria-expanded",String(open));if(open)expandedRequests.add(r.id);else expandedRequests.delete(r.id);syncRequestExpansion()});
   row.append(expand);
   return row;
 }
+function syncRequestExpansion(){
+  const list=$("#lgList");if(!list)return;
+  const scrollTop=list.scrollTop;
+  list.querySelectorAll(".lg-row").forEach(row=>{
+    const expand=row.querySelector(".lg-expand");if(!expand)return;
+    let show=row.classList.contains("open");
+    if(!show){
+      const title=row.querySelector(".lg-msg");
+      if(!title?.clientWidth)return; // Wait until a collapsed/hidden sidebar is measurable.
+      show=[title,row.querySelector(".lg-ans")].some(n=>n&&(n.scrollHeight>n.clientHeight+1||n.scrollWidth>n.clientWidth+1));
+    }
+    if(!show&&document.activeElement===expand)row.querySelector(".lg-msg")?.focus({preventScroll:true});
+    expand.hidden=!show;
+  });
+  list.scrollTop=scrollTop;
+}
+new ResizeObserver(syncRequestExpansion).observe($("#lgList"));
 function renderLedger(){
   const list=$("#lgList");if(!list)return;
   const scrollTop=list.scrollTop;
@@ -249,12 +272,13 @@ function renderLedger(){
   const rows=LEDGER;
   list.textContent="";
   if(!rows.length){
-    const empty=el("div","lg-empty","Every message you send is a request. What happened to it shows up here.");
+    const empty=el("div","lg-empty",S.showHistory?"No request history yet.":"No requests for current tasks. Past requests are available in History.");
     list.append(empty);
     restoreFocus(focused,true);
     return;
   }
   rows.forEach(r=>list.append(ledgerRowEl(r)));
+  syncRequestExpansion();
   list.scrollTop=scrollTop;
   restoreFocus(focused,true);
 }
@@ -382,11 +406,13 @@ function renderNodes(){
       pillTxt="Queued "+(qi+1);
     }
     n.querySelector(".pill").textContent=pillTxt;
-    n.querySelector(".n-meta").textContent=t.sub
-      ?t.id+" · sub"
-      :t.id+" · "+t.project+" · "+t.size;
-    n.querySelector(".n-meta").prepend(agentMark(t));
+    const meta=n.querySelector(".n-meta");meta.textContent="";
+    const identity=el("span","n-agent");identity.append(agentMark(t),el("span",null,t.id));
+    const context=el("span","n-context",t.sub?"sub":t.project+" · "+t.size);
+    context.title=t.sub?"Sub-agent":t.project+" · "+t.size;
+    meta.append(identity,context);
     n.querySelector(".n-step").textContent=t.step;
+    n.querySelector(".n-step").title=t.step||"";
     n.querySelector(".n-elapsed").textContent=elapsedText(t);
     n.querySelector(".br").textContent=t.sub?"":t.branch||"";
     n.querySelector(".br").title=t.branch||"";
@@ -397,10 +423,14 @@ function renderNodes(){
     if(!graphTaskVisible(S.tasks.get(n.id.slice(5))))n.remove();
   });
   renderForeignNodes();
-  $("#emptyHint").style.display=graphTasks().length?"none":"flex";
+  $("#emptyHint").style.display=graphTasks().length||S.foreign.size?"none":"flex";
 }
 /* ---- sessions outside relay: observation-only nodes (dashed, no status colour, no gateway edge) ---- */
+function foreignStateClass(f){return ({running:"st-run",idle:"st-queue",done:"st-done",stopped:"st-done",failed:"st-err"})[f.state]||"st-foreign"}
+function foreignSidebarGroup(f){return ({running:"running",idle:"idle",done:"done",stopped:"done",failed:"attention"})[f.state]||"attention"}
+function foreignAgent(f){return {uuid:f.sid||f.key,id:f.short||"session"}}
 function foreignElapsed(f){
+  if(["done","stopped","failed"].includes(f.state))return "Session retained";
   const from=f.startedAt||f.firstSeen;
   return (f.startedAt?"":"≥")+dur(Date.now()-from); /* with no start time all relay can say is "at least this long", counted from when it first saw the session */
 }
@@ -410,7 +440,7 @@ function foreignEl(f){
     n=el("div","node foreign st-foreign");n.id="fnode-"+f.key;n.dataset.key=f.key;n.setAttribute("role","button");n.tabIndex=0;
     const top=el("div","n-top");top.append(el("span","n-title"),el("span","pill"));
     n.append(top,el("div","n-meta mono"),el("div","n-step mono"));
-    const foot=el("div","n-foot");foot.append(el("span","n-elapsed mono"),el("span","br","watching only"));
+    const foot=el("div","n-foot");foot.append(el("span","n-elapsed mono"),el("span","br","Claude session"));
     n.append(foot);
     n.addEventListener("click",e=>{e.stopPropagation();selectForeign(f.key)});
     bindNodeFocus(n,()=>centerOnBox(f));
@@ -422,14 +452,15 @@ function foreignEl(f){
 function renderForeignNodes(){
   foreignArr().forEach(f=>{
     const n=foreignEl(f);
-    n.className="node foreign st-foreign"+(S.fsel===f.key?" sel":"");
+    n.className="node foreign "+foreignStateClass(f)+(S.fsel===f.key?" sel":"");
     n.style.left=f.x+"px";n.style.top=f.y+"px";
     n.querySelector(".n-title").textContent=f.title;
     n.querySelector(".pill").textContent=f.stateLabel;
-    n.querySelector(".n-meta").textContent=f.short+(f.kind?" · "+f.kind:"");
+    const meta=n.querySelector(".n-meta");meta.textContent="";
+    meta.append(agentMark(foreignAgent(f)),el("span",null,f.short+(f.kind?" · "+f.kind:"")));
     n.querySelector(".n-step").textContent=f.cwd;
     const e2=n.querySelector(".n-elapsed");e2.textContent=foreignElapsed(f);e2.dataset.fel=f.key;
-    n.setAttribute("aria-label",f.title+" — started outside relay, "+f.stateLabel);
+    n.setAttribute("aria-label",f.title+" — Claude session, "+f.stateLabel);
   });
   nodesBox.querySelectorAll(".node.foreign").forEach(n=>{if(!S.foreign.has(n.dataset.key))n.remove()});
 }
@@ -498,15 +529,41 @@ function animateEdges(){ /* keeps the edges glued to the nodes through the 300ms
 
 /* ================= sidebar ================= */
 const GROUPS=[
-  {label:"Needs attention",match:t=>t.status==="wait"||t.status==="err"||t.status==="cancelled",cls:"attn",countCls:"st-err"},
-  {label:"Running",match:t=>t.status==="run",countCls:"st-run"},
-  {label:"Queued",match:t=>t.status==="queue",countCls:"st-queue"},
-  {label:"Done · Archived",match:t=>t.status==="done"||t.status==="closed",countCls:"st-done"},
+  {id:"attention",label:"Needs attention",match:t=>t.status==="wait"||t.status==="err"||t.status==="cancelled",cls:"st-wait"},
+  {id:"running",label:"Running",match:t=>t.status==="run",cls:"st-run"},
+  {id:"queued",label:"Queued",match:t=>t.status==="queue",cls:"st-queue"},
+  {id:"idle",label:"Idle",match:()=>false,cls:"st-queue",foreignOnly:true},
+  {id:"done",label:"Done",match:t=>t.status==="done",cls:"st-done"},
 ];
+const SIDEBAR_GROUPS_KEY="relay-sidebar-groups";
+function readSidebarGroups(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(SIDEBAR_GROUPS_KEY)||"{}");
+    if(!saved||typeof saved!=="object"||Array.isArray(saved))return {};
+    return Object.fromEntries(GROUPS.map(g=>g.id).map(id=>[id,saved[id]===true]));
+  }catch{return {}}
+}
+const collapsedSidebarGroups=readSidebarGroups();
+function sidebarGroup(id,label,cls,count){
+  const box=el("div","group"),body=el("div","group-body"),header=el("button","group-h "+cls);
+  body.id="sidebar-group-"+id;body.hidden=!!collapsedSidebarGroups[id];
+  header.type="button";header.dataset.focusKey="group:"+id;
+  header.setAttribute("aria-controls",body.id);header.setAttribute("aria-expanded",String(!body.hidden));
+  const chevron=el("span","group-chevron","›");chevron.setAttribute("aria-hidden","true");
+  header.append(el("span","group-label",label),el("span","cnt",String(count)),chevron);
+  header.addEventListener("click",()=>{
+    const list=$("#sidebar"),scrollTop=list.scrollTop;
+    body.hidden=!body.hidden;collapsedSidebarGroups[id]=body.hidden;
+    header.setAttribute("aria-expanded",String(!body.hidden));
+    try{localStorage.setItem(SIDEBAR_GROUPS_KEY,JSON.stringify(collapsedSidebarGroups))}catch{}
+    list.scrollTop=scrollTop;
+  });
+  box.append(header,body);return {box,body};
+}
 function renderHeaderSummary(){
   const host=$("#headerSummary");if(!host)return;
   const overSoft=S.dailyCeiling!=null&&S.usage>S.dailyCeiling*.8;
-  const agents="Agents "+runningCount()+"/"+S.maxw;
+  const agents="Workers "+runningCount()+"/"+S.maxw;
   const queue="queued "+tasksArr().filter(t=>t.status==="queue").length;
   const usage="Today ≈ "+Math.round(S.usage/1000)+"k tok (est.)";
   const paused=S.paused?" · ⏸ paused":"";
@@ -524,12 +581,10 @@ function renderSidebar(){
   const sb=$("#sidebar"),st=sb.scrollTop;sb.textContent="";
   renderHeaderSummary();
   GROUPS.forEach(g=>{
-    const list=tasksArr().filter(t=>!t.sub&&g.match(t));
-    const box=el("div","group");
-    const h=el("div","group-h"+(g.cls&&list.length?" "+g.cls:""));
-    h.append(el("span",null,g.label),el("span","cnt "+g.countCls,String(list.length)));
-    box.append(h);
-    if(!list.length)box.append(el("div","group-empty","None"));
+    const list=tasksArr().filter(t=>!t.sub&&g.match(t)),foreign=foreignArr().filter(f=>foreignSidebarGroup(f)===g.id);
+    if(g.foreignOnly&&!foreign.length)return;
+    const {box,body}=sidebarGroup(g.id,g.label,g.cls,list.length+foreign.length);
+    if(!list.length&&!foreign.length)body.append(el("div","group-empty","None"));
     list.forEach(t=>{
       const it=el("button","s-item st-"+t.status+(S.sel===t.id?" sel":fam.has(t.id)?" rel":"")+(t.status==="closed"?" closed":""));
       it.dataset.task=t.id;
@@ -540,23 +595,16 @@ function renderSidebar(){
       txt.append(el("div","tt",t.title));
       const meta=el("div","s-meta");
       const time=el("span","s-elapsed mono",elapsedText(t)||"—");time.dataset.el=t.id;
-      meta.append(stateBadge(taskStateLabel(t),"st-"+t.status),agentMark(t),el("span","s-id mono",t.id),time);
+      const identity=el("span","s-agent");identity.append(agentMark(t),el("span","s-id mono",t.id));
+      meta.append(stateBadge(taskStateLabel(t),"st-"+t.status),identity);
+      if(t.status!=="queue")meta.append(time);
       txt.append(meta,locationLabel(t.project,"repository"));
       it.append(txt);
       it.addEventListener("click",()=>{select(t.id);centerOn(t)});
-      box.append(it);
+      body.append(it);
     });
-    sb.append(box);
-  });
-  /* never mixed into the task groups, and absent entirely when there are none */
-  const fs=foreignArr();
-  if(fs.length){
-    const box=el("div","group");
-    const h=el("div","group-h");
-    h.append(el("span",null,"Outside relay"),el("span","cnt st-queue",String(fs.length)));
-    box.append(h);
-    fs.forEach(f=>{
-      const it=el("button","s-item st-foreign"+(S.fsel===f.key?" sel":""));
+    foreign.forEach(f=>{
+      const it=el("button","s-item st-foreign "+foreignStateClass(f)+(S.fsel===f.key?" sel":""));
       it.dataset.foreign=f.key;
       it.dataset.focusKey="foreign:"+f.key;
       it.setAttribute("aria-label",f.title+" — "+f.stateLabel+" · "+f.cwd);
@@ -564,23 +612,31 @@ function renderSidebar(){
       const txt=el("div","txt");
       txt.append(el("div","tt",f.title));
       const meta=el("div","s-meta");
-      meta.append(stateBadge(f.stateLabel,"st-foreign"),el("span","s-id","Outside relay"));
+      const identity=el("span","s-agent");identity.append(agentMark(foreignAgent(f)),el("span","s-id mono",f.short));
+      meta.append(stateBadge(f.stateLabel,foreignStateClass(f)),identity);
       txt.append(meta,locationLabel(directoryName(foreignDirectory(f))));
       it.append(txt);
       it.addEventListener("click",()=>{selectForeign(f.key);centerOnBox(f)});
-      box.append(it);
+      body.append(it);
     });
     sb.append(box);
+  });
+  let restore=focused;
+  if(focused?.root==="sidebar"){
+    const replacement=[...sb.querySelectorAll(".s-item")].find(n=>n.dataset.focusKey===focused.key);
+    if(replacement?.closest(".group-body")?.hidden){
+      const header=replacement.closest(".group").querySelector(".group-h");
+      restore={node:header,key:header.dataset.focusKey,root:"sidebar"};
+    }
   }
-  sb.scrollTop=st;
-  restoreFocus(focused,true);
+  restoreFocus(restore,true);sb.scrollTop=st;
 }
 
 /* ================= detail ================= */
 function renderDetail(){
   const body=$("#dBody"),t=S.sel?S.tasks.get(S.sel):null,f=S.fsel?S.foreign.get(S.fsel):null;
   $("#detail").classList.toggle("open",!!(t||f));
-  $("#dHead").textContent=f?"Session detail · outside relay":"Task detail";
+  $("#dHead").textContent=f?"Claude session detail":"Task detail";
   $("#dHead").setAttribute("aria-label",f?"Session detail: "+f.title+", "+f.stateLabel:t?"Task detail: "+t.id+", "+t.title+", "+taskStateLabel(t):"Task detail");
   const st=body.scrollTop,openSet=new Set([...body.querySelectorAll("details[open]")].map(d=>d.dataset.i)); /* restored after the rebuild */
   body.textContent="";
@@ -667,9 +723,10 @@ function renderForeignDetail(body,f){
   body.append(el("div","d-title",f.title));
   const rows=el("dl","d-rows wide");
   const row=(k,v,mono)=>{rows.append(el("dt",null,k));const dd=el("dd",mono?"mono":null);if(v instanceof Node)dd.append(v);else dd.textContent=v;rows.append(dd);return dd};
-  row("State",stateBadge(f.stateLabel,"st-foreign"));
+  row("State",stateBadge(f.stateLabel,foreignStateClass(f)));
   row("Session",f.sid,true);
-  row("Agent id",f.short+(f.kind?" · "+f.kind:""),true);
+  const identity=el("span","s-agent");identity.append(agentMark(foreignAgent(f)),el("span","mono",f.short+(f.kind?" · "+f.kind:"")));
+  row("Agent id",identity);
   row("Directory",pathControl(foreignDirectory(f),"directory"));
   row("PID",f.pid==null?"—":String(f.pid),true);
   row("Started",f.startedAt?clock(f.startedAt):"unknown",true);
@@ -677,7 +734,8 @@ function renderForeignDetail(body,f){
   row("First seen",clock(f.firstSeen),true);
   row("Last polled",clock(f.lastSeen),true);
   body.append(rows);
-  body.append(el("div","d-note","Started outside relay. relay only watches it: no dispatch, no queue slot, no worktree, no usage attribution, and no automatic stop. Its tool activity and its answers are not visible here."));
+  body.append(el("div","d-note","Listed by Claude. Completed sessions remain visible until removed from the Claude agents list. This view does not import their conversation history or consume a Relay worker slot."));
+  if(!f.canStop)return;
   const acts=el("div","d-actions");
   const b=el("button","act","Stop this session");let armed=false; /* two-step confirm — this stops a session that is not relay's */
   b.addEventListener("click",()=>{
@@ -740,7 +798,7 @@ function graphBoxes(){
 }
 /* Empty guidance is part of the fitted scene, below the gateway and clear of zoom controls. */
 function emptyHintBox(){
-  if(graphTasks().length)return null;
+  if(graphTasks().length||S.foreign.size)return null;
   const hint=$("#emptyHint");
   hint.style.left=gwEl.offsetLeft+"px";
   hint.style.top=(gwEl.offsetTop+gwEl.offsetHeight+20)+"px";
@@ -768,7 +826,7 @@ function fit(minScale=.01){
     // The list indexes all sessions; the canvas shows readable local context.
     const selected=S.sel&&S.tasks.get(S.sel);
     const outside=S.fsel&&S.foreign.get(S.fsel);
-    const anchor=selected&&graphTaskVisible(selected)?selected:outside||graphTasks()[0];
+    const anchor=selected&&graphTaskVisible(selected)?selected:outside||graphTasks()[0]||foreignArr()[0];
     if(anchor){view.x=left-anchor.x;view.y=top-anchor.y}
   }
   applyView(true);
@@ -881,6 +939,8 @@ function mmJump(e){
 }
 mmEl.addEventListener("pointerdown",e=>{e.stopPropagation();mmEl.setPointerCapture(e.pointerId);mmJump(e)});
 mmEl.addEventListener("pointermove",e=>{if(e.buttons)mmJump(e)});
+// Hover/focus expansion changes the actual map surface, including during its transition.
+new ResizeObserver(updateMinimap).observe(mmEl);
 
 /* ================= refresh & tick ================= */
 const expandedRequests=new Set();
@@ -960,7 +1020,7 @@ function openFromNotif(it){ /* a click means the node has been looked at, which 
 function ncard(it){
   const c=el("div","ncard st-"+it.kind);
   c.setAttribute("role","button");c.tabIndex=0;
-  c.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();c.click()}});
+  c.addEventListener("keydown",e=>{if(e.target===c&&(e.key==="Enter"||e.key===" ")){e.preventDefault();c.click()}});
   const nt=el("div","nt");
   nt.append(el("b",null,it.title),el("time","mono",clock(it.at)));
   const x=el("button","nx","✕");x.setAttribute("aria-label","Dismiss notification");
@@ -987,26 +1047,31 @@ function renderToasts(){
 }
 function renderCenter(){
   notifBtn.classList.toggle("has",N.items.length>0);
-  notifBtn.querySelector(".nb").textContent=String(N.items.length);
+  notifBtn.querySelector(".nb").textContent=N.items.length>99?"99+":String(N.items.length);
+  notifBtn.setAttribute("aria-expanded",String(N.open));
+  notifBtn.setAttribute("aria-label","Notifications"+(N.items.length?" · "+N.items.length+" unread":"")+(N.dnd?" · Do not disturb":""));
   notifBtn.classList.toggle("dnd",N.dnd);
   $("#ncDnd").checked=N.dnd;
+  $("#ncClear").disabled=N.items.length===0;
   ncEl.classList.toggle("open",N.open);
   if(!N.open)return;
   const body=ncEl.querySelector(".nc-body");body.textContent="";
   const centerItems=N.items.filter(i=>i.loc==="center");
-  if(!centerItems.length){body.append(el("div","nc-empty","No new notifications"));return}
+  if(!centerItems.length){const empty=el("div","nc-empty");empty.append(el("b",null,"You’re all caught up"),el("span",null,"Questions, errors and completed work will appear here."));body.append(empty);return}
   ["wait","err","done"].forEach(k=>{
     const list=centerItems.filter(i=>i.kind===k).sort((a,b)=>b.id-a.id);
     if(!list.length)return;
     const g=el("div","nc-group st-"+k);
     const gh=el("div","nc-gh");
-    gh.append(el("i","dot"),el("span",null,NKIND[k]),el("span",null,String(list.length)),el("span","grow"));
+    gh.append(el("i","dot"),el("span",null,NKIND[k]),el("span","nc-count",String(list.length)),el("span","grow"));
     if(list.length>1){
       const fold=el("button","nc-btn",N.expand[k]?"Collapse":"Expand");
+      fold.setAttribute("aria-expanded",String(!!N.expand[k]));fold.setAttribute("aria-label",(N.expand[k]?"Collapse ":"Expand ")+NKIND[k]+" notifications");
       fold.addEventListener("click",()=>{N.expand[k]=!N.expand[k];renderNotif()});
       gh.append(fold);
     }
     const clr=el("button","nc-btn","Clear");
+    clr.setAttribute("aria-label","Clear "+NKIND[k]+" notifications");
     clr.addEventListener("click",()=>{list.forEach(dropNotif);renderNotif()});
     gh.append(clr);
     g.append(gh);
@@ -1058,6 +1123,7 @@ notifBtn.addEventListener("click",e=>{
   renderNotif();if(N.open)ncEl.focus();
 });
 ncEl.tabIndex=-1;$("#settings").tabIndex=-1; /* focus moves into the panel when it opens */
+$("#ncClose").addEventListener("click",()=>{N.open=false;renderNotif()});
 $("#ncClear").addEventListener("click",()=>{N.items.forEach(i=>clearTimeout(i.timer));N.items=[];renderNotif()});
 $("#ncDnd").addEventListener("change",e=>{N.dnd=e.target.checked;renderNotif();renderSettings()});
 document.addEventListener("click",e=>{
@@ -1071,6 +1137,7 @@ function renderSettings(){
   const closing=!SET.open&&!!document.activeElement?.closest("#settings");
   const opening=SET.open&&!$("#settings").classList.contains("open");
   $("#settings").classList.toggle("open",SET.open);
+  $("#gearBtn").setAttribute("aria-expanded",String(SET.open));
   if(closing)$("#gearBtn").focus();else if(opening)$("#settings").focus();
   document.querySelectorAll("#segTheme button").forEach(b=>{b.classList.toggle("on",b.dataset.m===Theme.mode);b.setAttribute("aria-pressed",String(b.dataset.m===Theme.mode))});
   document.querySelectorAll("#segLayout button").forEach(b=>{b.classList.toggle("on",b.dataset.l===S.layout);b.setAttribute("aria-pressed",String(b.dataset.l===S.layout))});
@@ -1102,6 +1169,7 @@ $("#gearBtn").addEventListener("click",e=>{
   renderSettings();if(SET.open)$("#settings").focus();
 });
 $("#settings").addEventListener("click",e=>e.stopPropagation());
+$("#settingsClose").addEventListener("click",()=>{SET.open=false;renderSettings()});
 document.querySelectorAll("#segTheme button").forEach(b=>b.addEventListener("click",()=>Theme.set(b.dataset.m)));
 document.querySelectorAll("#segLayout button").forEach(b=>b.addEventListener("click",()=>setGraphLayout(b.dataset.l)));
 $("#maxwDec").addEventListener("click",()=>relay.setMax(S.maxw-1));
@@ -1122,28 +1190,50 @@ $("#setReduce").addEventListener("change",e=>{
 
 /* ================= layout shell (VSCode style): resize and panel toggles ================= */
 const RZ=Object.assign(
-  {sbw:350,dw:296,chh:null,rqh:300,rqOpen:true,sb:true,dt:false,ch:true},
-  JSON.parse(localStorage.getItem("relay-sizes")||"{}")
+  {version:2,sbw:.214,dw:296,chh:.415,rqh:.415,rqOpen:true,sb:true,dt:false,ch:true},
+  (()=>{try{const sizes=JSON.parse(localStorage.getItem("relay-sizes")||"{}");sizes.__legacy=sizes.version!==2;return sizes}catch{return {__legacy:false}}})()
 );
+// Version 1 saved fixed pixels. Reset those layout defaults to the responsive
+// proportions, while retaining visibility choices and the detail-panel width.
+const rzMigrated=RZ.__legacy;delete RZ.__legacy;
+if(rzMigrated)Object.assign(RZ,{version:2,sbw:.214,chh:.415,rqh:.415});
 delete RZ.align;
 RZ.dt=false; // Detail visibility is transient: a fresh page starts with the graph expanded.
 const clampNum=(v,a,b)=>Math.max(a,Math.min(b,v));
 const appEl=document.getElementById("app");
 function saveRZ(){localStorage.setItem("relay-sizes",JSON.stringify(RZ))}
-// Missing/null height follows the viewport. Preserve existing saved pixel preferences.
+if(rzMigrated)saveRZ();
+function contentHeight(){return Math.max(0,document.documentElement.clientHeight-48-($("#banner").offsetHeight||0))}
+function heightBounds(min){
+  const available=contentHeight(),mobile=document.documentElement.clientWidth<=640;
+  const max=Math.max(100,mobile?Math.min(520,available*.55,available-180):available-120);
+  return {available,min:Math.min(min,max),max};
+}
+function ratioHeight(ratio,min){
+  const bounds=heightBounds(min);
+  return clampNum(bounds.available*(Number.isFinite(ratio)?ratio:.415),bounds.min,bounds.max);
+}
+function savedRatio(value,min){
+  const bounds=heightBounds(min);
+  return bounds.available?clampNum(value,bounds.min,bounds.max)/bounds.available:.415;
+}
+function sidebarWidth(){
+  const width=appEl.getBoundingClientRect().width||document.documentElement.clientWidth;
+  const min=Math.min(180,width);
+  const max=Math.max(min,Math.min(width*.5,width-360));
+  return clampNum(width*(Number.isFinite(RZ.sbw)?RZ.sbw:.214),min,max);
+}
 function dockHeight(){
-  const available=Math.max(0,document.documentElement.clientHeight-48-($("#banner").offsetHeight||0));
-  const max=Math.max(100,available-120);
-  return clampNum(Number.isFinite(RZ.chh)?RZ.chh:Math.max(240,available*.45),Math.min(150,max),max);
+  return ratioHeight(RZ.chh,150);
 }
 function applySizes(){
   const st=document.documentElement.style;
-  st.setProperty("--sbw",RZ.sbw+"px");
-  const requestMax=Math.max(120,document.documentElement.clientHeight-168);
-  const requestHeight=clampNum(RZ.rqh,120,requestMax);
+  st.setProperty("--sbw",sidebarWidth()+"px");
+  const requestBounds=heightBounds(120);
+  const requestHeight=ratioHeight(RZ.rqh,120);
   st.setProperty("--request-height",requestHeight+"px");
   const requestHandle=$(".rz-requests");
-  requestHandle.setAttribute("aria-valuemin","120");requestHandle.setAttribute("aria-valuemax",String(requestMax));requestHandle.setAttribute("aria-valuenow",String(Math.round(requestHeight)));
+  requestHandle.setAttribute("aria-valuemin",String(requestBounds.min));requestHandle.setAttribute("aria-valuemax",String(requestBounds.max));requestHandle.setAttribute("aria-valuenow",String(Math.round(requestHeight)));
   st.setProperty("--dw",RZ.dw+"px");
   st.setProperty("--chh",dockHeight()+"px");
   updateMinimap();
@@ -1183,14 +1273,13 @@ function makeResizer(sel,onMove,onReset){
   h.addEventListener("pointerup",()=>{h.classList.remove("drag");saveRZ()});
   h.addEventListener("dblclick",()=>{onReset();applySizes();saveRZ()});
 }
-makeResizer(".rz-sb",e=>{RZ.sbw=clampNum(e.clientX-appEl.getBoundingClientRect().left,180,480)},()=>{RZ.sbw=350});
+makeResizer(".rz-sb",e=>{const box=appEl.getBoundingClientRect(),width=box.width||document.documentElement.clientWidth;RZ.sbw=clampNum(e.clientX-box.left,Math.min(180,width),Math.max(Math.min(180,width),Math.min(width*.5,width-360)))/width},()=>{RZ.sbw=.214});
 makeResizer(".rz-dt",e=>{RZ.dw=clampNum(appEl.getBoundingClientRect().right-e.clientX,240,430)},()=>{RZ.dw=296});
-makeResizer(".rz-ch",e=>{RZ.chh=document.documentElement.clientHeight-e.clientY},()=>{RZ.chh=null});
-makeResizer(".rz-requests",e=>{RZ.rqh=clampNum($("#sidebarShell").getBoundingClientRect().bottom-e.clientY,120,Math.max(120,document.documentElement.clientHeight-168))},()=>{RZ.rqh=300});
+makeResizer(".rz-ch",e=>{RZ.chh=savedRatio(document.documentElement.clientHeight-e.clientY,150)},()=>{RZ.chh=.415});
+makeResizer(".rz-requests",e=>{RZ.rqh=savedRatio($("#sidebarShell").getBoundingClientRect().bottom-e.clientY,120)},()=>{RZ.rqh=.415});
 $(".rz-requests").addEventListener("keydown",e=>{
   if(!["ArrowUp","ArrowDown","Home"].includes(e.key))return;
-  const max=Math.max(120,document.documentElement.clientHeight-168);
-  e.preventDefault();RZ.rqh=e.key==="Home"?300:clampNum(clampNum(RZ.rqh,120,max)+(e.key==="ArrowUp"?24:-24),120,max);applySizes();saveRZ();
+  e.preventDefault();RZ.rqh=e.key==="Home"?.415:savedRatio(ratioHeight(RZ.rqh,120)+(e.key==="ArrowUp"?24:-24),120);applySizes();saveRZ();
 });
 applySizes();applyRequests();applyPanels();
 window.addEventListener("resize",()=>{applySizes();autogrow()});
@@ -1229,7 +1318,7 @@ function renderKeyHints(){
   $("#paletteHint").textContent=key?"Use "+key+" for commands.":"Open Command palette from the toolbar.";
 }
 renderKeyHints();
-function chatResize(d){RZ.chh=dockHeight()+d;if(!RZ.ch)togglePanel("ch");applySizes();saveRZ()}
+function chatResize(d){RZ.chh=savedRatio(dockHeight()+d,150);if(!RZ.ch)togglePanel("ch");applySizes();saveRZ()}
 document.addEventListener("keydown",e=>{
   if(matchKey(e,KEYS.palette)){e.preventDefault();togglePalette();return}
   if(PAL.open)return;
@@ -1247,7 +1336,7 @@ function commands(){
   return [
     {t:"Fit to view",run:()=>{fit();touchView()}},
     {t:"Readable view",run:readable},
-    {t:"Reset conversation height",run:()=>{RZ.chh=null;applySizes();saveRZ();autogrow();maybeFit()}},
+    {t:"Reset conversation height",run:()=>{RZ.chh=.415;applySizes();saveRZ();autogrow();maybeFit()}},
     {t:"Toggle sidebar",k:KEYS.toggleSidebar,run:()=>togglePanel("sb")},
     {t:"Toggle detail panel",k:KEYS.toggleDetail,run:()=>togglePanel("dt")},
     {t:"Toggle chat panel",k:KEYS.toggleChat,run:()=>togglePanel("ch")},
@@ -1276,12 +1365,12 @@ let paletteOrigin=null;
 function openPalette(){
   if(kedEl.classList.contains("open"))return;
   paletteOrigin=captureFocus();
-  PAL.open=true;palEl.classList.add("open");
+  PAL.open=true;palEl.classList.add("open");$("#palBtn").setAttribute("aria-expanded","true");
   N.open=false;SET.open=false;renderNotif();renderSettings();
   palInput.value="";PAL.idx=0;renderPal();syncOverlayAccess();palInput.focus();
 }
 $("#palBtn").addEventListener("click",e=>{e.stopPropagation();togglePalette()});
-function closePalette(returnToComposer=true){PAL.open=false;palEl.classList.remove("open");syncOverlayAccess();if(returnToComposer)focusComposer();else restoreFocus(paletteOrigin,true)}
+function closePalette(returnToComposer=true){PAL.open=false;palEl.classList.remove("open");$("#palBtn").setAttribute("aria-expanded","false");syncOverlayAccess();if(returnToComposer)focusComposer();else restoreFocus(paletteOrigin,true)}
 function renderPal(){
   const q=palInput.value.trim().toLowerCase();
   PAL.list=commands().filter(c=>!q||q.split(/\s+/).every(n=>c.t.toLowerCase().includes(n)));
@@ -1308,6 +1397,7 @@ palInput.addEventListener("keydown",e=>{
   else if(e.key==="Escape"){e.preventDefault();e.stopPropagation();closePalette()}
 });
 palEl.addEventListener("click",e=>{if(e.target===palEl)closePalette()});
+$("#palClose").addEventListener("click",()=>closePalette());
 
 /* ================= shortcuts JSON editor ================= */
 const kedEl=$("#keysEd");
@@ -1336,6 +1426,7 @@ $("#kedReset").addEventListener("click",()=>{
   $("#kedErr").textContent="";
 });
 $("#kedClose").addEventListener("click",closeKeysEd);
+$("#kedDismiss").addEventListener("click",closeKeysEd);
 kedEl.addEventListener("click",e=>{if(e.target===kedEl)closeKeysEd()});
 
 /* ================= input ================= */
