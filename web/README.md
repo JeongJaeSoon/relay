@@ -1,5 +1,7 @@
 # relay dashboard — browser QA
 
+Workspace layout: [2026-09-06 layout decisions and synthetic QA](../docs/UI-workspace-layout.md).
+
 Latest pass: [2026-09-05 QA report](../docs/QA-2026-09-05.md), covering real Claude execution,
 network failure recovery and desktop/tablet/compact viewport fixes.
 

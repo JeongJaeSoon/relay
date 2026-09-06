@@ -3,17 +3,20 @@ S.reduce=true;S.maxw=24;S.tasks.clear();S.foreign.clear();
 const params=new URLSearchParams(location.search);
 const stress='긴단일식별자_'+'OrderExportStateTransition'.repeat(6);
 const statuses=['wait','run','run','queue','done','err','cancelled','closed','run','queue'];
+const taskCount=params.has('many')?60:params.has('few')?2:10;
 if(!params.has('empty')){
-for(let i=0;i<10;i++){
+for(let i=0;i<taskCount;i++){
  const id='T-'+String(i+1).padStart(2,'0');
  const t={id,uuid:'synthetic-task-'+i,title:i===9?stress:['주문 내역 내보내기 검증','Review export state transitions','결제 오류 처리 테스트'][i%3]+' '+(i+1),status:statuses[i],statusLabel:STATUS_LABEL[statuses[i]],size:'normal',project:['sample-shop','sample-api','sample-dashboard'][i%3],model:'Claude',effort:'high',step:'Synthetic test activity',children:[],sub:false,branch:'test/export-state',sid:'synthetic-session-'+i,proc:'alive',gen:1,worktree:'/workspace/synthetic/projects/sample-shop/feature/export-state-transitions',startedAt:new Date(Date.now()-(i+1)*61000),endedAt:null,events:[],question:null};
  if(i===0)t.question={q:'주문 내역 export 형식으로 어느 쪽을 쓸까요?',chips:['JSON — Order 전체를 왕복 가능하게 직렬화 (`exportJson` / 파싱 검증 테스트)','CSV — history를 행 단위 표로 출력 (`exportCsv` / 이스케이프·빈 history 테스트)',stress]};
  S.tasks.set(id,t);
- if(i<3)for(let c=1;c<=4;c++){const child={...t,id:id+'.'+c,uuid:'synthetic-child-'+i+'-'+c,title:'검증 단계 '+c+' · Validate export',sub:true,parent:id,question:null,children:[],status:'run',statusLabel:'Running',agentType:'verify'};t.children.push(child.id);S.tasks.set(child.id,child);}
+ if(i>=statuses.length){t.status=statuses[i%statuses.length];t.statusLabel=STATUS_LABEL[t.status]}
+ if(i<3&&!params.has('few'))for(let c=1;c<=4;c++){const child={...t,id:id+'.'+c,uuid:'synthetic-child-'+i+'-'+c,title:'검증 단계 '+c+' · Validate export',sub:true,parent:id,question:null,children:[],status:'run',statusLabel:'Running',agentType:'verify'};t.children.push(child.id);S.tasks.set(child.id,child);}
 }
-for(let i=0;i<4;i++)S.foreign.set('synthetic-foreign-'+i,{key:'synthetic-foreign-'+i,title:'sample-editor-'+(i+1),short:'—',kind:'interactive',stateLabel:i%2?'Idle':'Unknown',cwd:'/workspace/synthetic/projects/a-very-long-project-directory-name-'+i+'/packages/export-state-transitions',sid:'synthetic-session-outside-'+i,firstSeen:new Date(Date.now()-24000000),startedAt:new Date(Date.now()-24000000),lastSeen:new Date()});
+for(let i=0;i<(params.has('few')?0:4);i++)S.foreign.set('synthetic-foreign-'+i,{key:'synthetic-foreign-'+i,title:'sample-editor-'+(i+1),short:'—',kind:'interactive',stateLabel:i%2?'Idle':'Unknown',cwd:'/workspace/synthetic/projects/a-very-long-project-directory-name-'+i+'/packages/export-state-transitions',sid:'synthetic-session-outside-'+i,firstSeen:new Date(Date.now()-24000000),startedAt:new Date(Date.now()-24000000),lastSeen:new Date()});
 const t=S.tasks.get('T-01');
 LEDGER.push({id:'synthetic-request',text:'주문 내역 내보내기를 검증해 주세요.',bucket:'needs_you',st:'wait',state:'Needs input',disposition:'dispatched',dispositionLabel:'Sent to T-01',taskId:t.id,taskIds:[t.id],source:'user',answer:t.question.q,answerKind:'question',actions:['answer']});
+if(S.tasks.has('T-05'))LEDGER.push({id:'synthetic-settled',text:'완료된 합성 요청',bucket:'settled',st:'done',state:'Done',disposition:'dispatched',dispositionLabel:'Sent to T-05',taskId:'T-05',taskIds:['T-05'],source:'user',answer:'Synthetic completed summary',answerKind:'summary',actions:[]});
 chatQuestion(t);
 }
 function syncFixture(){

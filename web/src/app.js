@@ -193,6 +193,8 @@ function renderLedger(){
   const focused=captureFocus();
   const attn=LEDGER.filter(r=>r.bucket==="needs_you").length;
   const count=$("#lgCount");count.hidden=!attn;count.textContent=attn+" need"+(attn===1?"s":"")+" you";
+  const requestsTab=$("#showRequests");
+  if(requestsTab){requestsTab.textContent="Requests"+(attn?" · "+attn+" need you":"")}
   document.querySelectorAll("#segLedger button").forEach(b=>{b.classList.toggle("on",b.dataset.f===ledgerFilter);b.setAttribute("aria-pressed",String(b.dataset.f===ledgerFilter))});
   const rows=ledgerFilter==="all"?LEDGER:LEDGER.filter(r=>r.bucket!=="settled");
   list.textContent="";
@@ -641,7 +643,7 @@ document.addEventListener("keydown",e=>{
 
 /* ================= pan / zoom ================= */
 const MINZ=.2,MAXZ=2;
-const view={x:24,y:20,k:1,manual:false}; /* manual: once the user moves the view, auto-fit holds off until ⤢ (fit) resumes it */
+const view={x:24,y:20,k:1,manual:false}; /* Read resumes automatic positioning; overview and manual navigation hold it. */
 function touchView(){view.manual=true;$("#zfit").classList.add("manual")}
 function applyView(smooth){
   world.style.transition=(smooth&&!S.reduce)?"transform .35s cubic-bezier(.22,.61,.36,1)":"none";
@@ -671,15 +673,15 @@ function emptyHintBox(){
   hint.style.width=Math.max(160,Math.min(400,canvas.clientWidth-96))+"px";
   return {x:hint.offsetLeft,y:hint.offsetTop,w:hint.offsetWidth,h:hint.offsetHeight};
 }
-function fit(){
+function fit(minScale=.01){
   view.manual=false;$("#zfit").classList.remove("manual");
   const boxes=graphBoxes();const hint=emptyHintBox();if(hint)boxes.push(hint);
   const minX=Math.min(...boxes.map(b=>b.x)),minY=Math.min(...boxes.map(b=>b.y));
   const maxX=Math.max(...boxes.map(b=>b.x+b.w)),maxY=Math.max(...boxes.map(b=>b.y+b.h));
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
   // Reserve the right toolbar column, including when the outside lane is the rightmost content.
-  const left=28,right=60,top=24,bottom=64;
-  view.k=Math.max(MINZ,Math.min(1,(cw-left-right)/(maxX-minX),(ch-top-bottom)/(maxY-minY)));
+  const left=28,right=60,top=Math.min(24,ch*.1),bottom=64;
+  view.k=Math.max(minScale,Math.min(1,(cw-left-right)/(maxX-minX),(ch-top-bottom)/(maxY-minY)));
   if(S.layout==="tree"){ /* top-left anchor */
     view.x=left-minX*view.k;
     view.y=top-minY*view.k;
@@ -687,13 +689,22 @@ function fit(){
     view.x=left+(cw-left-right-(maxX-minX)*view.k)/2-minX*view.k;
     view.y=top+(ch-top-bottom-(maxY-minY)*view.k)/2-minY*view.k;
   }
+  if(minScale===1){
+    // The list indexes all sessions; the canvas shows readable local context.
+    const selected=S.sel&&S.tasks.get(S.sel);
+    const outside=S.fsel&&S.foreign.get(S.fsel);
+    const anchor=selected&&graphTaskVisible(selected)?selected:outside||graphTasks()[0];
+    if(anchor){view.x=left-anchor.x;view.y=top-anchor.y}
+  }
   applyView(true);
 }
-function maybeFit(){if(S.autofit&&!view.manual)fit()}
+function readable(){fit(graphTasks().length||S.foreign.size?1:MINZ)}
+function maybeFit(){if(S.autofit&&!view.manual)readable()}
 function relayout(){layout();refresh();maybeFit();animateEdges()}
 function centerAt(n,p){
   if(!n)return;
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
+  view.k=Math.max(1,view.k);
   view.x=cw/2-(p.x+n.offsetWidth/2)*view.k;
   view.y=ch/2-(p.y+n.offsetHeight/2)*view.k;
   touchView();applyView(true);
@@ -732,16 +743,17 @@ function zoomBy(f){ /* zoom about the canvas centre */
 $("#zin").addEventListener("click",()=>zoomBy(1.25));
 $("#zout").addEventListener("click",()=>zoomBy(1/1.25));
 $("#zactual").addEventListener("click",()=>zoomBy(1/view.k));
-$("#zfit").addEventListener("click",fit);
+$("#zfit").addEventListener("click",()=>{fit();touchView()});
+$("#zread").addEventListener("click",readable);
 canvas.addEventListener("keydown",e=>{
   if(e.target!==canvas)return;
   const delta={ArrowLeft:[40,0],ArrowRight:[-40,0],ArrowUp:[0,40],ArrowDown:[0,-40]}[e.key];
   if(delta){e.preventDefault();view.x+=delta[0];view.y+=delta[1];touchView();applyView()}
   else if(["+","=","-","0","Home"].includes(e.key)){
-    e.preventDefault();if(e.key==="Home")fit();else zoomBy(e.key==="0"?1/view.k:e.key==="-"?1/1.25:1.25);
+    e.preventDefault();if(e.key==="Home"){fit();touchView()}else zoomBy(e.key==="0"?1/view.k:e.key==="-"?1/1.25:1.25);
   }
 });
-let rzT;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{renderAsk();if(S.autofit&&!view.manual)fit();else updateMinimap()},120)});
+let rzT;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{renderAsk();if(S.autofit&&!view.manual)readable();else updateMinimap()},120)});
 
 /* ================= minimap ================= */
 const mmEl=$("#minimap");
@@ -947,8 +959,7 @@ function renderBanner(){
   else if(S.paused){msg="⏸ Paused (kill switch) — no new dispatches or slots, running workers asked to stop"}
   const was=b.classList.contains("on");
   b.className=msg?"on "+cls:"";
-  if(was!==!!msg&&S.autofit&&!view.manual)fit(); /* the banner row changes the canvas height */
-  const setBh=()=>document.documentElement.style.setProperty("--bh",(msg?b.offsetHeight:0)+"px"); /* corrects the resizer's starting height */
+  const setBh=()=>{document.documentElement.style.setProperty("--bh",(msg?b.offsetHeight:0)+"px");applySizes();if(was!==!!msg)maybeFit()};
   if(!msg){setBh();return}
   b.append(el("span",null,msg));
   if(S.paused&&S.conn==="ok"){const r=el("button","act","Resume");r.addEventListener("click",()=>togglePause());b.append(r)}
@@ -1029,17 +1040,23 @@ $("#setReduce").addEventListener("change",e=>{
 
 /* ================= layout shell (VSCode style): resize, alignment, panel toggles ================= */
 const RZ=Object.assign(
-  {sbw:248,dw:296,chh:232,align:"justify",sb:true,dt:true,ch:true},
+  {sbw:248,dw:296,chh:null,align:"justify",sb:true,dt:true,ch:true},
   JSON.parse(localStorage.getItem("relay-sizes")||"{}")
 );
 const clampNum=(v,a,b)=>Math.max(a,Math.min(b,v));
 const appEl=document.getElementById("app");
 function saveRZ(){localStorage.setItem("relay-sizes",JSON.stringify(RZ))}
+// Missing/null height follows the viewport. Preserve existing saved pixel preferences.
+function dockHeight(){
+  const available=Math.max(0,document.documentElement.clientHeight-48-($("#banner").offsetHeight||0));
+  const max=Math.max(100,available-120);
+  return clampNum(Number.isFinite(RZ.chh)?RZ.chh:Math.max(240,available*.45),Math.min(150,max),max);
+}
 function applySizes(){
   const st=document.documentElement.style;
   st.setProperty("--sbw",RZ.sbw+"px");
   st.setProperty("--dw",RZ.dw+"px");
-  st.setProperty("--chh",RZ.chh+"px");
+  st.setProperty("--chh",dockHeight()+"px");
   updateMinimap();
 }
 function applyAlign(){
@@ -1062,11 +1079,11 @@ function togglePanel(which){
     const open=appEl.classList.toggle("compact-sb-open");$("#sidebarBtn").setAttribute("aria-expanded",String(open));syncOverlayAccess();
     if(open)$("#sidebar").querySelector("button")?.focus();else $("#sidebarBtn").focus();return;
   }
-  RZ[which]=!RZ[which];applyPanels();fit();saveRZ();
+  RZ[which]=!RZ[which];applyPanels();readable();saveRZ();
 }
 $("#sidebarBtn").addEventListener("click",()=>togglePanel("sb"));
-function setAlign(a){RZ.align=a;applyAlign();fit();saveRZ();renderSettings()}
-function setGraphLayout(m){S.layout=m;layout();refresh();fit();animateEdges();renderSettings()}
+function setAlign(a){RZ.align=a;applyAlign();readable();saveRZ();renderSettings()}
+function setGraphLayout(m){S.layout=m;layout();refresh();readable();animateEdges();renderSettings()}
 function makeResizer(sel,onMove,onReset){
   const h=document.querySelector(sel);
   h.addEventListener("pointerdown",e=>{e.preventDefault();h.setPointerCapture(e.pointerId);h.classList.add("drag")});
@@ -1076,9 +1093,10 @@ function makeResizer(sel,onMove,onReset){
 }
 makeResizer(".rz-sb",e=>{RZ.sbw=clampNum(e.clientX-appEl.getBoundingClientRect().left,180,380)},()=>{RZ.sbw=248});
 makeResizer(".rz-dt",e=>{RZ.dw=clampNum(appEl.getBoundingClientRect().right-e.clientX,240,430)},()=>{RZ.dw=296});
-makeResizer(".rz-ch",e=>{RZ.chh=clampNum(document.documentElement.clientHeight-e.clientY,150,460)},()=>{RZ.chh=232});
+makeResizer(".rz-ch",e=>{RZ.chh=document.documentElement.clientHeight-e.clientY},()=>{RZ.chh=null});
 document.querySelectorAll("#segAlign button").forEach(b=>b.addEventListener("click",()=>setAlign(b.dataset.a)));
 applySizes();applyAlign();applyPanels();
+window.addEventListener("resize",()=>{applySizes();autogrow()});
 
 /* ================= shortcuts (customised as JSON) ================= */
 const KEY_DEFAULTS={
@@ -1114,7 +1132,7 @@ function renderKeyHints(){
   $("#paletteHint").textContent=key?"Use "+key+" for commands.":"Open Command palette from the toolbar.";
 }
 renderKeyHints();
-function chatResize(d){RZ.chh=clampNum(RZ.chh+d,150,460);if(!RZ.ch)togglePanel("ch");applySizes();saveRZ()}
+function chatResize(d){RZ.chh=dockHeight()+d;if(!RZ.ch)togglePanel("ch");applySizes();saveRZ()}
 document.addEventListener("keydown",e=>{
   if(matchKey(e,KEYS.palette)){e.preventDefault();togglePalette();return}
   if(PAL.open)return;
@@ -1130,7 +1148,9 @@ const PAL={open:false,idx:0,list:[]};
 const palEl=$("#palette"),palInput=$("#palInput"),palList=$("#palList");
 function commands(){
   return [
-    {t:"Fit to view",run:fit},
+    {t:"Fit to view",run:()=>{fit();touchView()}},
+    {t:"Readable view",run:readable},
+    {t:"Reset conversation height",run:()=>{RZ.chh=null;applySizes();saveRZ();autogrow();maybeFit()}},
     {t:"Toggle sidebar",k:KEYS.toggleSidebar,run:()=>togglePanel("sb")},
     {t:"Toggle detail panel",k:KEYS.toggleDetail,run:()=>togglePanel("dt")},
     {t:"Toggle chat panel",k:KEYS.toggleChat,run:()=>togglePanel("ch")},
@@ -1151,7 +1171,7 @@ function commands(){
     {t:"Clear all notifications",run:()=>{N.items.forEach(i=>clearTimeout(i.timer));N.items=[];renderNotif()}},
     {t:"Max concurrent agents +1",run:()=>relay.setMax(S.maxw+1)},
     {t:"Max concurrent agents −1",run:()=>relay.setMax(S.maxw-1)},
-    {t:"Toggle auto-fit on new tasks",run:()=>{S.autofit=!S.autofit;renderSettings()}},
+    {t:"Toggle automatic readable positioning",run:()=>{S.autofit=!S.autofit;renderSettings()}},
     {t:"Toggle reduce motion",run:()=>{S.reduce=!S.reduce;document.documentElement.classList.toggle("reduce",S.reduce);renderSettings()}},
     {t:"Toggle pause (kill switch)",run:togglePause},
     {t:"Register a project…",run:()=>{SET.open=true;renderSettings();$("#projPath").focus()}},
@@ -1313,4 +1333,4 @@ function trapModalTab(e){
 document.addEventListener("keydown",trapModalTab);
 
 /* ================= boot ================= */
-layout();refresh();fit();renderNotif();renderSettings();renderBanner();renderAsk(); /* the empty screen anchors top-left the same way a populated one does */
+layout();refresh();readable();renderNotif();renderSettings();renderBanner();renderAsk(); /* the empty screen anchors top-left the same way a populated one does */

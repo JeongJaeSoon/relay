@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
 const visibility = app.slice(app.indexOf("function graphTaskVisible(t){"), app.indexOf("/* ================= chat ================= */"));
 const render = app.slice(app.indexOf("function renderNodes(){"), app.indexOf("/* ---- sessions outside relay:"));
-const boxes = app.slice(app.indexOf("function graphBoxes(){"), app.indexOf("function fit(){"));
+const boxes = app.slice(app.indexOf("function graphBoxes(){"), app.indexOf("function fit("));
 const minimap = app.slice(app.indexOf("function updateMinimap(){"), app.indexOf("function mmJump(e){"));
 
 test("child graph visibility follows its parent while preserving task history", () => {

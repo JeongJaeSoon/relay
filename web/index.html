@@ -269,7 +269,7 @@ header{
   font-size:14px;line-height:1;color:var(--text);
 }
 .ct-btn:hover{background:var(--surface2)}
-#zactual{font-size:10px;font-variant-numeric:tabular-nums}
+#zactual,#zread{font-size:10px;font-variant-numeric:tabular-nums}
 #emptyHint{
   position:absolute;left:32px;top:110px;width:224px;display:flex;flex-direction:column;
   gap:4px;color:var(--muted);pointer-events:none;font-size:var(--fs-small);
@@ -339,17 +339,17 @@ header{
   background:var(--surface);border-top:1px solid var(--line-strong);
 }
 .chat-h{
-  display:flex;align-items:baseline;gap:10px;padding:7px 16px;
+  display:flex;align-items:center;gap:10px;padding:7px 16px;min-height:40px;box-sizing:border-box;flex:none;
   border-bottom:1px solid var(--line);
   font-size:var(--fs-micro);font-weight:700;letter-spacing:.07em;color:var(--muted);
 }
 .chat-h .sub{font-weight:400;letter-spacing:0}
 .chat-body{display:flex;flex:1;min-height:0}
-.chat-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.chat-main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
 /* 요청 원장 (채팅 우측 레일): 사용자 메시지 1건 = 1행 — 어디로 갔는지, 지금 상태, 돌아온 답 */
-#ledger{width:296px;flex:none; /* = 태스크 상세 기본 폭(--dw 296px)과 동일 */border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#ledger{width:clamp(296px,30%,400px);background:var(--surface2);flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
 .lg-h{
-  display:flex;align-items:center;gap:8px;padding:5px 12px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:8px;padding:7px 12px;min-height:40px;box-sizing:border-box;flex:none;border-bottom:1px solid var(--line);
   font-size:var(--fs-micro);font-weight:700;letter-spacing:.07em;color:var(--muted);
 }
 .lg-h .seg{margin-left:auto;height:22px;flex:none}
@@ -375,10 +375,10 @@ header{
 @keyframes lgPulse{50%{opacity:.35}}
 @container (max-width:760px){
   #ledger{display:none}
-  .chat-switch{display:flex;gap:6px;letter-spacing:normal}
+  .chat-switch{display:flex;gap:6px;letter-spacing:normal;padding:6px 12px;border-bottom:1px solid var(--line);flex:none}
   .chat-switch button{min-height:28px;padding:3px 10px;border:1px solid var(--line-strong);border-radius:5px;background:var(--surface);cursor:pointer}
   .chat-switch button[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
-  .chat-h>span{display:none}
+  .chat-h{display:none}
   #app.show-requests #ledger{display:flex;width:100%;border-left:0}
   #app.show-requests .chat-main{display:none}
 }
@@ -659,8 +659,8 @@ input[type="checkbox"]{accent-color:var(--accent)}
   .legend{gap:6px 10px;padding:6px 8px}
 }
 @media (max-height:600px){
-  #app{--chh:min(200px,45dvh)}
-  #app.hide-ch{--chh:0px}
+  .canvas-tools{display:grid;grid-template-columns:repeat(2,30px)}
+  .legend{display:none}
 }
 @media (prefers-reduced-motion:reduce){
   .node.st-run,.node.sel.st-run,.node.fresh.st-run{animation:none}
@@ -727,7 +727,8 @@ input[type="checkbox"]{accent-color:var(--accent)}
         <button class="ct-btn" id="zin" aria-label="Zoom in">+</button>
         <button class="ct-btn" id="zout" aria-label="Zoom out">−</button>
         <button class="ct-btn" id="zactual" aria-label="Reset to actual size" title="Actual size (100%)">100%</button>
-        <button class="ct-btn" id="zfit" aria-label="Fit to view" title="Fit to view · resume auto-fit">⤢</button>
+        <button class="ct-btn" id="zread" aria-label="Readable view" title="Readable view · select a task in the list to navigate">Read</button>
+        <button class="ct-btn" id="zfit" aria-label="Fit to view" title="Fit all sessions (overview)">⤢</button>
       </div>
       <div id="minimap" aria-hidden="true"></div>
       <div id="toasts" aria-live="polite"></div>
@@ -742,11 +743,10 @@ input[type="checkbox"]{accent-color:var(--accent)}
 
   <footer class="chat">
     <div class="rz rz-ch" aria-hidden="true"></div>
-    <div class="chat-h"><span>Messages</span><span class="sub">— only worker summaries are promoted here</span>
-      <div class="chat-switch"><button id="showMessages" aria-controls="chatMain" aria-pressed="true">Messages</button><button id="showRequests" aria-controls="ledger" aria-pressed="false">Requests</button></div>
-    </div>
+    <div class="chat-switch"><button id="showMessages" aria-controls="chatMain" aria-pressed="true">Messages</button><button id="showRequests" aria-controls="ledger" aria-pressed="false">Requests</button></div>
     <div class="chat-body">
       <div class="chat-main" id="chatMain">
+        <div class="chat-h"><span>Messages</span><span class="sub">Worker summaries and conversation</span></div>
         <div id="msgs" aria-live="polite"></div>
         <div id="composerScope" class="composer-scope"></div>
         <!-- Enter routes through requestSubmit() and #sendBtn is the submit button: any other button added here needs type="button" -->
@@ -799,7 +799,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
         <button id="maxwDec" aria-label="Lower the limit">−</button><b id="maxwVal" class="mono">3</b><button id="maxwInc" aria-label="Raise the limit">+</button>
       </div>
     </div>
-    <div class="set-row"><span>Auto-fit on new tasks</span><input type="checkbox" id="setAutofit" checked></div>
+    <div class="set-row"><span>Auto-position at readable size</span><input type="checkbox" id="setAutofit" checked></div>
     <div class="set-row"><span>Do not disturb (suppress toasts)</span><input type="checkbox" id="setDnd"></div>
     <div class="set-row"><span>Reduce motion</span><input type="checkbox" id="setReduce"></div>
     <div class="set-row"><span>Shortcuts</span><button class="act" id="keysBtn">Edit JSON…</button></div>
