@@ -461,6 +461,11 @@ function drawIn(path,t){ /* draw a new node's edge in, parent → child */
 function renderEdges(){
   edgesSvg.textContent="";const fam=famOf(S.sel);
   const tree=S.layout==="tree", A=22; /* tree: anchored on the node's top (its title row) — the first row comes out horizontal */
+  const qs=queuedTasks().filter(t=>!t.sub);
+  const queueRight=qs.reduce((right,t)=>{
+    const n=document.getElementById("node-"+t.id);
+    return n?Math.max(right,n.offsetLeft+n.offsetWidth):right;
+  },gwEl.offsetLeft+gwEl.offsetWidth);
   graphTasks().forEach(t=>{
     if(!t.sub&&t.status==="queue")return; /* queued tasks are chained below instead */
     const n=document.getElementById("node-"+t.id);if(!n)return;
@@ -478,12 +483,19 @@ function renderEdges(){
     const y2=tree?n.offsetTop+A:n.offsetTop+n.offsetHeight/2;
     const path=document.createElementNS("http://www.w3.org/2000/svg","path");
     const cx=Math.round((x1+x2)/2); /* the same S-bezier in both layouts — the first row has y1==y2, so it falls out horizontal */
-    path.setAttribute("d","M"+x1+" "+y1+" C"+cx+" "+y1+" "+cx+" "+y2+" "+x2+" "+y2);
+    if(!t.sub&&qs.length){
+      // Leave the gateway horizontally before turning: a Bezier fan otherwise
+      // sweeps through the wider queue cards stacked underneath the gateway.
+      const bend=Math.max(x1+24,queueRight+24),direction=Math.sign(y2-y1);
+      const radius=Math.min(12,Math.abs(y2-y1)/2,Math.max(0,(x2-bend)/2));
+      path.setAttribute("d",`M${x1} ${y1} H${bend-radius} Q${bend} ${y1} ${bend} ${y1+direction*radius} V${y2-direction*radius} Q${bend} ${y2} ${bend+radius} ${y2} H${x2}`);
+    }else{
+      path.setAttribute("d","M"+x1+" "+y1+" C"+cx+" "+y1+" "+cx+" "+y2+" "+x2+" "+y2);
+    }
     path.setAttribute("class",edgeCls(t)+(fam.has(t.id)?" rel":""));
     edgesSvg.append(path);drawIn(path,t);
   });
   /* queue chain: vertical FIFO links running down from the gateway */
-  const qs=queuedTasks().filter(t=>!t.sub);
   qs.forEach((t,i)=>{
     const n=document.getElementById("node-"+t.id);if(!n)return;
     const x=n.offsetLeft+22;
