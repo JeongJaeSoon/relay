@@ -4,7 +4,7 @@
     "max_split": 4,
     "projects": [
       { "id": "p-alpha", "name": "alpha-app", "path": "/tmp/alpha-app" },
-      { "id": "p-freee", "name": "beta-service", "path": "/tmp/beta-service" },
+      { "id": "p-beta", "name": "beta-service", "path": "/tmp/beta-service" },
       { "id": "p-gamma-tool", "name": "gamma-tool", "path": "/tmp/gamma-tool" }
     ],
     "tasks": [

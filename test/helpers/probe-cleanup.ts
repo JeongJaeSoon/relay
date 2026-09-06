@@ -26,7 +26,10 @@ function isSameScopedProbe(raw: any, identity: ProbeIdentity, sandbox: string) {
 
 async function roster(deps: ProbeCleanupDeps) {
   const rows = await deps.list();
-  if (!Array.isArray(rows)) throw new Error("Claude roster is not an array; cleanup status is unknown");
+  // `id` is absent for interactive rows, but a roster without stable session identities cannot
+  // prove that a missing short ID means the same session is gone rather than malformed output.
+  if (!Array.isArray(rows) || rows.some((row) => row == null || typeof row !== "object" || typeof row.sessionId !== "string" || !row.sessionId))
+    throw new Error("Claude roster has unresolved session identities; cleanup status is unknown");
   return rows;
 }
 

@@ -9,3 +9,5 @@ web/dist/*
 # Local ownership and private operational captures
 .relay-owner
 test/artifacts/
+__pycache__/
+*.pyc

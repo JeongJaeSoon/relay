@@ -91,4 +91,6 @@ UI reviews should record the source revision, fixture route, viewport, expected 
 
 Keep stable developer and user contracts in this repository. Dated QA runs, design exploration, and work journals belong in the Relay Obsidian project archive, where they must be labeled historical and linked to the tested commit. Preserve raw evidence or a content hash and Git history location before deleting redundant repository copies.
 
+The deletion-to-archive map, parent Git paths, and source hashes are recorded in [archive-index.md](archive-index.md).
+
 Architectural changes must begin with a GitHub issue that records the current contract, proposed adjustment, compatibility and migration impact, and acceptance evidence. Do not silently expand Relay into provider-neutral, multi-user, team, or remote operation.

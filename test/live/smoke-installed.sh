@@ -37,8 +37,27 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="${SMOKE_OUT:-$HOME_DIR/smoke}"; mkdir -p "$OUT"; REPORT="$OUT/$STAMP.md"; RAW="$OUT/$STAMP"; mkdir -p "$RAW"
 
 j() { python3 -c 'import json,sys; d=json.load(sys.stdin); exec(sys.argv[1])' "$1"; }   # j '<python over d>' — no jq on a stock Mac
-api() { curl -sS -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' "$@"; }
+api() { curl -fsS --connect-timeout 5 --max-time 30 -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' "$@"; }
 PASS=0; FAIL=0
+TASK=""; FINAL=""; COMPLETED=0; INTERRUPTED=0
+interrupt_owned() { # Only TASK established from the accepted message receipt reaches this endpoint.
+  local why="$1"
+  [ -n "$TASK" ] && [ "$INTERRUPTED" = 0 ] || return 0
+  INTERRUPTED=1
+  if api -X POST "$API/tasks/$TASK/interrupt" >"$RAW/interrupt.json" 2>"$RAW/interrupt.err"; then
+    echo "  requested interruption of receipt-proven task $TASK ($why); worktree retained"
+    printf '\n- requested interruption of receipt-proven task `%s` (%s); worktree retained\n' "$TASK" "$why" >>"$REPORT"
+  else
+    echo "  unable to interrupt receipt-proven task $TASK ($why); inspect it manually" >&2
+    printf '\n- ✘ unable to interrupt receipt-proven task `%s` (%s); inspect manually\n' "$TASK" "$why" >>"$REPORT"
+  fi
+}
+preserve_completed_keep() { [ "$KEEP" = 1 ] && [ "$COMPLETED" = 1 ]; }
+on_exit() { local code="$1"; [ "$code" = 0 ] || preserve_completed_keep || interrupt_owned "script exit $code"; }
+on_signal() { local signal="$1" code="$2"; preserve_completed_keep || interrupt_owned "$signal"; exit "$code"; }
+trap 'on_exit $?' EXIT
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
 gate() { # gate <name> <ok:0|1> <detail>
   if [ "$2" = 1 ]; then PASS=$((PASS+1)); printf '  ✔ %s — %s\n' "$1" "$3"; printf -- '- ✔ **%s** — %s\n' "$1" "$3" >>"$REPORT"
   else FAIL=$((FAIL+1)); printf '  ✘ %s — %s\n' "$1" "$3"; printf -- '- ✘ **%s** — %s\n' "$1" "$3" >>"$REPORT"; fi
@@ -80,7 +99,7 @@ if ! read_roster "$RAW/agents-before.json"; then
 fi
 BEFORE_RELAY="$(j 'print(sum(1 for a in d if str(a.get("name","")).startswith("relay:")))' <"$RAW/agents-before.json")"
 BEFORE_UUIDS="$(api "$API/tasks?include=closed" | tee "$RAW/tasks-before.json" | j 'print(" ".join(t["uuid"] for t in d["tasks"]))')"
-PROJ_OK="$(j "print(1 if any(p['name']=='$NAME' for p in d['projects']) else 0)" <"$RAW/tasks-before.json")"
+PROJ_OK="$(python3 "$EVIDENCE" project "$NAME" <"$RAW/tasks-before.json")" || { gate "project registered" 0 "project snapshot invalid"; exit 1; }
 gate "project registered" "$PROJ_OK" "$NAME"; [ "$PROJ_OK" = 1 ] || { echo "aborting"; exit 1; }
 echo "  roster: $BEFORE_RELAY relay-owned session(s) before"; echo "- roster before: $BEFORE_RELAY relay-owned session(s)" >>"$REPORT"
 
@@ -125,6 +144,10 @@ case "$FINAL" in
   timeout)       gate "worker finished" 0 "still running after ${TIMEOUT_MIN} min — relay tail $DISP";;
   *)             gate "worker finished" 0 "$FINAL · $SUMMARY";;
 esac
+[ "$FINAL" != timeout ] && COMPLETED=1
+if [ "$FINAL" = timeout ]; then
+  interrupt_owned "worker timeout"
+fi
 HOOKS="$(j 'ev=d.get("events",[]); import collections; c=collections.Counter(e["type"] for e in ev); print(len(ev), "events ·", ", ".join(f"{k}×{v}" for k,v in sorted(c.items()) if k.startswith("hook.")))' <"$RAW/task-final.json" 2>/dev/null)"
 gate "hooks arrived" "$(j 'print(1 if any(e["type"].startswith("hook.") for e in d.get("events",[])) else 0)' <"$RAW/task-final.json" 2>/dev/null || echo 0)" "${HOOKS:-no event list in task detail}"
 echo; relay ls --all 2>&1 | head -20

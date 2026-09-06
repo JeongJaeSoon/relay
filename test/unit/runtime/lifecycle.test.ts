@@ -76,3 +76,28 @@ test("actual boot closes peer and DB when HTTP startup fails", async () => {
     expect(() => capturedDb.query("select 1").get()).toThrow();
   } finally { if (previousHome === undefined) delete process.env.RELAY_HOME; else process.env.RELAY_HOME = previousHome; }
 });
+
+test("SIGTERM during held recovery cleans acquired resources before exit", async () => {
+  const previousHome = process.env.RELAY_HOME; const home = mkdtempSync(join(tmpdir(), "relay-signal-recovery-")); process.env.RELAY_HOME = home;
+  writeFileSync(join(home, "capabilities.json"), JSON.stringify({ delivery: "socket", cli_version: "2.1.251" }));
+  const signals = new EventEmitter(); const calls: string[] = []; const exits: number[] = []; let capturedDb: any;
+  let enterRecovery!: () => void; const entered = new Promise<void>((resolve) => { enterRecovery = resolve; });
+  let failRecovery!: (error: Error) => void; const heldRecovery = new Promise<never>((_resolve, reject) => { failRecovery = reject; });
+  try {
+    const starting = boot(parseConfig("port = 18793"), {}, {
+      signals,
+      exit: (code) => { exits.push(code); },
+      currentCliVersion: async () => "2.1.251",
+      createPeer: () => ({ socketPath: "/tmp/fake.sock", start: async () => { calls.push("peer.start"); }, stop: () => { calls.push("peer.stop"); } }),
+      startServer: ((ctx: any) => { capturedDb = ctx.db; calls.push("http.start"); return { server: {} as any, stop: () => { calls.push("http.stop"); } }; }) as any,
+      recover: (async () => { calls.push("recover"); enterRecovery(); return heldRecovery; }) as any,
+    });
+    await entered;
+    signals.emit("SIGTERM"); signals.emit("SIGINT");
+    expect(exits).toEqual([0]);
+    expect(calls).toEqual(["peer.start", "http.start", "recover", "http.stop", "peer.stop"]);
+    expect(() => capturedDb.query("select 1").get()).toThrow();
+    failRecovery(new Error("finish held recovery"));
+    await expect(starting).rejects.toThrow("finish held recovery");
+  } finally { if (previousHome === undefined) delete process.env.RELAY_HOME; else process.env.RELAY_HOME = previousHome; }
+});

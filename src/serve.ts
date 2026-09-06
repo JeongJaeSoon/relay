@@ -27,14 +27,14 @@ import { sweep } from "./lifecycle/retention.ts";
 import { log } from "./log.ts";
 import { hookTokenFor } from "./gateway/auth.ts";
 import type { PendingPermission } from "./hooks/ingest.ts";
-import { installShutdownSignals, RuntimeLifecycle } from "./runtime/lifecycle.ts";
+import { installShutdownSignals, RuntimeLifecycle, type SignalSource } from "./runtime/lifecycle.ts";
 import dashboardHtml from "../web/dist/index.html" with { type: "file" };   // replaced by plan 03's build; a placeholder until then
 
 const token = (file: string) => { if (!existsSync(file)) writeFileSync(file, Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"), { mode: 0o600 }); return readFileSync(file, "utf8").trim(); };
 export const VERSION = process.env.RELAY_VERSION ?? "dev";   // `bun build --define process.env.RELAY_VERSION="x.y.z"` stamps it into the binary
 type RuntimePeer = { start(): Promise<unknown>; stop(): void; socketPath: string };
-export type ServeDeps = { startServer: typeof startServer; recover: typeof recover; currentCliVersion: typeof currentCliVersion; createPeer: (onFrame: (frame: any) => void) => RuntimePeer };
-const defaultDeps: ServeDeps = { startServer, recover, currentCliVersion, createPeer: (onFrame) => new PeerServer("relay", crypto.randomUUID(), onFrame) };
+export type ServeDeps = { startServer: typeof startServer; recover: typeof recover; currentCliVersion: typeof currentCliVersion; createPeer: (onFrame: (frame: any) => void) => RuntimePeer; signals?: SignalSource; exit?: (code: number) => void };
+const defaultDeps: ServeDeps = { startServer, recover, currentCliVersion, createPeer: (onFrame) => new PeerServer("relay", crypto.randomUUID(), onFrame), signals: process, exit: (code) => process.exit(code) };
 export async function serve(opts: { runner?: AgentRunner; runClaude?: RunClaude } = {}) {
   ensureDirs(); const cfg = loadConfig();
   if (cfg.path_prepend.length) process.env.PATH = [...cfg.path_prepend, process.env.PATH ?? ""].join(":");   // launchd PATH lacks nvm/npm dirs; `claude` needs `node` for npm installs
@@ -45,6 +45,9 @@ export async function serve(opts: { runner?: AgentRunner; runClaude?: RunClaude 
 }
 export async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRunner; runClaude?: RunClaude }, deps: ServeDeps = defaultDeps) {
   const runtime = new RuntimeLifecycle((e) => log.warn("runtime cleanup failed", { e: String(e) }));
+  const stop = () => runtime.stop();
+  // Install before the first awaited acquisition. launchd may stop Relay while peer startup or recovery is suspended.
+  runtime.add(installShutdownSignals(deps.signals ?? process, stop, deps.exit ?? ((code) => process.exit(code))));
   try {
   if (process.env.ANTHROPIC_API_KEY) { log.warn("ANTHROPIC_API_KEY is set — removing it from the relay process environment (API billing guard)"); delete process.env.ANTHROPIC_API_KEY; }
   const tokens = { api: token(paths.apiToken), hook: token(paths.hookToken) }; const oauth = existsSync(paths.oauthToken) ? readFileSync(paths.oauthToken, "utf8").trim() : null;
@@ -114,8 +117,7 @@ export async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: 
   const timers = [setInterval(() => idle.tick(), 60_000), setInterval(() => usage.tick(), 60_000), setInterval(() => watchdog.tick().catch((e) => log.warn("watchdog", { e: String(e) })), 5_000), setInterval(() => spool.drain().catch(() => {}), 30_000), setInterval(() => spool.sweep(7), 3600_000),
     setInterval(() => { try { log.info("retention", sweep(db, 90, evlog)); } catch (e) { log.warn("retention", { e: String(e) }); } }, 24 * 3600_000)];
   runtime.add(() => timers.forEach(clearInterval));
-  const stop = () => runtime.stop();   // never leave a worker waiting on a dead relay
-  runtime.add(installShutdownSignals(process, stop, (code) => process.exit(code)));
+  // stop denies pending permissions and releases every acquired resource exactly once.
   return { ctx, stop };
   } catch (error) {
     runtime.stop();

@@ -4,6 +4,12 @@ import sys
 
 
 def evidence(mode, data, args):
+    if mode == "project":
+        name = args[0]
+        projects = data.get("projects", data) if isinstance(data, dict) else data
+        if not isinstance(projects, list) or any(not isinstance(project, dict) for project in projects):
+            raise ValueError("invalid project snapshot")
+        return "1" if any(project.get("name") == name for project in projects) else "0"
     if mode == "task":
         message_id, before = args
         message = next((m for m in data["messages"] if m["id"] == message_id), None)

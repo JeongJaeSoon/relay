@@ -34,7 +34,7 @@ test("active, unknown, unavailable, and malformed post-stop rosters block remova
   const active = fake([row("a")], () => [row("a", "working")]);
   await expect(stopAndRemove(active.deps, sandbox, "a")).rejects.toThrow("Session still"); expect(active.calls).toEqual(["stop:a"]);
   const malformedRow = fake([row("a")], () => [{ id: "a"}]);
-  await expect(stopAndRemove(malformedRow.deps, sandbox, "a")).rejects.toThrow("identity changed"); expect(malformedRow.calls).toEqual(["stop:a"]);
+  await expect(stopAndRemove(malformedRow.deps, sandbox, "a")).rejects.toThrow("unresolved session identities"); expect(malformedRow.calls).toEqual(["stop:a"]);
   const unavailable = fake([row("a")]); let reads = 0; unavailable.deps.list = async () => { if (++reads === 1) return [row("a")]; throw new Error("roster unavailable"); };
   await expect(stopAndRemove(unavailable.deps, sandbox, "a")).rejects.toThrow("roster unavailable");
   const malformed = fake([row("a")]); malformed.deps.list = async () => ({ nope: true } as any);
@@ -52,8 +52,16 @@ test("a reused short ID or changed scope after stop blocks removal", async () =>
 
 test("a scoped row without a session identity is never stopped or removed", async () => {
   const missingIdentity = fake([{ ...row("a"), sessionId: undefined }]);
-  await expect(stopAndRemove(missingIdentity.deps, sandbox, "a")).rejects.toThrow("Refusing cleanup");
+  await expect(stopAndRemove(missingIdentity.deps, sandbox, "a")).rejects.toThrow("unresolved session identities");
   expect(missingIdentity.calls).toEqual([]);
+});
+
+test("null and identity-less roster rows are unknown, never an empty roster", async () => {
+  for (const rows of [[null], [{ id: "interactive" }]]) {
+    const broken = fake(rows as any[]);
+    await expect(cleanupScopedProbes(broken.deps, sandbox)).rejects.toThrow("unresolved session identities");
+    expect(broken.calls).toEqual([]);
+  }
 });
 
 test("an initially scoped row that vanishes before its cleanup turn is already gone", async () => {

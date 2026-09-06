@@ -26,6 +26,13 @@ async function availablePort() {
   return address.port;
 }
 
+export async function stopChild(child: ReturnType<typeof Bun.spawn>, forceAfterMs = 2_000) {
+  if (child.exitCode !== null) return child.exitCode;
+  child.kill("SIGTERM");
+  const force = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, forceAfterMs);
+  try { return await child.exited; } finally { clearTimeout(force); }
+}
+
 export function binaryServerEnv(scratch: string, ambient: Record<string, string | undefined> = process.env): Record<string, string> {
   return {
     HOME: scratch,
@@ -72,7 +79,7 @@ exit 64
       }
       if (html) break;
       if (server.exitCode === null) {
-        server.kill("SIGTERM"); await server.exited;
+        await stopChild(server);
         throw new Error("compiled server stayed alive but did not become ready");
       }
       const stderr = await stderrPromise;
@@ -89,10 +96,7 @@ exit 64
     return { version: stamped.stdout.trim(), dashboardBytes: html.length, guardExitCode: guard.exitCode };
   } finally {
     if (server && server.exitCode === null) {
-      server.kill("SIGTERM");
-      const force = setTimeout(() => { if (server?.exitCode === null) server.kill("SIGKILL"); }, 2_000);
-      await server.exited;
-      clearTimeout(force);
+      await stopChild(server);
     }
     rmSync(scratch, { recursive: true, force: true });
   }

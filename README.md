@@ -113,7 +113,7 @@ bun run dev:fake              # real gateway + scripted workers; localhost:8814
 bun run dev:ui                # synthetic visual fixtures; localhost:8813
 ```
 
-See [architecture](docs/architecture.md), [development](docs/development.md),
+See [architecture](docs/architecture.md), [development](docs/development.md), [historical archive index](docs/archive-index.md),
 [test lanes and provenance](test/README.md), and [dashboard development](web/README.md).
 Live CLI/service tests are explicitly separate from offline CI and may create billable workers.
 Dated design, operating evidence and review journals are indexed in the Obsidian `Project/relay` hub.
