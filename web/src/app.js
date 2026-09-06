@@ -1082,7 +1082,7 @@ applySizes();applyAlign();applyPanels();
 
 /* ================= shortcuts (customised as JSON) ================= */
 const KEY_DEFAULTS={
-  palette:"mod+shift+p",
+  palette:"mod+k",
   toggleSidebar:"mod+b",
   toggleDetail:"mod+alt+b",
   toggleChat:"mod+j",
@@ -1108,6 +1108,12 @@ function fmtKey(c){
   const M={mod:IS_MAC?"⌘":"Ctrl+",ctrl:"⌃",alt:"⌥",shift:"⇧",arrowup:"↑",arrowdown:"↓",arrowleft:"←",arrowright:"→"};
   return String(c).split("+").map(x=>M[x]||x.toUpperCase()).join("");
 }
+function renderKeyHints(){
+  const key=fmtKey(KEYS.palette);
+  $("#palBtn").title="Command palette ("+key+")";
+  $("#paletteHint").textContent="Use "+key+" for commands.";
+}
+renderKeyHints();
 function chatResize(d){RZ.chh=clampNum(RZ.chh+d,150,460);if(!RZ.ch)togglePanel("ch");applySizes();saveRZ()}
 document.addEventListener("keydown",e=>{
   if(matchKey(e,KEYS.palette)){e.preventDefault();togglePalette();return}
@@ -1208,6 +1214,7 @@ $("#kedSave").addEventListener("click",()=>{
     if(bad.length)throw new Error("Unknown action: "+bad.join(", "));
     KEYS=Object.assign({},KEY_DEFAULTS,v);
     localStorage.setItem("relay-keys",JSON.stringify(KEYS));
+    renderKeyHints();
     closeKeysEd();
   }catch(err){$("#kedErr").textContent="Save failed: "+err.message}
 });
