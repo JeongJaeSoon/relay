@@ -1,7 +1,7 @@
 {
   "session_id": "cfdede96-8543-43ba-b9f2-6d0f36f70190",
-  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-v-blocked/cfdede96-8543-43ba-b9f2-6d0f36f70190.jsonl",
-  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-v-blocked",
+  "transcript_path": "/fixtures/transcripts/fixture.jsonl",
+  "cwd": "/workspace/sample/.claude/worktrees/fixture",
   "prompt_id": "dd7e2b08-0eed-484d-92cc-be846efed5fb",
   "permission_mode": "auto",
   "agent_type": "relay-worker",

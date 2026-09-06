@@ -1,5 +1,5 @@
 // Regression corpus for the dispatcher (design C.5): five single-decision cases that must never regress and five
-// split cases. Each case replays its recorded `model_output` through the real Dispatcher and TaskService, so what is
+// split cases. Each case replays its synthetic `model_output` through the real Dispatcher and TaskService, so what is
 // under test is the pipeline and the split guardrails — no `claude` process is ever spawned.
 import { describe, expect, test } from "bun:test";
 import { openDb, migrate } from "../../../src/db/db.ts";
@@ -8,7 +8,7 @@ import { parseConfig } from "../../../src/config.ts";
 import { PermitPool } from "../../../src/core/permits.ts";
 import { Scheduler } from "../../../src/core/queue.ts";
 import { Outbox } from "../../../src/lifecycle/outbox.ts";
-import { FakeRunner } from "../../../src/runner/fake.ts";
+import { FakeRunner } from "../../helpers/fake-runner.ts";
 import { TaskService } from "../../../src/core/tasks.ts";
 import { Dispatcher, type RunClaude } from "../../../src/dispatcher/dispatcher.ts";
 import { DecisionSchema, dispatchJsonSchema, lowConfidence, splitGuard } from "../../../src/dispatcher/schema.ts";
@@ -38,7 +38,7 @@ function setup(run: RunClaude, maxSplit = world.max_split) {
   return { db, log, cfg, svc, d, runner, outbox, write, say, confirms };
 }
 
-/** The world's one existing task: T-01, running, in the relay project. */
+/** The world's one existing task: T-01, running, in the alpha-app project. */
 async function seed(s: ReturnType<typeof setup>) {
   const w = world.tasks[0];
   s.svc.applyDecision(s.write(w.title, "direct"), { action: "new_task", project: w.project, title: w.title, size: "normal", prompt: w.title, confidence: "high" });
@@ -111,12 +111,12 @@ describe("dispatch corpus", () => {
   ] });
 
   test("a follow-up plus new work in the SAME project is refused whole", async () => {
-    const s = setup(stub(hotfix("relay"))); await seed(s);
-    const id = s.say("T-01 은 계속 가고, 한 줄 핫픽스는 따로 PR 로 지금 올려줘"); await settle();
+    const s = setup(stub(hotfix("alpha-app"))); await seed(s);
+    const id = s.say("T-01은 계속 가고, 예제 수정은 별도 작업으로 해줘"); await settle();
     expect(loadMessage(s.db, id)!.dispatch_state as string).toBe("needs_confirm");
     expect(created(s.db)).toEqual([]); expect(routed(s.db)).toEqual([]);
     const reason = (s.db.query("select text from messages where text like 'Routing needs confirmation%'").get() as any).text;
-    expect(reason).toContain("same project (relay) as T-01");
+    expect(reason).toContain("same project (alpha-app) as T-01");
     expect((s.db.query("select count(*) c from commands").get() as any).c).toBe(1);            // just the seed task's spawn
   });
 
@@ -125,20 +125,20 @@ describe("dispatch corpus", () => {
       { action: "new_task", project: a, title: "one", size: "small", prompt: "one" },
       { action: "new_task", project: b, title: "two", size: "small", prompt: "two" },
     ] });
-    const same = setup(stub(two("relay", "relay"))); await seed(same);
+    const same = setup(stub(two("alpha-app", "alpha-app"))); await seed(same);
     const a = same.say("두 가지 다 해줘"); await settle();
     expect(loadMessage(same.db, a)!.dispatch_state as string).toBe("needs_confirm");
     expect(created(same.db)).toEqual([]);
 
-    const apart = setup(stub(two("relay", "meterly"))); await seed(apart);
+    const apart = setup(stub(two("alpha-app", "gamma-tool"))); await seed(apart);
     const b = apart.say("두 가지 다 해줘"); await settle();
     expect(loadMessage(apart.db, b)!.dispatch_state as string).toBe("dispatched");
     expect(created(apart.db)).toEqual(["T-02", "T-03"]);
   });
 
   test("the same follow-up plus new work across two projects splits normally", async () => {
-    const s = setup(stub(hotfix("meterly"))); await seed(s);
-    const id = s.say("T-01 은 계속 가고, meterly 핫픽스는 따로 올려줘"); await settle();
+    const s = setup(stub(hotfix("gamma-tool"))); await seed(s);
+    const id = s.say("T-01은 계속 가고, gamma-tool 예제 수정은 따로 해줘"); await settle();
     expect(loadMessage(s.db, id)!.dispatch_state as string).toBe("dispatched");
     expect(created(s.db)).toEqual(["T-02"]); expect(routed(s.db)).toEqual(["T-01"]);
   });
@@ -154,7 +154,7 @@ describe("dispatch corpus", () => {
 
   test("an unknown project in one item aborts the whole split before anything is emitted", async () => {
     const s = setup(stub({ action: "split", confidence: "high", items: [
-      { action: "new_task", project: "relay", title: "a", size: "small", prompt: "a" },
+      { action: "new_task", project: "alpha-app", title: "a", size: "small", prompt: "a" },
       { action: "new_task", project: "nope", title: "b", size: "small", prompt: "b" },
     ] })); await seed(s);
     const id = s.say("두 군데 고쳐줘"); await settle();
@@ -165,7 +165,7 @@ describe("dispatch corpus", () => {
 });
 
 describe("split guardrails", () => {
-  const items = (n: number) => Array.from({ length: n }, (_, i) => ({ action: "new_task" as const, project: "relay", title: `t${i}`, size: "small" as const, prompt: "p" }));
+  const items = (n: number) => Array.from({ length: n }, (_, i) => ({ action: "new_task" as const, project: "alpha-app", title: `t${i}`, size: "small" as const, prompt: "p" }));
   const dec = (extra: Record<string, unknown> = {}) => ({ action: "split", confidence: "high", items: items(2), ...extra }) as any;
 
   test("the cap, an unsure item and a missing prompt each refuse the whole split", () => {
@@ -173,15 +173,15 @@ describe("split guardrails", () => {
     expect(splitGuard(dec({ items: items(5) }), 4)).toContain("exceeds dispatcher.max_split = 4");
     expect(splitGuard(dec(), 1)).toContain("max_split = 1");
     expect(splitGuard(dec({ confidence: "low" }), 4)).toContain("confidence=low");
-    expect(splitGuard(dec({ items: [...items(1), { action: "new_task", project: "relay", title: "x", size: "small", prompt: "p", confidence: "low" }] }), 4)).toContain("confidence=low");
-    expect(splitGuard(dec({ items: [{ action: "new_task", project: "relay", title: "x", size: "small" }] }), 4)).toContain("prompt required");
+    expect(splitGuard(dec({ items: [...items(1), { action: "new_task", project: "alpha-app", title: "x", size: "small", prompt: "p", confidence: "low" }] }), 4)).toContain("confidence=low");
+    expect(splitGuard(dec({ items: [{ action: "new_task", project: "alpha-app", title: "x", size: "small" }] }), 4)).toContain("prompt required");
     expect(splitGuard(dec({ items: [{ action: "route_to_task", prompt: "p" }] }), 4)).toContain("route_to_task needs task_id");
   });
 
   test("lowConfidence covers the message and every item", () => {
     expect(lowConfidence(dec())).toBe(false);
     expect(lowConfidence(dec({ confidence: "low" }))).toBe(true);
-    expect(lowConfidence(dec({ items: [{ action: "new_task", project: "relay", title: "x", size: "small", prompt: "p", confidence: "low" }] }))).toBe(true);
+    expect(lowConfidence(dec({ items: [{ action: "new_task", project: "alpha-app", title: "x", size: "small", prompt: "p", confidence: "low" }] }))).toBe(true);
   });
 
   test("max_split = 1 removes split from the model's schema and the prompt; the measured wording is untouched", () => {
@@ -200,6 +200,6 @@ describe("split guardrails", () => {
     expect(DecisionSchema.safeParse(dec({ items: [] })).success).toBe(false);
     expect(DecisionSchema.safeParse(dec({ items: [{ action: "split", prompt: "p" }] })).success).toBe(false);
     expect(DecisionSchema.safeParse(dec({ items: [{ action: "answer_directly", prompt: "p" }] })).success).toBe(false);
-    expect(DecisionSchema.safeParse({ action: "new_task", project: "relay", title: "t", size: "small", confidence: "high" }).success).toBe(true);
+    expect(DecisionSchema.safeParse({ action: "new_task", project: "alpha-app", title: "t", size: "small", confidence: "high" }).success).toBe(true);
   });
 });

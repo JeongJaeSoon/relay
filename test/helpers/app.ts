@@ -9,7 +9,7 @@ import { buildApp, type AppContext } from "../../src/gateway/server.ts";
 import { PermitPool } from "../../src/core/permits.ts";
 import { Scheduler } from "../../src/core/queue.ts";
 import { Outbox } from "../../src/lifecycle/outbox.ts";
-import { FakeRunner } from "../../src/runner/fake.ts";
+import { FakeRunner } from "./fake-runner.ts";
 import { ForeignSessions } from "../../src/lifecycle/foreign.ts";
 import { TaskService } from "../../src/core/tasks.ts";
 import { Dispatcher, type RunClaude } from "../../src/dispatcher/dispatcher.ts";

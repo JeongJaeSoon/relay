@@ -44,13 +44,16 @@ function setup(saved?: string) {
     gwEl: { classList: { toggle() {}, contains: () => false }, querySelector: () => ({ textContent: "" }) },
     el: (tag: string, cls = "", text = "") => new Node(tag, cls, text),
     ttagBtn: (t: any) => new Node("button", "ttag", t.id),
-    chatUser: (text: string) => msgs.append(new Node("div", "m-user", text)),
-    chatMsg: (t: any, text: string) => {
+    chatDaySeparator: (at: number) => calls.push(`day:${at}`),
+    chatUser: (text: string, at?: number) => { calls.push(`user:${at ?? ""}`); msgs.append(new Node("div", "m-user", text)); },
+    chatMsg: (t: any, text: string, at?: number) => {
+      calls.push(`message:${at ?? ""}`);
       const row = new Node("div", "m-row", text);
-      if (t) { row.dataset.agent = t.uuid; row.dataset.sender = t.title; row.dataset.history = String(!!t.history); }
-      msgs.append(row);
+      row.dataset.sender = t ? t.title : "Relay";
+      if (t) { row.dataset.agent = t.uuid; row.dataset.history = String(!!t.history); }
+      msgs.append(row); return row;
     },
-    chatQuestion: (t: any) => msgs.append(new Node("div", "m-question", t.question.q)),
+    chatQuestion: (t: any, at?: number) => { calls.push(`question:${at ?? ""}`); const row = new Node("div", "m-question", t.question.q); msgs.append(row); return row; },
     scrollChat: () => calls.push("scrollChat"),
     select: (id: string | null) => { calls.push("select"); S.sel = id; },
     clearSel() {}, selectForeign() {},
@@ -75,6 +78,49 @@ test("message replay and dispatch updates preserve a single user bubble and its 
   h.store.applyFrame({ type: "chat.message", seq: 2, idx: 0, message: reply }); h.flush();
   h.snapshot([user, reply]);
   expect(h.msgs.children.map(n => n.className)).toEqual(["m-user", "m-receipt", "m-row"]);
+});
+
+test("timestamps and local-day separators follow stored message order without replay duplicates", () => {
+  const h = setup();
+  const first = new Date(2026, 8, 6, 23, 58).getTime();
+  const second = new Date(2026, 8, 7, 0, 2).getTime();
+  const messages = [
+    message("m1", "user", "First", { created_at: first }),
+    message("m2", "worker_summary", "Second", { created_at: second }),
+  ];
+  h.snapshot(messages);
+  expect(h.calls.filter(c => c.startsWith("day:"))).toEqual([`day:${first}`, `day:${second}`]);
+  expect(h.calls).toContain(`user:${first}`);
+  expect(h.calls).toContain(`message:${second}`);
+  h.store.applyFrame({ type: "chat.message", seq: 1, idx: 0, message: messages[1] }); h.flush();
+  h.snapshot(messages);
+  expect(h.calls.filter(c => c.startsWith("day:"))).toEqual([`day:${first}`, `day:${second}`]);
+  expect(h.msgs.children.map(n => n.className)).toEqual(["m-user", "m-receipt", "m-row"]);
+});
+
+test("system rows are Relay, while task-bound agent output keeps its sender and history navigation identity", () => {
+  const h = setup(); const historical = "unknown-historical-agent";
+  h.snapshot([
+    message("m1", "system", "Relay routed this", { task_uuid: "agent-uuid", created_at: 10 }),
+    message("m2", "worker_summary", "Agent result", { task_uuid: "agent-uuid", created_at: 11 }),
+    message("m3", "system", "Older relay notice", { task_uuid: historical, created_at: 12 }),
+    message("m4", "worker_summary", "Older result", { task_uuid: historical, created_at: 13 }),
+  ]);
+  const rows = h.msgs.children.filter(n => n.className === "m-row");
+  expect(rows.map(n => n.dataset.sender)).toEqual(["Relay", "Agent one"]);
+  expect(rows[1].dataset.agent).toBe("agent-uuid");
+  h.context.setConversationHistory(true);
+  const historyRows = h.msgs.children.filter(n => n.className === "m-row");
+  expect(historyRows.map(n => n.dataset.sender)).toEqual(["Relay", "Agent one", "Relay", "Historical session"]);
+  expect(historyRows[3].dataset.agent).toBe(historical);
+});
+
+test("a task-bound dispatcher answer remains Relay rather than borrowing the agent identity", () => {
+  const h = setup();
+  h.snapshot([message("m1", "dispatcher_answer", "Relay status answer", { task_uuid: "agent-uuid", created_at: 10 })]);
+  const row = h.msgs.children.find(n => n.className === "m-row")!;
+  expect(row.dataset.sender).toBe("Relay");
+  expect(row.dataset.agent).toBeUndefined();
 });
 
 test("restoring a saved UUID restores selection once without opening detail or taking focus", () => {
@@ -126,10 +172,10 @@ test("retained messages from a removed task preserve historical UUID identity th
   expect(h.context.LEDGER).toHaveLength(0);
   h.context.setConversationHistory(true);
   const [summary, question, system] = h.msgs.children.filter(n => n.className === "m-row");
-  expect(summary.dataset).toEqual({ agent: uuid, sender: "Historical session", history: "true" });
+  expect(summary.dataset).toEqual({ sender: "Historical session", agent: uuid, history: "true" });
   expect(question.dataset.agent).toBe(uuid);
   expect(question.textContent).toBe("Historical question?");
-  expect(system.dataset.agent).toBeUndefined();
+  expect(system.dataset).toEqual({ sender: "Relay" });
   expect(h.context.LEDGER[0].taskUuids).toEqual([uuid]);
   expect(h.context.LEDGER[0].taskIds).toEqual([]);
   expect(h.S.tasks.size).toBe(0); // no phantom manageable task

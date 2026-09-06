@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { openDb, migrate } from "../../../src/db/db.ts";
 import { EventLog, loadTask } from "../../../src/core/events.ts";
 import { parseConfig } from "../../../src/config.ts";
-import { FakeRunner } from "../../../src/runner/fake.ts";
+import { FakeRunner } from "../../helpers/fake-runner.ts";
 import { LOCK_HOLD_MS, Outbox, readOwner } from "../../../src/lifecycle/outbox.ts";
 import { setNow } from "../../../src/core/clock.ts";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";

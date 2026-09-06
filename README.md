@@ -58,7 +58,7 @@ print the quoted form to paste, rather than spending a dispatch on it — and a 
 (`relay pause the login task`) is refused the same way instead of running. Text no subcommand could be (CJK, punctuation, digits) is sent
 as written, quoted or not. The shell eats `?` and `!` before relay sees them, which is one more reason to quote.
 
-Human-readable Korean output by default; `--json` prints JSON only, for scripts.
+Human-readable English output by default; `--json` prints JSON only, for scripts.
 
 ## Configuration
 
@@ -95,34 +95,31 @@ fallback), `capabilities.json`, `hook-spool/`. Logs go to `~/Library/Logs/relay/
 
 ## Development
 
-Current implementation coverage, live worker evidence and dashboard fixes are recorded in
-[the September 5 QA report](docs/QA-2026-09-05.md) and the
-[owned-session lifecycle follow-up](docs/QA-2026-09-05-owned-sessions.md), followed by the
-[unknown-spawn close guard](docs/QA-2026-09-05-unknown-spawn.md).
+The repository contains the runtime, embedded assets, and repeatable validation tooling:
+
+| Directory | Purpose |
+|---|---|
+| `src/`, `shared/` | CLI, HTTP/WS gateway, event store, dispatcher, worker lifecycle and contracts |
+| `agents/`, `web/` | Embedded worker definitions and dashboard |
+| `test/` | Unit/integration tests, synthetic fixtures, development servers and opt-in live probes |
+| `scripts/` | Build, binary verification, release and development entry points |
+| `docs/` | Installation, architecture and contributor guides |
 
 ```sh
-bun install
-bun test
-bunx tsc --noEmit
-bun run build:web          # web/dist/index.html (inlined, embedded in the binary)
-bun run compile 0.1.0      # dist/relay-<ver>-darwin-{arm64,x64}/relay + tarballs + SHA256SUMS
+bun install --frozen-lockfile
+bun run check                 # dashboard build, typecheck and offline tests
+bun run test:binary           # production binary, isolated data and a fake Claude executable
+bun run dev:fake              # real gateway + scripted workers; localhost:8814
+bun run dev:ui                # synthetic visual fixtures; localhost:8813
 ```
 
-The compiled binary is ~59 MB (arm64) / ~64 MB (x64); the tarballs are ~21 MB / ~24 MB. The
-dashboard HTML and `agents/*.md` are embedded via `with { type: "file" }` — there is no copy step.
+See [architecture](docs/architecture.md), [development](docs/development.md), [historical archive index](docs/archive-index.md),
+[test lanes and provenance](test/README.md), and [dashboard development](web/README.md).
+Live CLI/service tests are explicitly separate from offline CI and may create billable workers.
+Dated design, operating evidence and review journals are indexed in the Obsidian `Project/relay` hub.
 
-To check an installed binary end to end on a Mac — service up, one real task in a registered project, close,
-and what `claude agents --json` still holds afterwards — run `scripts/smoke-installed.sh <project>`; it writes a
-report under `~/.config/relay/smoke/`. `--commit` makes the worker leave an unpushed commit, the shape `claude rm`
-refuses, to check that close reports it instead of claiming `closed`.
-
-For hooks to point at your working tree instead of an installed binary, symlink the dev shim and
-set `RELAY_BIN`:
-
-```sh
-ln -sf "$PWD/scripts/relay-dev" ~/.local/bin/relay
-RELAY_BIN="$HOME/.local/bin/relay" bun src/main.ts serve
-```
+For real development sessions, point hooks at the checkout using the `RELAY_BIN` environment
+variable set to the absolute path of `scripts/relay-dev`. Keep the installed command intact.
 
 ## Requirements
 
@@ -130,5 +127,5 @@ RELAY_BIN="$HOME/.local/bin/relay" bun src/main.ts serve
 - Claude Code CLI 2.1.251+ (logged in; `ANTHROPIC_API_KEY` is never used)
 - git 2.54+, macOS
 
-Design and plans live in the author's notes repo
-(`docs/superpowers/{specs,plans}/2026-08-{29,30}-relay-*`).
+The current design is a single-user, localhost orchestrator. A shared enterprise service would
+need an explicit design decision covering user identity, credentials, permissions and isolation.

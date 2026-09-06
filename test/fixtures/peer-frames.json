@@ -17,7 +17,7 @@
       ]
     },
     {
-      "raw": "{\"msgV\":1,\"msg_id\":\"9c4336b4-1613-4f0e-8efa-8beba948c000\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"uds:/tmp/cc-socks/96669.sock\\\" hop-chain=\\\"055d9520e03b4803b7f555ff\\\" from-name=\\\"relay-spike:recv\\\" from-mode=\\\"prompting\\\">\\nPONG\\n</cross-session-message>\"},\"priority\":\"next\",\"from\":\"uds:/tmp/cc-socks/96669.sock\"}\n",
+      "raw": "{\"msgV\":1,\"msg_id\":\"9c4336b4-1613-4f0e-8efa-8beba948c000\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"uds:/tmp/cc-socks/96669.sock\\\" hop-chain=\\\"055d9520e03b4803b7f555ff\\\" from-name=\\\"fixture-receiver\\\" from-mode=\\\"prompting\\\">\\nPONG\\n</cross-session-message>\"},\"priority\":\"next\",\"from\":\"uds:/tmp/cc-socks/96669.sock\"}\n",
       "lines": [
         {
           "msgV": 1,
@@ -25,7 +25,7 @@
           "type": "user",
           "message": {
             "role": "user",
-            "content": "<cross-session-message from=\"uds:/tmp/cc-socks/96669.sock\" hop-chain=\"055d9520e03b4803b7f555ff\" from-name=\"relay-spike:recv\" from-mode=\"prompting\">\nPONG\n</cross-session-message>"
+            "content": "<cross-session-message from=\"uds:/tmp/cc-socks/96669.sock\" hop-chain=\"055d9520e03b4803b7f555ff\" from-name=\"fixture-receiver\" from-mode=\"prompting\">\nPONG\n</cross-session-message>"
           },
           "priority": "next",
           "from": "uds:/tmp/cc-socks/96669.sock"
@@ -41,7 +41,7 @@
         "type": "user",
         "message": {
           "role": "user",
-          "content": "<cross-session-message from=\"uds:/tmp/cc-socks/96568.sock\" from-name=\"relay-spike\" from-mode=\"prompting\">\n[relay #test0001] say PONG\n</cross-session-message>"
+          "content": "<cross-session-message from=\"uds:/tmp/cc-socks/96568.sock\" from-name=\"relay:fixture\" from-mode=\"prompting\">\n[relay #test0001] say PONG\n</cross-session-message>"
         },
         "priority": "next",
         "from": "uds:/tmp/cc-socks/96568.sock"
@@ -52,7 +52,7 @@
   "registry": {
     "pid": 96568,
     "sessionId": "0f5c4b09-3ddd-4f5e-8181-f73c219b9c92",
-    "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike",
+    "cwd": "/workspace/sample",
     "startedAt": 1788098969595,
     "procStart": "Sun Aug 30 23:09:29 2026",
     "version": "2.1.251",
@@ -64,7 +64,7 @@
     "entrypoint": "cli",
     "pidDomain": "darwin",
     "messagingSocketPath": "/tmp/cc-socks/96568.sock",
-    "name": "relay-spike",
+    "name": "relay:fixture",
     "nameSince": 1788098969595,
     "nameSource": "user",
     "status": "idle",

@@ -1,0 +1,10 @@
+{
+  "inbound": [{"lines": [{
+    "msgV": 1,
+    "msg_id": "",
+    "type": "user",
+    "message": {"role": "user", "content": ""},
+    "priority": "next",
+    "from": ""
+  }]}]
+}

@@ -2,7 +2,7 @@
 // half-written spike result must fail here rather than at spawn time.
 import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
-import caps from "../../spikes/results/capabilities.json";
+import caps from "../fixtures/capabilities.json";
 import { gateVersion, loadCapabilities, parseVersion, versionDrift, versionOk } from "../../src/runner/capabilities.ts";
 
 test("capabilities.json carries the gate results plan 02 depends on", () => {

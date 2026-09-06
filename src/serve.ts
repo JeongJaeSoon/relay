@@ -27,24 +27,33 @@ import { sweep } from "./lifecycle/retention.ts";
 import { log } from "./log.ts";
 import { hookTokenFor } from "./gateway/auth.ts";
 import type { PendingPermission } from "./hooks/ingest.ts";
+import { installShutdownSignals, RuntimeLifecycle, type SignalSource } from "./runtime/lifecycle.ts";
 import dashboardHtml from "../web/dist/index.html" with { type: "file" };   // replaced by plan 03's build; a placeholder until then
 
 const token = (file: string) => { if (!existsSync(file)) writeFileSync(file, Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"), { mode: 0o600 }); return readFileSync(file, "utf8").trim(); };
 export const VERSION = process.env.RELAY_VERSION ?? "dev";   // `bun build --define process.env.RELAY_VERSION="x.y.z"` stamps it into the binary
+type RuntimePeer = { start(): Promise<unknown>; stop(): void; socketPath: string };
+export type ServeDeps = { startServer: typeof startServer; recover: typeof recover; currentCliVersion: typeof currentCliVersion; createPeer: (onFrame: (frame: any) => void) => RuntimePeer; signals?: SignalSource; exit?: (code: number) => void };
+const defaultDeps: ServeDeps = { startServer, recover, currentCliVersion, createPeer: (onFrame) => new PeerServer("relay", crypto.randomUUID(), onFrame), signals: process, exit: (code) => process.exit(code) };
 export async function serve(opts: { runner?: AgentRunner; runClaude?: RunClaude } = {}) {
   ensureDirs(); const cfg = loadConfig();
   if (cfg.path_prepend.length) process.env.PATH = [...cfg.path_prepend, process.env.PATH ?? ""].join(":");   // launchd PATH lacks nvm/npm dirs; `claude` needs `node` for npm installs
   if (process.env.RELAY_SERVICE && existsSync(paths.serviceFailed) && readFileSync(paths.serviceFailed, "utf8").trim() === VERSION) {
     console.error("relay: the previous start failed — run `relay doctor`, then `brew services restart relay`"); process.exit(0);   // KeepAlive successful_exit:false → exit 0 stays down
   }
-  try { return await boot(cfg, opts); } catch (e) { log.error("boot failed", { e: String(e) }); if (process.env.RELAY_SERVICE) { writeFileSync(paths.serviceFailed, VERSION); process.exit(78); } throw e; }
+  try { return await boot(cfg, opts, defaultDeps); } catch (e) { log.error("boot failed", { e: String(e) }); if (process.env.RELAY_SERVICE) { writeFileSync(paths.serviceFailed, VERSION); process.exit(78); } throw e; }
 }
-async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRunner; runClaude?: RunClaude }) {
+export async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRunner; runClaude?: RunClaude }, deps: ServeDeps = defaultDeps) {
+  const runtime = new RuntimeLifecycle((e) => log.warn("runtime cleanup failed", { e: String(e) }));
+  const stop = () => runtime.stop();
+  // Install before the first awaited acquisition. launchd may stop Relay while peer startup or recovery is suspended.
+  runtime.add(installShutdownSignals(deps.signals ?? process, stop, deps.exit ?? ((code) => process.exit(code))));
+  try {
   if (process.env.ANTHROPIC_API_KEY) { log.warn("ANTHROPIC_API_KEY is set — removing it from the relay process environment (API billing guard)"); delete process.env.ANTHROPIC_API_KEY; }
   const tokens = { api: token(paths.apiToken), hook: token(paths.hookToken) }; const oauth = existsSync(paths.oauthToken) ? readFileSync(paths.oauthToken, "utf8").trim() : null;
   for (const f of [paths.apiToken, paths.hookToken, paths.oauthToken, paths.config, paths.db]) { try { if (existsSync(f)) chmodSync(f, 0o600); } catch {} }   // re-tighten modes every start (B8)
   for (const dir of [paths.home, paths.spool, paths.logDir]) { try { chmodSync(dir, 0o700); } catch {} }
-  const db = openDb(paths.db); const mig = migrate(db); log.info("db ready", mig);
+  const db = openDb(paths.db); runtime.add(() => db.close()); const mig = migrate(db); log.info("db ready", mig);
   setMeta(db, "recovering", "1");                                            // before the HTTP server opens: every hook buffers until reconcile is done
   let hub!: WsHub; let foreign: ForeignSessions | undefined;
   const evlog = new EventLog(db, (f) => hub.broadcast(f), cfg); hub = new WsHub(() => evlog, cfg, db, () => foreign?.list() ?? []);
@@ -52,7 +61,7 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   // Everything relay knows about the CLI was measured once, into capabilities.json. A `claude update` since then can
   // turn into quiet misbehaviour, so say so — but never block the boot and never re-probe: the probe spawns a real
   // background session and spends subscription usage, which is the user's call, not a service restart's.
-  const cliVersion = await currentCliVersion(cfg.claude_bin); const drift = versionDrift(caps.cli_version, cliVersion);
+  const cliVersion = await deps.currentCliVersion(cfg.claude_bin); const drift = versionDrift(caps.cli_version, cliVersion);
   setMeta(db, "cli_drift", driftWarns(drift) ? `${showVersion(caps.cli_version)} → ${showVersion(cliVersion)}` : "");
   if (driftWarns(drift)) log.warn("claude CLI version drift — capabilities.json was measured against another build and may no longer describe this CLI; `relay doctor --probe` re-checks the --bg --resume gate against it", { probed: caps.cli_version, current: cliVersion, drift });
   // Independent of the drift check above: that one asks whether this is the CLI we measured, this one whether the CLI
@@ -64,11 +73,11 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   if (!getMeta(db, "relay_instance_id")) setMeta(db, "relay_instance_id", crypto.randomUUID()); const instanceId = () => getMeta(db, "relay_instance_id")!;
   const maxAgents = () => Number(getMeta(db, "max_concurrent_agents") ?? cfg.max_concurrent_agents);
   const baseEnv = () => workerEnv({ taskUuid: "", port: cfg.port, hookToken: "", oauthToken: oauth, maxAgents: maxAgents() });
-  let peer: PeerServer | null = null; const fixture = loadPeerFixture();
+  let peer: RuntimePeer | null = null; const fixture = loadPeerFixture();
   // relay must LISTEN on the socket it advertises as `from`, or the workers' replies land in whatever other peer is
   // registered (exactly the bug that produced the first, wrong delivery matrix in Phase 0 ②).
   let onPeerFrame: (frame: any) => void = (frame) => log.warn("peer frame arrived before the services were wired", { frame });
-  if (caps.delivery === "socket" && fixture && !opts.runner) { peer = new PeerServer("relay", crypto.randomUUID(), (frame) => onPeerFrame(frame)); await peer.start(); }
+  if (caps.delivery === "socket" && fixture && !opts.runner) { peer = deps.createPeer((frame) => onPeerFrame(frame)); runtime.add(() => peer?.stop()); await peer.start(); }
   const runner = opts.runner ?? new NativeSessionRunner(baseEnv, { claudeBin: cfg.claude_bin, peer: peer && fixture ? { fixture, socketPath: peer.socketPath, sessionId: "relay" } : undefined });
   const permits = new PermitPool(db, evlog, maxAgents, { subagentPerTask: cfg.pool.subagent_parallel_per_task });
   let svc!: TaskService; const pendingPermissions = new Map<string, PendingPermission>();
@@ -101,12 +110,17 @@ async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: AgentRu
   svc.onToolUse = (t, promptId) => { if (usage.countToolCall(t.uuid, promptId)) { log.warn("tool-call cap hit — interrupting", { task: t.uuid }); svc.interrupt(t.uuid); } };
   svc.onNudge = () => { watchdog.tick().catch((e) => log.warn("watchdog", { e: String(e) })); };
   const ctx: AppContext = { db, cfg, log: evlog, hub, tokens, services: { ingestDeps: svc.ingestDeps, tasks: svc, outbox, scheduler, dispatcher, permits, pendingPermissions }, foreign, dashboardHtml: () => Bun.file(dashboardHtml as unknown as string).text() };
-  const http = startServer(ctx); log.info("listening", { port: cfg.port });
+  const http = deps.startServer(ctx); runtime.add(() => http.stop()); log.info("listening", { port: cfg.port });
   const spool = new Spool(paths.spool, () => svc.ingestDeps);
-  await recover({ db, log: evlog, runner, permits, outbox, dispatcher, scheduler, tasks: svc, spool, maxAgents, instanceId });
+  runtime.add(() => { for (const p of pendingPermissions.values()) p.resolve("deny"); });
+  await deps.recover({ db, log: evlog, runner, permits, outbox, dispatcher, scheduler, tasks: svc, spool, maxAgents, instanceId });
   const timers = [setInterval(() => idle.tick(), 60_000), setInterval(() => usage.tick(), 60_000), setInterval(() => watchdog.tick().catch((e) => log.warn("watchdog", { e: String(e) })), 5_000), setInterval(() => spool.drain().catch(() => {}), 30_000), setInterval(() => spool.sweep(7), 3600_000),
     setInterval(() => { try { log.info("retention", sweep(db, 90, evlog)); } catch (e) { log.warn("retention", { e: String(e) }); } }, 24 * 3600_000)];
-  const stop = () => { timers.forEach(clearInterval); for (const p of pendingPermissions.values()) p.resolve("deny"); http.stop(); peer?.stop(); db.close(); };   // never leave a worker waiting on a dead relay
-  process.on("SIGTERM", () => { stop(); process.exit(0); }); process.on("SIGINT", () => { stop(); process.exit(0); });
+  runtime.add(() => timers.forEach(clearInterval));
+  // stop denies pending permissions and releases every acquired resource exactly once.
   return { ctx, stop };
+  } catch (error) {
+    runtime.stop();
+    throw error;
+  }
 }

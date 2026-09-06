@@ -123,7 +123,22 @@ const msgs=$("#msgs");
 let followChat=true;
 msgs.addEventListener("scroll",()=>{followChat=msgs.scrollHeight-msgs.clientHeight-msgs.scrollTop<48});
 function scrollChat(force=false){if(force)followChat=true;if(followChat)msgs.scrollTop=msgs.scrollHeight}
-function chatUser(text){const bubble=el("div","m-user",text);bubble.setAttribute("aria-label","You: "+text);msgs.append(bubble);scrollChat(true)}
+function messageTime(at){
+  if(at==null)return null;
+  const date=at instanceof Date?at:new Date(at);
+  if(!Number.isFinite(date.getTime()))return null;
+  const time=el("time","m-time",new Intl.DateTimeFormat(undefined,{hour:"2-digit",minute:"2-digit",hour12:false}).format(date));
+  const full=new Intl.DateTimeFormat(undefined,{dateStyle:"medium",timeStyle:"medium"}).format(date);
+  time.dateTime=date.toISOString();time.title=full;time.setAttribute("aria-label",full);
+  return time;
+}
+function chatDaySeparator(at){
+  const date=at instanceof Date?at:new Date(at);if(!Number.isFinite(date.getTime()))return;
+  const day=new Intl.DateTimeFormat(undefined,{dateStyle:"medium"}).format(date);
+  const line=el("div","m-day-separator");line.setAttribute("role","separator");line.setAttribute("aria-label",day);
+  line.append(el("span","",day));msgs.append(line);
+}
+function chatUser(text,at){const bubble=el("div","m-user");bubble.setAttribute("aria-label","You: "+text);bubble.append(el("span","m-copy",text));const time=messageTime(at);if(time)bubble.append(time);msgs.append(bubble);scrollChat(true)}
 function chatNote(text){msgs.append(el("div","m-note",text));scrollChat()}
 function agentKey(t){return String(t.uuid||t.id)}
 function agentIdentity(t){
@@ -154,26 +169,26 @@ function messageSender(t){
   if(t)sender.append(ttagBtn(t));
   return sender;
 }
-function chatMsg(t,text){
+function chatMsg(t,text,at){
   const wrap=el("div","m-row");
   if(t){wrap.dataset.agent=agentKey(t);wrap.dataset.taskId=t.id}wrap.tabIndex=-1;
   wrap.append(messageSender(t));
-  wrap.append(inlineText(el("div","m-sys"),text));
-  msgs.append(wrap);scrollChat();
+  const bubble=inlineText(el("div","m-sys"),text),time=at==null?null:messageTime(at);if(time)bubble.append(time);
+  wrap.append(bubble);msgs.append(wrap);scrollChat();return wrap;
 }
-function chatQuestion(t){
+function chatQuestion(t,at){
   const wrap=el("div","m-row m-question");
   wrap.dataset.agent=agentKey(t);wrap.dataset.taskId=t.id;wrap.tabIndex=-1;
   wrap.append(messageSender(t));
   const card=el("div","m-question-card");
   card.setAttribute("role","group");card.setAttribute("aria-label","Agent question and answer options");
-  card.append(inlineText(el("div","m-sys"),t.question.q));
+  const question=inlineText(el("div","m-sys"),t.question.q),time=at==null?null:messageTime(at);if(time)question.append(time);card.append(question);
   const chips=el("div","m-chips");chips.dataset.task=t.id;
   t.question.chips.forEach(c=>{
     chips.append(questionOption(t,c));
   });
   card.append(chips);wrap.append(card);
-  msgs.append(wrap);scrollChat();
+  msgs.append(wrap);scrollChat();return wrap;
 }
 function jumpToRequest(r,taskId){
   if(!RZ.ch)togglePanel("ch");showChatPane("messages");

@@ -1,8 +1,8 @@
 {
-  "session_id": "05fb3ef6-abc3-44f5-a858-96c2c3ed5fbd",
-  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-v-question/05fb3ef6-abc3-44f5-a858-96c2c3ed5fbd.jsonl",
-  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-v-question",
-  "prompt_id": "fdb39eb0-7de0-48d9-9e2f-5ec40c0312a0",
+  "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "transcript_path": "/fixtures/transcripts/question.jsonl",
+  "cwd": "/workspace/sample/.claude/worktrees/task-question",
+  "prompt_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   "permission_mode": "auto",
   "agent_type": "relay-worker",
   "effort": {
@@ -10,7 +10,7 @@
   },
   "hook_event_name": "Stop",
   "stop_hook_active": false,
-  "last_assistant_message": "RELAY: question\n새 파일 이름을 a.txt와 b.txt 중 무엇으로 할까요?\n- a.txt\n- b.txt",
+  "last_assistant_message": "RELAY: question\nWhich example name should be used?\n- alpha.txt\n- beta.txt",
   "background_tasks": [],
   "session_crons": []
 }

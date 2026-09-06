@@ -1,8 +1,8 @@
 {
-  "session_id": "5958b747-c6f2-4fc1-9b1c-82e985d21b94",
-  "transcript_path": "/Users/dev-soon/.claude/projects/-Users-dev-soon-workspace-project-relay-wt-01spike-spikes-sandbox--claude-worktrees-relay-spike-v-done/5958b747-c6f2-4fc1-9b1c-82e985d21b94.jsonl",
-  "cwd": "/Users/dev-soon/workspace/project/relay-wt-01spike/spikes/sandbox/.claude/worktrees/relay-spike-v-done",
-  "prompt_id": "c4c2eb8a-2c20-41ce-8d18-4462ddfe3215",
+  "session_id": "99999999-9999-4999-8999-999999999999",
+  "transcript_path": "/fixtures/transcripts/done.jsonl",
+  "cwd": "/workspace/sample/.claude/worktrees/task-done",
+  "prompt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "permission_mode": "auto",
   "agent_type": "relay-worker",
   "effort": {
@@ -10,7 +10,7 @@
   },
   "hook_event_name": "Stop",
   "stop_hook_active": false,
-  "last_assistant_message": "RELAY: done\nCreated hello.txt with content 'hi' and committed it (10a1dcc); verified via git log showing the commit with hello.txt added.",
+  "last_assistant_message": "RELAY: done\nCreated example.txt and verified the expected result.",
   "background_tasks": [],
   "session_crons": []
 }

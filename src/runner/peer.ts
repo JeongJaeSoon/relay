@@ -4,13 +4,20 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SendOutcome } from "@shared/types.ts";
 import { paths } from "../config.ts";
+import bundledProtocol from "./protocol/claude-peer-v1.json";
 export type PeerFixture = { inbound: { lines: any[] }[]; ack?: { replies: any[] }[]; registry?: any };
 export type OutboundFrame = Record<string, unknown> & { msg_id?: string };
-/** Where the measured frame fixture may live: an explicit override, the relay home (`relay setup` copies it there), or a spike checkout. */
-export const peerFixturePaths = (): string[] => [process.env.RELAY_PEER_FIXTURE, join(paths.home, "peer-frames.json"), join(process.cwd(), "spikes", "fixtures", "peer-frames.json")].filter((p): p is string => !!p);
+/** Operator overrides precede the embedded template; delivery remains capability-gated. */
+export const peerFixturePaths = (): string[] => [process.env.RELAY_PEER_FIXTURE, join(paths.home, "peer-frames.json")].filter((p): p is string => !!p);
 export function loadPeerFixture(path?: string): PeerFixture | null {
-  const file = path ?? peerFixturePaths().find((p) => existsSync(p));
-  return file && existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as PeerFixture) : null;
+  const explicit = path ?? process.env.RELAY_PEER_FIXTURE;
+  const file = explicit ?? peerFixturePaths().find((p) => existsSync(p));
+  if (explicit && !existsSync(explicit)) throw new Error(`Peer protocol override does not exist: ${explicit}`);
+  if (!file) return structuredClone(bundledProtocol);
+  const fixture = JSON.parse(readFileSync(file, "utf8")) as PeerFixture;
+  if (!fixture?.inbound?.[0]?.lines?.some((line) => line && (line.text !== undefined || line.message !== undefined)))
+    throw new Error("Peer protocol override has no outbound frame template");
+  return fixture;
 }
 /** The CLI delivers a peer message to the worker's prompt inside this envelope (measured `socketInboundKeys`). */
 const wrap = (p: { text: string; fromSocket: string; fromName: string }) => `<cross-session-message from="uds:${p.fromSocket}" from-name="${p.fromName}" from-mode="prompting">\n${p.text}\n</cross-session-message>`;

@@ -12,17 +12,17 @@ test("agent install plan", () => { expect(planAgentInstall({ "relay-worker.md": 
 test("discoverRepos finds repos one and two levels down, and never descends into one", () => {
   const root = mkdtempSync(join(tmpdir(), "relay-disc-"));
   const mk = (p: string, git = false) => { mkdirSync(join(root, p), { recursive: true }); if (git) mkdirSync(join(root, p, ".git"), { recursive: true }); };
-  mk("semapad", true);                       // depth 1 repo
+  mk("sample-app", true);                    // depth 1 repo
   mk("project/relay", true);                 // depth 2 repo
-  mk("project/kollegium", true);
+  mk("project/beta-service", true);
   mk("project/plain");                       // not a repo
-  mk("semapad/vendor/inner", true);          // inside a repo: must not be reported
+  mk("sample-app/vendor/inner", true);       // inside a repo: must not be reported
   mk("node_modules/pkg", true);              // skipped by name
   mk(".hidden/repo", true);                  // skipped by name
   mk("a/b/c/deep", true);                    // deeper than maxDepth
 
   const found = discoverRepos(root).map((p) => p.slice(root.length + 1)).sort();
-  expect(found).toEqual(["project/kollegium", "project/relay", "semapad"]);
+  expect(found).toEqual(["project/beta-service", "project/relay", "sample-app"]);
 });
 
 // Gating the probe on the capabilities file merely existing meant `relay setup` after a `claude update` — the

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add persisted message timestamps and date boundaries; keep system/dispatcher sender identity as Relay.
+- Separate runtime resources, synthetic development servers, fixtures and opt-in operating probes.
+- Clean up partial startup resources in reverse order and verify the actual compiled binary in CI.
+- Replace personal test captures with synthetic contracts; archive dated QA/design material in Obsidian.
+- Require explicit live smoke opt-in, correlate accepted requests and session identities, and fail visibly when roster evidence is unavailable.
+
 - Keep message drafts and scoped Ask context on failed submission. Wait for acknowledgement and
   reuse the request ID on retry so a lost acknowledgement does not create a duplicate task.
 - Recover from failed or stalled initial snapshots, retry failed detail loads, and ignore late
@@ -12,7 +18,7 @@
   corrected detail placement, chat-container-aware request ledger and unobstructed graph controls.
 - Fit first-launch guidance below Gateway in both graph layouts so an empty session list does
   not overlap zoom controls or clip at narrow widths.
-- Record source-checkout QA, real Claude worker execution and its limits in `docs/QA-2026-09-05.md`.
+- Record source-checkout QA, real Claude worker execution and its limits in the Obsidian `Project/relay` QA archive.
 
 ## 0.1.4
 
@@ -32,7 +38,7 @@ checks an *installed* relay the way the repository's tests cannot.
 
 ### An installed-binary smoke test
 
-`scripts/smoke-installed.sh <project>` drives the brew binary and the launchd service through one
+`RELAY_LIVE_TESTS=1 bash test/live/smoke-installed.sh <registered-project-name>` drives the brew binary and the launchd service through one
 real task and writes a report under `~/.config/relay/smoke/`: `relay doctor`, CLI drift, one
 `relay send` into a registered project, the worker reaching a terminal state, hooks arriving,
 `close`, and what `claude agents --json --all` still holds afterwards.

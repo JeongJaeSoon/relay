@@ -1,14 +1,13 @@
 node_modules/
 dist/
-spikes/results/*.jsonl
-spikes/results/*.txt
-spikes/sandbox/
-spikes/scripts/10-bun-mcp/bun-app/dist/
 web/dist/*
 !web/dist/index.html
 *.db
 *.db-wal
 *.db-shm
-spikes/results/spool/
-spikes/results/dispatcher-cwd/
-spikes/results/launchd-auth.json
+
+# Local ownership and private operational captures
+.relay-owner
+test/artifacts/
+__pycache__/
+*.pyc
