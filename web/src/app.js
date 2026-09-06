@@ -1110,8 +1110,8 @@ function fmtKey(c){
 }
 function renderKeyHints(){
   const key=fmtKey(KEYS.palette);
-  $("#palBtn").title="Command palette ("+key+")";
-  $("#paletteHint").textContent="Use "+key+" for commands.";
+  $("#palBtn").title="Command palette"+(key?" ("+key+")":"");
+  $("#paletteHint").textContent=key?"Use "+key+" for commands.":"Open Command palette from the toolbar.";
 }
 renderKeyHints();
 function chatResize(d){RZ.chh=clampNum(RZ.chh+d,150,460);if(!RZ.ch)togglePanel("ch");applySizes();saveRZ()}

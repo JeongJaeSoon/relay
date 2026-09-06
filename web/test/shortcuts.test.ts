@@ -36,4 +36,8 @@ test("saved palette overrides remain active and appear in the shortcut hints", (
   expect(c.nodes["#palBtn"].title).toBe("Command palette (⌘⇧P)");
   expect(c.press("k", { metaKey: true })).toEqual({ opened: 0, prevented: false });
   expect(c.press("P", { metaKey: true, shiftKey: true })).toEqual({ opened: 1, prevented: true });
+  const disabled = shortcuts("MacIntel", { palette: "" });
+  expect(disabled.nodes["#palBtn"].title).toBe("Command palette");
+  expect(disabled.nodes["#paletteHint"].textContent).toBe("Open Command palette from the toolbar.");
+  expect(disabled.press("k", { metaKey: true })).toEqual({ opened: 0, prevented: false });
 });
