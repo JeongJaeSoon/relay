@@ -631,8 +631,8 @@ function clearSel(){
 $("#dClose").addEventListener("click",()=>clearSel());
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
-    if(PAL.open){closePalette();return}
-    if(kedEl.classList.contains("open")){closeKeysEd();return}
+    if(PAL.open){e.preventDefault();e.stopImmediatePropagation();closePalette();return}
+    if(kedEl.classList.contains("open")){e.preventDefault();e.stopImmediatePropagation();closeKeysEd();return}
     if(N.open||SET.open){N.open=false;SET.open=false;renderNotif();renderSettings()}
     else if(appEl.classList.contains("compact-sb-open")){closeCompactSidebar();syncOverlayAccess();$("#sidebarBtn").focus()}
     else clearSel();
@@ -1082,7 +1082,7 @@ applySizes();applyAlign();applyPanels();
 
 /* ================= shortcuts (customised as JSON) ================= */
 const KEY_DEFAULTS={
-  palette:"mod+shift+p",
+  palette:"mod+k",
   toggleSidebar:"mod+b",
   toggleDetail:"mod+alt+b",
   toggleChat:"mod+j",
@@ -1108,6 +1108,12 @@ function fmtKey(c){
   const M={mod:IS_MAC?"⌘":"Ctrl+",ctrl:"⌃",alt:"⌥",shift:"⇧",arrowup:"↑",arrowdown:"↓",arrowleft:"←",arrowright:"→"};
   return String(c).split("+").map(x=>M[x]||x.toUpperCase()).join("");
 }
+function renderKeyHints(){
+  const key=fmtKey(KEYS.palette);
+  $("#palBtn").title="Command palette"+(key?" ("+key+")":"");
+  $("#paletteHint").textContent=key?"Use "+key+" for commands.":"Open Command palette from the toolbar.";
+}
+renderKeyHints();
 function chatResize(d){RZ.chh=clampNum(RZ.chh+d,150,460);if(!RZ.ch)togglePanel("ch");applySizes();saveRZ()}
 document.addEventListener("keydown",e=>{
   if(matchKey(e,KEYS.palette)){e.preventDefault();togglePalette();return}
@@ -1162,7 +1168,7 @@ function openPalette(){
   palInput.value="";PAL.idx=0;renderPal();syncOverlayAccess();palInput.focus();
 }
 $("#palBtn").addEventListener("click",e=>{e.stopPropagation();togglePalette()});
-function closePalette(){PAL.open=false;palEl.classList.remove("open");syncOverlayAccess();restoreFocus(paletteOrigin,true)}
+function closePalette(returnToComposer=true){PAL.open=false;palEl.classList.remove("open");syncOverlayAccess();if(returnToComposer)focusComposer();else restoreFocus(paletteOrigin,true)}
 function renderPal(){
   const q=palInput.value.trim().toLowerCase();
   PAL.list=commands().filter(c=>!q||q.split(/\s+/).every(n=>c.t.toLowerCase().includes(n)));
@@ -1173,14 +1179,14 @@ function renderPal(){
     const it=el("div","pal-item"+(i===PAL.idx?" act":""));it.id="pal-"+i;it.setAttribute("role","option");it.setAttribute("aria-selected",i===PAL.idx?"true":"false");
     it.append(el("span",null,c.t));
     if(c.k)it.append(el("kbd",null,fmtKey(c.k)));
-    it.addEventListener("click",()=>runPal(c));
+    it.addEventListener("click",e=>{e.stopPropagation();runPal(c)});
     palList.append(it);
   });
   palInput.setAttribute("aria-activedescendant","pal-"+PAL.idx);
   const act=palList.querySelector(".act");
   if(act)act.scrollIntoView({block:"nearest"});
 }
-function runPal(c){closePalette();c.run()}
+function runPal(c){closePalette(false);c.run()}
 palInput.addEventListener("input",()=>{PAL.idx=0;renderPal()});
 palInput.addEventListener("keydown",e=>{
   if(e.key==="ArrowDown"){e.preventDefault();PAL.idx=Math.min(PAL.list.length-1,PAL.idx+1);renderPal()}
@@ -1192,16 +1198,14 @@ palEl.addEventListener("click",e=>{if(e.target===palEl)closePalette()});
 
 /* ================= shortcuts JSON editor ================= */
 const kedEl=$("#keysEd");
-let keysOrigin=null;
 function openKeysEd(){
-  keysOrigin=captureFocus();
   kedEl.classList.add("open");
   syncOverlayAccess();
   $("#kedText").value=JSON.stringify(KEYS,null,2);
   $("#kedErr").textContent="";
   $("#kedText").focus();
 }
-function closeKeysEd(){kedEl.classList.remove("open");syncOverlayAccess();restoreFocus(keysOrigin,true)}
+function closeKeysEd(){kedEl.classList.remove("open");syncOverlayAccess();focusComposer()}
 $("#keysBtn").addEventListener("click",()=>{SET.open=false;renderSettings();openKeysEd()});
 $("#kedSave").addEventListener("click",()=>{
   try{
@@ -1210,6 +1214,7 @@ $("#kedSave").addEventListener("click",()=>{
     if(bad.length)throw new Error("Unknown action: "+bad.join(", "));
     KEYS=Object.assign({},KEY_DEFAULTS,v);
     localStorage.setItem("relay-keys",JSON.stringify(KEYS));
+    renderKeyHints();
     closeKeysEd();
   }catch(err){$("#kedErr").textContent="Save failed: "+err.message}
 });
@@ -1279,7 +1284,8 @@ function showChatPane(pane){
 }
 $("#showMessages").addEventListener("click",()=>showChatPane("messages"));
 $("#showRequests").addEventListener("click",()=>showChatPane("requests"));
-$("#skipMessage").addEventListener("click",()=>{if(!RZ.ch)togglePanel("ch");showChatPane("messages");input.focus()});
+function focusComposer(){if(!RZ.ch)togglePanel("ch");showChatPane("messages");input.focus()}
+$("#skipMessage").addEventListener("click",focusComposer);
 $("#skipTasks").addEventListener("click",()=>{
   if(window.matchMedia("(max-width:640px)").matches){if(!appEl.classList.contains("compact-sb-open"))togglePanel("sb")}
   else {if(!RZ.sb)togglePanel("sb");if($("#sidebar").inert)clearSel()}

@@ -62,6 +62,8 @@ HTTP 왕복보다 빨리 끝내 재현이 레이스가 되므로, **fake db**에
 
 ## Results — 2026-08-31, Chrome, `bun scripts/dev-fake.ts`
 
+현재 Command palette 기본 단축키는 macOS `⌘K`, 그 외 환경은 `Ctrl+K`다. 저장된 사용자 지정 단축키는 유지되며 Settings → Shortcuts에서 변경하거나 Defaults로 새 기본값을 적용할 수 있다. 아래 표의 `⌘⇧P`는 검증 당시 단축키다.
+
 | # | 시나리오 | 결과 |
 |---|---|---|
 | 1 | `myapp auth 리팩토링 해줘` | PASS — ⏳ 접수 → 배지(new_task·normal·myapp·T-01) → 노드 슬라이드-인 → 실행 캡션(Read/Edit/Bash) → 완료 요약 + done 토스트 → 벨 보관함 |

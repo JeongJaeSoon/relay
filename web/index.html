@@ -681,7 +681,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
     <span class="conn" id="conn"><i></i><span id="connTxt">Connected</span></span>
     <div class="hdr-actions">
       <button id="sidebarBtn" class="icon-btn" aria-label="Toggle task list" aria-expanded="false" aria-controls="sidebar" title="Task list">☰</button>
-      <button id="palBtn" class="icon-btn" aria-label="Command palette" title="Command palette (⌘⇧P)">
+      <button id="palBtn" class="icon-btn" aria-label="Command palette" title="Command palette (⌘K)">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
       </button>
       <button id="notifBtn" class="icon-btn" aria-label="Notifications" title="Notifications">
@@ -711,7 +711,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
         <div id="emptyHint">
           <div class="big">Your tasks appear here</div>
           <div>Send a message below to start.</div>
-          <div>Use ⌘⇧P for commands.</div>
+          <div id="paletteHint">Use ⌘K for commands.</div>
         </div>
         <div id="nodes"></div>
       </div>
