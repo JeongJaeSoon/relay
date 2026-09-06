@@ -18,7 +18,7 @@ export type AnswerKind = "answer" | "summary" | "question" | "error";
 export interface RequestRow {
   id: string; text: string; createdAt: number; source: MessageSource;
   disposition: Disposition; dispositionLabel: string;
-  taskUuid: string | null; taskId: string | null; taskIds: string[]; taskStatus: TaskStatus | null;
+  taskUuid: string | null; taskId: string | null; taskIds: string[]; taskUuids?: string[]; taskStatus: TaskStatus | null;
   state: string; st: StKey; bucket: Bucket;
   answer: string | null; answerKind: AnswerKind | null;
   actions: RequestAction[];
@@ -239,10 +239,13 @@ export function requestRows(messages: Message[], tasks: Record<string, Task>): R
     const task = lead(all) ?? first;
     const d = dispositionOf(m); const taskId = task?.display_id ?? null;
     const taskIds = own.length ? m.dispatch_json!.task_ids! : taskId ? [taskId] : [];
+    // A retained message can outlive its task in the snapshot. Keep its UUID even
+    // when there is no display ID; split siblings are resolved only where known.
+    const taskUuids = [...new Set([...(m.task_uuid ? [m.task_uuid] : []), ...all.map(t => t.uuid)])];
     rows.push({
       id: m.id, text: plain(m), createdAt: m.created_at, source: m.source,
       disposition: d, dispositionLabel: labelOf(d, taskId),
-      taskUuid: m.task_uuid, taskId, taskIds, taskStatus: task?.status ?? null,
+      taskUuid: m.task_uuid, taskId, taskIds, taskUuids, taskStatus: task?.status ?? null,
       ...stateOf(d, m, task), bucket: bucketOf(d, m, task),
       ...answerOf(d, m, task, replies.get(m.id) ?? null, outcome), actions: actionsOf(d, task),
     });

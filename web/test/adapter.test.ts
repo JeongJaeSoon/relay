@@ -88,7 +88,7 @@ test("toDemoForeign names a session by what is knowable, in that order: roster n
 // carries the question text. #24 fixed this and its own second commit undid it (the test below only pinned
 // toDemoTask, not the branch), so the branch is now a function this test calls directly.
 test("a question row whose task has moved on does not take the render down with it", () => {
-  const row = { role: "question" } as any;
+  const row = { role: "question", created_at: 2 } as any;
   const waiting = toDemoTask(base("u1", "waiting_input", { question: { text: "a?", options: ["x"], asked_at: 1, source: "marker" } }), ctx) as any;
   const answered = toDemoTask(base("u1", "running", { question: null }), ctx) as any;
   expect(answered.question).toBeNull();

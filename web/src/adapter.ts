@@ -6,7 +6,7 @@ import { stKey, stLabel, type StKey } from "./consts.ts";
 import { requestRows } from "./ledger.ts";
 import { diffNotifs, type NotifKind } from "./notify.ts";
 import { store } from "./store.ts";
-export interface DemoTaskCore { cleanup: boolean; id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { key?: string; q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
+export interface DemoTaskCore { cleanup: boolean; id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { key?: string; askedAt?: number; q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
 export interface DemoEvent { id: number; at: Date; txt: string; payload: string | null }
 /** What the demo engine holds in S.tasks: the server-derived core plus the engine's own fields (layout position, timeline) that survive updates. */
 export type DemoTask = DemoTaskCore & { events: DemoEvent[]; timers: unknown[]; x: number; y: number };
@@ -19,7 +19,7 @@ export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
   const parent = t.parent_uuid ? ctx.tasks[t.parent_uuid] : null;
   return { cleanup: !!t.cleanup_pending, id: t.display_id, uuid: t.uuid, num: t.num, title: t.title, project: ctx.projects.find((p) => p.id === t.project_id)?.name ?? t.project_id, size: t.size, status: stKey(t.status), statusLabel: stLabel(t.status),
     step: t.status === "waiting_input" && t.question ? `❓ ${t.question.text}` : t.status === "queued" ? "Waiting for an agent slot" : TERMINAL.has(t.status) && t.last_summary ? t.last_summary : t.last_step ?? t.last_summary ?? "", startedAt: t.started_at ? new Date(t.started_at) : null, endedAt: t.ended_at ? new Date(t.ended_at) : null,
-    question: t.status === "waiting_input" && t.question ? { key: JSON.stringify([t.question.asked_at, t.question.source, t.question.permission_tool_use_id ?? null]), q: t.question.text, chips: t.question.options.length ? t.question.options : ["OK"] } : null,
+    question: t.status === "waiting_input" && t.question ? { key: JSON.stringify([t.question.asked_at, t.question.source, t.question.permission_tool_use_id ?? null]), askedAt: t.question.asked_at, q: t.question.text, chips: t.question.options.length ? t.question.options : ["OK"] } : null,
     sub: !!t.parent_uuid, parent: parent?.display_id ?? null, children: Object.values(ctx.tasks).filter((c) => c.parent_uuid === t.uuid && c.status !== "closed").sort((a, b) => a.num - b.num).map((c) => c.display_id),
     sid: t.short_id ?? "—", proc: t.process_state === "alive" ? (t.turn_state === "busy" ? "running" : "idle") : PROC[t.process_state] ?? t.process_state, gen: t.process_generation, attached: t.attach_state !== "none" ? t.attached_by : null,
     worktree: t.worktree_path, branch: t.branch ?? `relay-${t.uuid.replace(/-/g, "").slice(0, 8)}`, queuedAt: t.queued_at ?? 0, qhead: t.qhead, paused: t.paused, model: t.model.replace("claude-", ""), effort: t.effort, agentType: t.agent_type, bornAt: t.created_at, tags: [], pending: null, msgUntil: 0 };
@@ -94,7 +94,11 @@ const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label
  *  The row outlives the question (it stays in the snapshot after the task answers) while toDemoTask fills `question` only
  *  while the task is waiting, and chatQuestion reads `t.question.q`. Checking only that the task exists is the shape that
  *  took the whole sync() down on reload (#24) — and came back once already, so the branch now lives here, where a test can reach it. */
-export const promotedQuestionTask = (m: Pick<Message, "role">, task: DemoTask | undefined): DemoTask | null => (m.role === "question" && task?.question ? task : null);
+// Promotion is timestamp-gated: chatFor adds task labels/options to the body, so text
+// equality cannot identify the occurrence. Both marker and permission producers record
+// asked_at before creating the chat row. Older rows must retain their original text.
+export const promotedQuestionTask = (m: Pick<Message, "role" | "created_at">, task: DemoTask | undefined): DemoTask | null =>
+  m.role === "question" && task?.question && task.question.askedAt != null && m.created_at >= task.question.askedAt ? task : null;
 /** Successful detail loads are cached; a failed request can be selected again without evicting a newer load. */
 export function createDetailLoader<T>(fetchDetail: (uuid: string) => Promise<T>) {
   let selected: { uuid: string } | null = null;
@@ -164,10 +168,13 @@ export function installAdapter() {
       if (isDispatcherBadgeRow(m)) { drawn.add(id); continue; }                   // the badge chips under the user message already say this
       if (drawn.has(id)) { const old = badgeRows.get(id); if (old && m.role === "user") { const fresh = badgeRow(m); old.replaceWith(fresh); badgeRows.set(id, fresh); } continue; }
       drawn.add(id); const task = demoOf(m.task_uuid);
-      if (m.role === "user") { D.chatUser(plain(m)); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
+      // Snapshots retain recent messages after old archived tasks disappear. Preserve
+      // sender identity without inventing a live task or offering task controls.
+      const sender = task ?? (m.task_uuid ? { uuid: m.task_uuid, id: m.task_uuid.slice(0, 8), title: "Historical session", history: true } : null);
+      if (m.role === "user") { D.chatUser(plain(m)); const wrap = D.el("div", "m-receipt"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
       else if (promotedQuestionTask(m, task)) D.chatQuestion(task!);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
-      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(task ?? null, m.text); }
-      else D.chatMsg(task ?? null, m.text);                                    // worker_summary | error | dispatcher_answer
+      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(sender, m.text); }
+      else D.chatMsg(sender, m.text);                                    // worker_summary | error | dispatcher_answer
     }
     D.scrollChat?.();
   };
@@ -193,7 +200,8 @@ export function installAdapter() {
       restoreSelection = false;
       const saved = sessionStorage.getItem(selectionKey);
       const task = saved ? demoOf(saved) : null;
-      if (task) D.select(task.id); else sessionStorage.removeItem(selectionKey);
+      // Restore navigation context without opening detail or moving keyboard focus.
+      if (task) { S.sel = task.id; D.refresh(); } else sessionStorage.removeItem(selectionKey);
     }
   };
   store.subscribe((f) => {

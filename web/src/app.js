@@ -47,8 +47,8 @@ const Theme={
 Theme.init();
 
 /* ================= state ================= */
-const ROW_H=128, SUB_ROW=102, COL_TASK=312, COL_SUB=596, ROW_Y0=40;
-const COL_FOREIGN=900, NODE_GAP=18; /* outside sessions have no gateway edge; measured heights keep the cards apart */
+const ROW_H=128, SUB_ROW=102, COL_TASK=360, COL_SUB=760, ROW_Y0=40;
+const COL_FOREIGN=1120, NODE_GAP=18; /* outside sessions have no gateway edge; measured heights keep the cards apart */
 const S={tasks:new Map(),foreign:new Map(),sel:null,fsel:null,maxw:10, /* default 10, no hard cap — going over is a soft warning */autofit:true,reduce:false,layout:"tree",paused:false,usage:0,conn:"ok"};
 const STATUS_LABEL={run:"Running",wait:"Needs input",queue:"Queued",done:"Done",err:"Error",cancelled:"Cancelled",closed:"Archived"};
 function taskStateLabel(t){return t.statusLabel||STATUS_LABEL[t.status]||"Unknown"}
@@ -120,33 +120,81 @@ const graphTasks=()=>tasksArr().filter(graphTaskVisible);
 
 /* ================= chat ================= */
 const msgs=$("#msgs");
-function scrollChat(){msgs.scrollTop=msgs.scrollHeight}
-function chatUser(text){msgs.append(el("div","m-user",text));scrollChat()}
+let followChat=true;
+msgs.addEventListener("scroll",()=>{followChat=msgs.scrollHeight-msgs.clientHeight-msgs.scrollTop<48});
+function scrollChat(force=false){if(force)followChat=true;if(followChat)msgs.scrollTop=msgs.scrollHeight}
+function chatUser(text){const bubble=el("div","m-user",text);bubble.setAttribute("aria-label","You: "+text);msgs.append(bubble);scrollChat(true)}
 function chatNote(text){msgs.append(el("div","m-note",text));scrollChat()}
-function ttagBtn(t){
-  const b=el("button","ttag st-"+t.status,t.id);
-  b.addEventListener("click",()=>{select(t.id);centerOn(t)});
+function agentKey(t){return String(t.uuid||t.id)}
+function agentIdentity(t){
+  let hash=2166136261;
+  for(const char of agentKey(t)){hash=Math.imul(hash^char.charCodeAt(0),16777619)>>>0}
+  // Stable avatars match across the graph, requests and historical messages.
+  // Keep the task ID alongside them: avatars may repeat in a large workspace.
+  const avatars=["🦊","🐼","🐨","🐯","🐸","🐙","🐳","🐧","🦉","🐝","🦋","🐢","🐬","🦜","🦔","🐿️","🌻","🌵","🍀","🍄","🌷","🌲","🍋","🍒"];
+  return {symbol:avatars[hash%avatars.length],hue:Math.floor(hash/avatars.length)%8*45};
+}
+function agentMark(t){
+  const identity=agentIdentity(t),mark=el("span","agent-mark",identity.symbol);
+  mark.style.setProperty("--agent-hue",identity.hue);mark.setAttribute("aria-hidden","true");
+  return mark;
+}
+function ttagBtn(t,onClick){
+  const b=el(t.history&&!onClick?"span":"button","ttag agent-tag");
+  b.style.setProperty("--agent-hue",agentIdentity(t).hue);
+  b.append(agentMark(t),el("span","agent-id",t.id));b.title=t.id+(t.title?" · "+t.title:"");
+  b.setAttribute("aria-label",b.title);
+  if(t.history&&!onClick)return b;
+  if(onClick){b.title="View messages · "+b.title;b.setAttribute("aria-label",b.title);b.setAttribute("aria-controls","msgs")}
+  b.addEventListener("click",()=>{if(onClick)onClick();else{select(t.id);centerOn(t)}});
   return b;
+}
+function messageSender(t){
+  const sender=el("div","m-sender",t?"":"Relay");
+  if(t)sender.append(ttagBtn(t));
+  return sender;
 }
 function chatMsg(t,text){
   const wrap=el("div","m-row");
-  if(t)wrap.append(ttagBtn(t));
+  if(t){wrap.dataset.agent=agentKey(t);wrap.dataset.taskId=t.id}wrap.tabIndex=-1;
+  wrap.append(messageSender(t));
   wrap.append(inlineText(el("div","m-sys"),text));
   msgs.append(wrap);scrollChat();
 }
 function chatQuestion(t){
-  const wrap=el("div","m-row");
-  wrap.append(ttagBtn(t));
-  wrap.append(inlineText(el("div","m-sys"),t.question.q));
+  const wrap=el("div","m-row m-question");
+  wrap.dataset.agent=agentKey(t);wrap.dataset.taskId=t.id;wrap.tabIndex=-1;
+  wrap.append(messageSender(t));
+  const card=el("div","m-question-card");
+  card.setAttribute("role","group");card.setAttribute("aria-label","Agent question and answer options");
+  card.append(inlineText(el("div","m-sys"),t.question.q));
   const chips=el("div","m-chips");chips.dataset.task=t.id;
   t.question.chips.forEach(c=>{
     chips.append(questionOption(t,c));
   });
-  wrap.append(chips);
+  card.append(chips);wrap.append(card);
   msgs.append(wrap);scrollChat();
 }
+function jumpToRequest(r,taskId){
+  if(!RZ.ch)togglePanel("ch");showChatPane("messages");
+  const ids=taskId?[taskId]:r.taskIds.length?r.taskIds:[r.taskId].filter(Boolean);
+  const keys=new Set(ids.map(id=>S.tasks.get(id)).filter(Boolean).map(agentKey));
+  if(!taskId)(r.taskUuids||[]).forEach(uuid=>keys.add(uuid));
+  const candidates=[...msgs.querySelectorAll(".m-row")];
+  const target=candidates.reverse().find(n=>ids.length||keys.size
+    ?keys.has(n.dataset.agent)||ids.some(id=>!S.tasks.has(id)&&n.dataset.taskId===id)
+    :r.answer&&n.querySelector(".m-sys")?.textContent===r.answer);
+  const status=$("#conversationStatus");status.hidden=!!target;
+  status.textContent=target?"":"No messages from this agent yet.";
+  msgs.querySelectorAll(".jump-target").forEach(n=>n.classList.remove("jump-target"));
+  if(!target){status.focus();return}
+  followChat=false;
+  target.classList.add("jump-target");target.focus({preventScroll:true});
+  target.scrollIntoView({behavior:"instant",block:"center"});
+  setTimeout(()=>target.classList.remove("jump-target"),2200);
+}
 
-/* ================= request ledger (the rail right of the chat) =================
+/* ================= request ledger (collapsible sidebar section) =================
    Rows come from requestRows() in web/src/ledger.ts. This only draws that pure result and attaches the action buttons. */
 const LEDGER=[];                                                                          /* filled by the adapter, needs-you first */
 let ledgerFilter="open";                                                                  /* open = only requests not yet settled, all = everything */
@@ -159,20 +207,24 @@ const LEDGER_ACTS={
 function ledgerRowEl(r){
   const row=el("div","lg-row"+(r.bucket==="needs_you"?" attn":""));
   const text=el("button","lg-msg",r.text);text.title=r.text;text.dataset.focusKey="request:"+r.id;
+  text.setAttribute("aria-controls","msgs");
   row.dataset.request=r.id;
+  row.addEventListener("click",e=>{if(!e.target.closest("button,a,input,textarea,summary"))jumpToRequest(r)});
   if(expandedRequests.has(r.id))row.classList.add("open");
-  text.setAttribute("aria-expanded",String(expandedRequests.has(r.id)));
-  text.addEventListener("click",()=>{
-    const open=row.classList.toggle("open");text.setAttribute("aria-expanded",String(open));
-    if(open)expandedRequests.add(r.id);else expandedRequests.delete(r.id);
-  });
+  text.title="View agent messages · "+r.text;
+  text.addEventListener("click",()=>jumpToRequest(r));
   row.append(text);
   const st=el("div","lg-st");
   const pill=el("span","pill st-"+r.st+(r.disposition==="deciding"?" pulse":""));
   pill.append(el("i","dot"),el("span",null,r.state));
   st.append(pill,el("span","lg-disp",r.dispositionLabel));
   const t=r.taskId?S.tasks.get(r.taskId):null;
-  r.taskIds.forEach(id=>{const tt=S.tasks.get(id);if(tt)st.append(ttagBtn(tt))});                 /* a split made several — name every one */
+  r.taskIds.forEach(id=>{const tt=S.tasks.get(id);if(tt)st.append(ttagBtn(tt,()=>jumpToRequest(r,id)))}); /* split requests can navigate to each agent */
+  const known=new Set(r.taskIds.map(id=>S.tasks.get(id)).filter(Boolean).map(agentKey));
+  (r.taskUuids||[]).filter(uuid=>!known.has(uuid)).forEach(uuid=>{
+    const past={uuid,id:uuid.slice(0,8),title:"Historical session",history:true};
+    st.append(ttagBtn(past,()=>jumpToRequest({...r,taskIds:[],taskId:null,taskUuids:[uuid]})));
+  });
   if(r.source!=="user")st.append(el("span","lg-src",r.source));
   row.append(st);
   if(r.answer)row.append(inlineText(el("div","lg-ans "+(r.answerKind||"")),r.answer));
@@ -186,15 +238,18 @@ function ledgerRowEl(r){
     const b=el("button","chip",spec.label);b.addEventListener("click",()=>spec.run(r));acts.append(b);
   });
   if(acts.childElementCount)row.append(acts);
+  const expand=el("button","lg-expand",expandedRequests.has(r.id)?"Less":"More");
+  expand.setAttribute("aria-label","Expand request: "+r.text);expand.setAttribute("aria-expanded",String(expandedRequests.has(r.id)));
+  expand.addEventListener("click",()=>{const open=row.classList.toggle("open");expand.textContent=open?"Less":"More";expand.setAttribute("aria-expanded",String(open));if(open)expandedRequests.add(r.id);else expandedRequests.delete(r.id)});
+  row.append(expand);
   return row;
 }
 function renderLedger(){
   const list=$("#lgList");if(!list)return;
+  const scrollTop=list.scrollTop;
   const focused=captureFocus();
   const attn=LEDGER.filter(r=>r.bucket==="needs_you").length;
-  const count=$("#lgCount");count.hidden=!attn;count.textContent=attn+" need"+(attn===1?"s":"")+" you";
-  const requestsTab=$("#showRequests");
-  if(requestsTab){requestsTab.textContent="Requests"+(attn?" · "+count.textContent:"")}
+  const count=$("#lgCount");count.hidden=!attn;count.textContent=String(attn);count.setAttribute("aria-label",attn+" requests need your attention");
   document.querySelectorAll("#segLedger button").forEach(b=>{b.classList.toggle("on",b.dataset.f===ledgerFilter);b.setAttribute("aria-pressed",String(b.dataset.f===ledgerFilter))});
   const rows=ledgerFilter==="all"?LEDGER:LEDGER.filter(r=>r.bucket!=="settled");
   list.textContent="";
@@ -210,6 +265,7 @@ function renderLedger(){
     return;
   }
   rows.forEach(r=>list.append(ledgerRowEl(r)));
+  list.scrollTop=scrollTop;
   restoreFocus(focused,true);
 }
 function setLedgerFilter(f){ledgerFilter=f;renderLedger()}
@@ -270,7 +326,8 @@ function layout(){
   /* queue lane: a FIFO stack below the gateway */
   const laneX=parseFloat(gwEl.style.left)||32;
   const laneY0=(parseFloat(gwEl.style.top)||ROW_Y0)+gwEl.offsetHeight+40;
-  queued.forEach((t,i)=>{t.x=laneX;t.y=laneY0+i*76});
+  let queueY=laneY0;
+  queued.forEach(t=>{t.x=laneX;t.y=queueY;queueY+=Math.max(76,height(t)+NODE_GAP)});
   const ll=document.getElementById("laneLabel");
   ll.style.display=queued.length?"block":"none";
   ll.style.left=(laneX+34)+"px";ll.style.top=(laneY0-19)+"px";
@@ -281,6 +338,15 @@ function layout(){
   const fl=document.getElementById("foreignLabel");
   fl.style.display=fs.length?"block":"none";
   fl.style.left=COL_FOREIGN+"px";fl.style.top=(ROW_Y0-19)+"px";
+}
+function bindNodeFocus(node,center){
+  // Pointer focus occurs before click: moving the card here loses the click target.
+  let pointerFocus=false;
+  node.addEventListener("pointerdown",()=>{pointerFocus=true});
+  node.addEventListener("pointerup",()=>{pointerFocus=false});
+  node.addEventListener("pointercancel",()=>{pointerFocus=false});
+  node.addEventListener("blur",()=>{pointerFocus=false});
+  node.addEventListener("focus",()=>{if(!pointerFocus)center()});
 }
 function nodeEl(t){
   let n=document.getElementById("node-"+t.id);
@@ -293,7 +359,7 @@ function nodeEl(t){
     foot.append(el("span","n-elapsed mono"),el("span","br mono"));
     n.append(foot);
     n.addEventListener("click",e=>{e.stopPropagation();select(t.id)});
-    n.addEventListener("focus",()=>centerOn(t));
+    bindNodeFocus(n,()=>centerOn(t));
     n.addEventListener("keydown",e=>{
       if(e.key==="Enter"||e.key===" "){e.preventDefault();select(t.id)}
     });
@@ -330,6 +396,7 @@ function renderNodes(){
     n.querySelector(".n-meta").textContent=t.sub
       ?t.id+" · sub"
       :t.id+" · "+t.project+" · "+t.size;
+    n.querySelector(".n-meta").prepend(agentMark(t));
     n.querySelector(".n-step").textContent=t.step;
     n.querySelector(".n-elapsed").textContent=elapsedText(t);
     n.querySelector(".br").textContent=t.sub?"":t.branch||"";
@@ -357,7 +424,7 @@ function foreignEl(f){
     const foot=el("div","n-foot");foot.append(el("span","n-elapsed mono"),el("span","br","watching only"));
     n.append(foot);
     n.addEventListener("click",e=>{e.stopPropagation();selectForeign(f.key)});
-    n.addEventListener("focus",()=>centerOnBox(f));
+    bindNodeFocus(n,()=>centerOnBox(f));
     n.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();selectForeign(f.key)}});
     nodesBox.append(n);
   }
@@ -447,15 +514,25 @@ const GROUPS=[
   {label:"Queued",match:t=>t.status==="queue"},
   {label:"Done · Archived",match:t=>t.status==="done"||t.status==="closed"},
 ];
+function renderHeaderSummary(){
+  const host=$("#headerSummary");if(!host)return;
+  const overSoft=S.dailyCeiling!=null&&S.usage>S.dailyCeiling*.8;
+  const agents="Agents "+runningCount()+"/"+S.maxw;
+  const queue="queued "+tasksArr().filter(t=>t.status==="queue").length;
+  const usage="Today ≈ "+Math.round(S.usage/1000)+"k tok (est.)";
+  const paused=S.paused?" · ⏸ paused":"";
+  const warning=overSoft?" · over the soft limit":"";
+  host.classList.toggle("warn",overSoft);
+  const summary=host.querySelector("summary");summary.textContent="";
+  summary.append(el("b","header-summary-agents",agents),el("span","header-summary-extra"," · "+queue+" · "+usage),el("span","header-summary-state",(S.paused?"⏸ paused":"")+(overSoft?" ⚠":"")),el("span","header-summary-chevron","⌄"));
+  summary.setAttribute("aria-label",agents+" · "+queue+" · "+usage+paused+warning+". Show activity details");
+  host.querySelector(".header-summary-panel").textContent=agents+" · "+queue+paused+"\n"+usage+warning;
+}
 function renderSidebar(){
   const focused=captureFocus();
   const fam=famOf(S.sel);
   const sb=$("#sidebar"),st=sb.scrollTop;sb.textContent="";
-  const overSoft=S.dailyCeiling!=null&&S.usage>S.dailyCeiling*.8;   // no ceiling configured means no limit to be over — the old 1e6 default invented one and warned forever
-  const pool=el("div","pool"+(overSoft?" warn":""));
-  const r1=el("div");r1.append(el("b",null,"Agents "+runningCount()+"/"+S.maxw),el("span",null," · queued "+tasksArr().filter(t=>t.status==="queue").length+(S.paused?" · ⏸ paused":"")));
-  const r2=el("div");r2.append(el("span",null,"Today ≈ "),el("b",null,Math.round(S.usage/1000)+"k tok"),el("span",null," (est.)"+(overSoft?" · over the soft limit":"")));
-  pool.append(r1,r2);sb.append(pool);
+  renderHeaderSummary();
   GROUPS.forEach(g=>{
     const list=tasksArr().filter(t=>!t.sub&&g.match(t));
     const box=el("div","group");
@@ -473,7 +550,7 @@ function renderSidebar(){
       txt.append(el("div","tt",t.title));
       const meta=el("div","s-meta");
       const time=el("span","s-elapsed mono",elapsedText(t)||"—");time.dataset.el=t.id;
-      meta.append(stateBadge(taskStateLabel(t),"st-"+t.status),el("span","s-id mono",t.id),time);
+      meta.append(stateBadge(taskStateLabel(t),"st-"+t.status),agentMark(t),el("span","s-id mono",t.id),time);
       txt.append(meta,locationLabel(t.project,"repository"));
       it.append(txt);
       it.addEventListener("click",()=>{select(t.id);centerOn(t)});
@@ -623,11 +700,11 @@ function famOf(id){ /* a unit of work = the top-level task plus its subagents */
   const s=new Set();const t=id&&S.tasks.get(id);if(!graphTaskVisible(t))return s;
   const r=(t.sub&&S.tasks.get(t.parent))||t;s.add(r.id);r.children.forEach(c=>s.add(c));return s;
 }
-function select(id){selectionOrigin=captureFocus();S.sel=id;S.fsel=null;closeCompactSidebar();refresh();focusDetail()}
-function selectForeign(key){selectionOrigin=captureFocus();S.fsel=key;S.sel=null;closeCompactSidebar();refresh();focusDetail()}
+function select(id){selectionOrigin=captureFocus();S.sel=id;S.fsel=null;RZ.dt=true;closeCompactSidebar();applyPanels();refresh();focusDetail()}
+function selectForeign(key){selectionOrigin=captureFocus();S.fsel=key;S.sel=null;RZ.dt=true;closeCompactSidebar();applyPanels();refresh();focusDetail()}
 function clearSel(){
   const returnFocus=!!document.activeElement?.closest("#detail");
-  S.sel=null;S.fsel=null;refresh();
+  S.sel=null;S.fsel=null;RZ.dt=false;applyPanels();refresh();
   if(returnFocus)restoreFocus(selectionOrigin,true);
 }
 $("#dClose").addEventListener("click",()=>clearSel());
@@ -827,7 +904,8 @@ function syncOverlayAccess(){
   const sidebarOpen=compact&&appEl.classList.contains("compact-sb-open");
   const detailOpen=window.matchMedia("(max-width:980px)").matches&&$("#detail").classList.contains("open")&&!appEl.classList.contains("hide-dt")&&!sidebarOpen;
   $("#canvas").inert=sidebarOpen||detailOpen;
-  $("#sidebar").inert=detailOpen;
+  $("#sidebar").inert=false;
+  $(".chat").inert=sidebarOpen;
   $("#detail").inert=sidebarOpen;
 }
 function refresh(){
@@ -990,7 +1068,6 @@ function renderSettings(){
   if(closing)$("#gearBtn").focus();else if(opening)$("#settings").focus();
   document.querySelectorAll("#segTheme button").forEach(b=>{b.classList.toggle("on",b.dataset.m===Theme.mode);b.setAttribute("aria-pressed",String(b.dataset.m===Theme.mode))});
   document.querySelectorAll("#segLayout button").forEach(b=>{b.classList.toggle("on",b.dataset.l===S.layout);b.setAttribute("aria-pressed",String(b.dataset.l===S.layout))});
-  document.querySelectorAll("#segAlign button").forEach(b=>{b.classList.toggle("on",b.dataset.a===RZ.align);b.setAttribute("aria-pressed",String(b.dataset.a===RZ.align))});
   $("#maxwVal").textContent=String(S.maxw);
   const mh=$("#maxwHint");mh.textContent=S.maxw>10?"⚠ over the default":"";mh.title=S.maxw>10?"Above the default of 10 — watch for a spike in subscription usage":""; /* stays one line; the detail goes in the tooltip */
   $("#setAutofit").checked=S.autofit;
@@ -1038,11 +1115,13 @@ $("#setReduce").addEventListener("change",e=>{
   renderSettings();
 });
 
-/* ================= layout shell (VSCode style): resize, alignment, panel toggles ================= */
+/* ================= layout shell (VSCode style): resize and panel toggles ================= */
 const RZ=Object.assign(
-  {sbw:248,dw:296,chh:null,align:"justify",sb:true,dt:true,ch:true},
+  {sbw:350,dw:296,chh:null,rqh:300,rqOpen:true,sb:true,dt:false,ch:true},
   JSON.parse(localStorage.getItem("relay-sizes")||"{}")
 );
+delete RZ.align;
+RZ.dt=false; // Detail visibility is transient: a fresh page starts with the graph expanded.
 const clampNum=(v,a,b)=>Math.max(a,Math.min(b,v));
 const appEl=document.getElementById("app");
 function saveRZ(){localStorage.setItem("relay-sizes",JSON.stringify(RZ))}
@@ -1055,15 +1134,20 @@ function dockHeight(){
 function applySizes(){
   const st=document.documentElement.style;
   st.setProperty("--sbw",RZ.sbw+"px");
+  const requestMax=Math.max(120,document.documentElement.clientHeight-168);
+  const requestHeight=clampNum(RZ.rqh,120,requestMax);
+  st.setProperty("--request-height",requestHeight+"px");
+  const requestHandle=$(".rz-requests");
+  requestHandle.setAttribute("aria-valuemin","120");requestHandle.setAttribute("aria-valuemax",String(requestMax));requestHandle.setAttribute("aria-valuenow",String(Math.round(requestHeight)));
   st.setProperty("--dw",RZ.dw+"px");
   st.setProperty("--chh",dockHeight()+"px");
   updateMinimap();
 }
-function applyAlign(){
-  appEl.classList.remove("pa-left","pa-right","pa-center");
-  if(RZ.align!=="justify")appEl.classList.add("pa-"+RZ.align);
-  updateMinimap();
+function applyRequests(){
+  $("#ledger").classList.toggle("collapsed",!RZ.rqOpen);
+  $("#requestsToggle").setAttribute("aria-expanded",String(RZ.rqOpen));
 }
+$("#requestsToggle").addEventListener("click",()=>{RZ.rqOpen=!RZ.rqOpen;applyRequests();saveRZ()});
 function applyPanels(){
   const focused=captureFocus();
   appEl.classList.toggle("hide-sb",!RZ.sb);
@@ -1075,6 +1159,7 @@ function applyPanels(){
 }
 function closeCompactSidebar(){appEl.classList.remove("compact-sb-open");$("#sidebarBtn").setAttribute("aria-expanded","false")}
 function togglePanel(which){
+  if(which==="dt"&&!S.sel&&!S.fsel)return;
   if(which==="sb"&&window.matchMedia("(max-width:640px)").matches){
     const open=appEl.classList.toggle("compact-sb-open");$("#sidebarBtn").setAttribute("aria-expanded",String(open));syncOverlayAccess();
     if(open)$("#sidebar").querySelector("button")?.focus();else $("#sidebarBtn").focus();return;
@@ -1082,7 +1167,6 @@ function togglePanel(which){
   RZ[which]=!RZ[which];applyPanels();readable();saveRZ();
 }
 $("#sidebarBtn").addEventListener("click",()=>togglePanel("sb"));
-function setAlign(a){RZ.align=a;applyAlign();readable();saveRZ();renderSettings()}
 function setGraphLayout(m){S.layout=m;layout();refresh();readable();animateEdges();renderSettings()}
 function makeResizer(sel,onMove,onReset){
   const h=document.querySelector(sel);
@@ -1091,11 +1175,16 @@ function makeResizer(sel,onMove,onReset){
   h.addEventListener("pointerup",()=>{h.classList.remove("drag");saveRZ()});
   h.addEventListener("dblclick",()=>{onReset();applySizes();saveRZ()});
 }
-makeResizer(".rz-sb",e=>{RZ.sbw=clampNum(e.clientX-appEl.getBoundingClientRect().left,180,380)},()=>{RZ.sbw=248});
+makeResizer(".rz-sb",e=>{RZ.sbw=clampNum(e.clientX-appEl.getBoundingClientRect().left,180,480)},()=>{RZ.sbw=350});
 makeResizer(".rz-dt",e=>{RZ.dw=clampNum(appEl.getBoundingClientRect().right-e.clientX,240,430)},()=>{RZ.dw=296});
 makeResizer(".rz-ch",e=>{RZ.chh=document.documentElement.clientHeight-e.clientY},()=>{RZ.chh=null});
-document.querySelectorAll("#segAlign button").forEach(b=>b.addEventListener("click",()=>setAlign(b.dataset.a)));
-applySizes();applyAlign();applyPanels();
+makeResizer(".rz-requests",e=>{RZ.rqh=clampNum($("#sidebarShell").getBoundingClientRect().bottom-e.clientY,120,Math.max(120,document.documentElement.clientHeight-168))},()=>{RZ.rqh=300});
+$(".rz-requests").addEventListener("keydown",e=>{
+  if(!["ArrowUp","ArrowDown","Home"].includes(e.key))return;
+  const max=Math.max(120,document.documentElement.clientHeight-168);
+  e.preventDefault();RZ.rqh=e.key==="Home"?300:clampNum(clampNum(RZ.rqh,120,max)+(e.key==="ArrowUp"?24:-24),120,max);applySizes();saveRZ();
+});
+applySizes();applyRequests();applyPanels();
 window.addEventListener("resize",()=>{applySizes();autogrow()});
 
 /* ================= shortcuts (customised as JSON) ================= */
@@ -1161,10 +1250,6 @@ function commands(){
     {t:"Theme: dark",run:()=>Theme.set("dark")},
     {t:"Graph layout: steps",run:()=>setGraphLayout("tree")},
     {t:"Graph layout: radial",run:()=>setGraphLayout("radial")},
-    {t:"Panel alignment: justify",run:()=>setAlign("justify")},
-    {t:"Panel alignment: center",run:()=>setAlign("center")},
-    {t:"Panel alignment: left",run:()=>setAlign("left")},
-    {t:"Panel alignment: right",run:()=>setAlign("right")},
     {t:"Open notifications",run:()=>{N.open=true;N.items.forEach(i=>{if(i.loc==="toast"){clearTimeout(i.timer);i.loc="center"}});renderNotif()}},
     {t:"Open settings",run:()=>{SET.open=true;renderSettings()}},
     {t:"Toggle do not disturb",run:()=>{N.dnd=!N.dnd;renderNotif();renderSettings()}},
@@ -1298,12 +1383,8 @@ input.value=localStorage.getItem(DRAFT)||"";autogrow(); /* a long message surviv
 Object.assign(window,{S,N,LEDGER,msgs,gwEl});
 
 function showChatPane(pane){
-  appEl.classList.toggle("show-requests",pane==="requests");
-  $("#showMessages").setAttribute("aria-pressed",String(pane!=="requests"));
-  $("#showRequests").setAttribute("aria-pressed",String(pane==="requests"));
+  if(pane==="messages"){closeCompactSidebar();syncOverlayAccess()}
 }
-$("#showMessages").addEventListener("click",()=>showChatPane("messages"));
-$("#showRequests").addEventListener("click",()=>showChatPane("requests"));
 function focusComposer(){if(!RZ.ch)togglePanel("ch");showChatPane("messages");input.focus()}
 $("#skipMessage").addEventListener("click",focusComposer);
 $("#skipTasks").addEventListener("click",()=>{
@@ -1314,9 +1395,7 @@ $("#skipTasks").addEventListener("click",()=>{
 function reconcileFocusVisibility(){
   const focused=captureFocus();syncOverlayAccess();
   if(focused&&!focusVisible(focused.node)){
-    if(focused.node.closest("#ledger")&&focusVisible($("#showRequests")))$("#showRequests").focus();
-    else if(focused.node.closest(".chat-main")&&focusVisible($("#showMessages")))$("#showMessages").focus();
-    else restoreFocus(focused,true);
+    restoreFocus(focused,true);
   }
 }
 window.addEventListener("resize",reconcileFocusVisibility);
