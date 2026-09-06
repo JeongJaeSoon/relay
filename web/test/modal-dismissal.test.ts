@@ -8,6 +8,7 @@ function setup(modal: "palette" | "editor", chatVisible = true) {
   const classes = new Set(modal === "editor" ? ["open"] : []);
   const bindings: Record<string, any> = {};
   const context: any = {
+    $: () => ({setAttribute() {}}),
     PAL: { open: modal === "palette" },
     palEl: { classList: { remove() {} } },
     kedEl: { classList: { contains: (name: string) => classes.has(name), remove: (name: string) => classes.delete(name) } },

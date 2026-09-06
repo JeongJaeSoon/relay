@@ -18,7 +18,7 @@ export type AnswerKind = "answer" | "summary" | "question" | "error";
 export interface RequestRow {
   id: string; text: string; createdAt: number; source: MessageSource;
   disposition: Disposition; dispositionLabel: string;
-  taskUuid: string | null; taskId: string | null; taskIds: string[]; taskStatus: TaskStatus | null;
+  taskUuid: string | null; taskId: string | null; taskIds: string[]; taskUuids?: string[]; taskStatus: TaskStatus | null;
   state: string; st: StKey; bucket: Bucket;
   answer: string | null; answerKind: AnswerKind | null;
   actions: RequestAction[];
@@ -139,7 +139,7 @@ const offChain = (m: Message) => m.reply_to_task_uuid !== null;
  * too. That is a property of those emitters, not something this file can enforce: a new one that patches the state
  * and emits its reply separately would strand a request at the head of the queue and shift every later claim.
  */
-function claimReplies(ordered: Message[], tasks: Record<string, Task>): Map<string, Message> {
+export function claimReplies(ordered: Message[], tasks: Record<string, Task>): Map<string, Message> {
   const claimed = new Map<string, Message>();
   const taken = new Set<string>();                                             // reply rows already spoken for
   for (const m of ordered) {                                                   // 1 — off-chain confirmations, on content
@@ -238,11 +238,19 @@ export function requestRows(messages: Message[], tasks: Record<string, Task>): R
     const all = own.length ? own : first ? [first] : [];
     const task = lead(all) ?? first;
     const d = dispositionOf(m); const taskId = task?.display_id ?? null;
-    const taskIds = own.length ? m.dispatch_json!.task_ids! : taskId ? [taskId] : [];
+    // Keep the recorded display IDs even after all split children leave the snapshot. A route/close candidate can
+    // likewise exist only in the decision (before task_uuid is filled), and is still a conversation reference.
+    const taskIds = m.dispatch_json?.action === "split" ? (m.dispatch_json.task_ids ?? [])
+      : m.dispatch_json?.task_id ? [m.dispatch_json.task_id]
+        : taskId ? [taskId] : [];
+    // A retained message can outlive its task in the snapshot. Keep its UUID even
+    // when there is no display ID; split siblings are resolved only where known.
+    const candidateUuids = taskIds.map((id) => Object.values(tasks).find((t) => t.display_id === id)?.uuid).filter((id): id is string => !!id);
+    const taskUuids = [...new Set([...(m.task_uuid ? [m.task_uuid] : []), ...all.map(t => t.uuid), ...candidateUuids])];
     rows.push({
       id: m.id, text: plain(m), createdAt: m.created_at, source: m.source,
       disposition: d, dispositionLabel: labelOf(d, taskId),
-      taskUuid: m.task_uuid, taskId, taskIds, taskStatus: task?.status ?? null,
+      taskUuid: m.task_uuid, taskId, taskIds, taskUuids, taskStatus: task?.status ?? null,
       ...stateOf(d, m, task), bucket: bucketOf(d, m, task),
       ...answerOf(d, m, task, replies.get(m.id) ?? null, outcome), actions: actionsOf(d, task),
     });

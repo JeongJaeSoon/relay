@@ -4,9 +4,10 @@ import { stripAsk } from "@shared/ask.ts";
 import * as api from "./api.ts";
 import { stKey, stLabel, type StKey } from "./consts.ts";
 import { requestRows } from "./ledger.ts";
+import { currentMessages, currentRequestRows } from "./conversation-scope.ts";
 import { diffNotifs, type NotifKind } from "./notify.ts";
 import { store } from "./store.ts";
-export interface DemoTaskCore { cleanup: boolean; id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { key?: string; q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
+export interface DemoTaskCore { cleanup: boolean; id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { key?: string; askedAt?: number; q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
 export interface DemoEvent { id: number; at: Date; txt: string; payload: string | null }
 /** What the demo engine holds in S.tasks: the server-derived core plus the engine's own fields (layout position, timeline) that survive updates. */
 export type DemoTask = DemoTaskCore & { events: DemoEvent[]; timers: unknown[]; x: number; y: number };
@@ -19,19 +20,19 @@ export function toDemoTask(t: Task, ctx: Ctx): DemoTaskCore {
   const parent = t.parent_uuid ? ctx.tasks[t.parent_uuid] : null;
   return { cleanup: !!t.cleanup_pending, id: t.display_id, uuid: t.uuid, num: t.num, title: t.title, project: ctx.projects.find((p) => p.id === t.project_id)?.name ?? t.project_id, size: t.size, status: stKey(t.status), statusLabel: stLabel(t.status),
     step: t.status === "waiting_input" && t.question ? `❓ ${t.question.text}` : t.status === "queued" ? "Waiting for an agent slot" : TERMINAL.has(t.status) && t.last_summary ? t.last_summary : t.last_step ?? t.last_summary ?? "", startedAt: t.started_at ? new Date(t.started_at) : null, endedAt: t.ended_at ? new Date(t.ended_at) : null,
-    question: t.status === "waiting_input" && t.question ? { key: JSON.stringify([t.question.asked_at, t.question.source, t.question.permission_tool_use_id ?? null]), q: t.question.text, chips: t.question.options.length ? t.question.options : ["OK"] } : null,
+    question: t.status === "waiting_input" && t.question ? { key: JSON.stringify([t.question.asked_at, t.question.source, t.question.permission_tool_use_id ?? null]), askedAt: t.question.asked_at, q: t.question.text, chips: t.question.options.length ? t.question.options : ["OK"] } : null,
     sub: !!t.parent_uuid, parent: parent?.display_id ?? null, children: Object.values(ctx.tasks).filter((c) => c.parent_uuid === t.uuid && c.status !== "closed").sort((a, b) => a.num - b.num).map((c) => c.display_id),
     sid: t.short_id ?? "—", proc: t.process_state === "alive" ? (t.turn_state === "busy" ? "running" : "idle") : PROC[t.process_state] ?? t.process_state, gen: t.process_generation, attached: t.attach_state !== "none" ? t.attached_by : null,
     worktree: t.worktree_path, branch: t.branch ?? `relay-${t.uuid.replace(/-/g, "").slice(0, 8)}`, queuedAt: t.queued_at ?? 0, qhead: t.qhead, paused: t.paused, model: t.model.replace("claude-", ""), effort: t.effort, agentType: t.agent_type, bornAt: t.created_at, tags: [], pending: null, msgUntil: 0 };
 }
 /** A session relay only watches. Deliberately NOT a DemoTask: it has no id, project, size, permit, branch or verdict,
  *  and the graph must never let one be mistaken for a task relay is running. */
-export interface DemoForeign { key: string; title: string; sid: string; short: string; cwd: string; directoryPath: string | null; state: "running" | "idle" | "unknown"; stateLabel: string; kind: string; pid: number | null; startedAt: Date | null; firstSeen: Date; lastSeen: Date }
+export interface DemoForeign { key: string; title: string; sid: string; short: string; cwd: string; directoryPath: string | null; state: "running" | "idle" | "done" | "stopped" | "failed" | "unknown"; canStop: boolean; managed: boolean; stateLabel: string; kind: string; pid: number | null; startedAt: Date | null; firstSeen: Date; lastSeen: Date }
 export function toDemoForeign(f: ForeignSession): DemoForeign {
   const dir = (f.cwd ?? "").replace(/\/+$/, "");
-  const state = f.busy == null ? "unknown" : f.busy ? "running" : "idle";     // `agents --json` says nothing about a session it reports no status for
+  const state = f.state ?? (f.busy == null ? "unknown" : f.busy ? "running" : "idle");     // `agents --json` says nothing about a session it reports no status for
   return { key: f.session_id, title: f.name?.trim() || dir.split("/").pop() || `session ${f.session_id.slice(0, 8)}`,
-    sid: f.session_id, short: f.short_id ?? "—", cwd: dir || (f.cwd ? "/" : "—"), directoryPath: f.cwd || null, state, stateLabel: { running: "Running", idle: "Idle", unknown: "Unknown" }[state],
+    sid: f.session_id, short: f.short_id ?? "—", cwd: dir || (f.cwd ? "/" : "—"), directoryPath: f.cwd || null, state, canStop: f.can_stop ?? false, managed: f.managed ?? false, stateLabel: { running: "Running", idle: "Idle", done: "Done", stopped: "Stopped", failed: "Failed", unknown: "Unknown" }[state],
     kind: f.kind === "bg" ? "background" : f.kind ?? "", pid: f.pid, startedAt: f.started_at ? new Date(f.started_at) : null, firstSeen: new Date(f.first_seen), lastSeen: new Date(f.last_seen) };
 }
 const demoOf = (uuid: string | null | undefined): DemoTask | undefined => { if (!uuid) return undefined; const t = store.state.tasks[uuid]; return t ? D.S?.tasks?.get(t.display_id) ?? undefined : undefined; };
@@ -94,7 +95,11 @@ const run = (label: string, p: Promise<unknown>) => p.catch((e) => note(`${label
  *  The row outlives the question (it stays in the snapshot after the task answers) while toDemoTask fills `question` only
  *  while the task is waiting, and chatQuestion reads `t.question.q`. Checking only that the task exists is the shape that
  *  took the whole sync() down on reload (#24) — and came back once already, so the branch now lives here, where a test can reach it. */
-export const promotedQuestionTask = (m: Pick<Message, "role">, task: DemoTask | undefined): DemoTask | null => (m.role === "question" && task?.question ? task : null);
+// Promotion is timestamp-gated: chatFor adds task labels/options to the body, so text
+// equality cannot identify the occurrence. Both marker and permission producers record
+// asked_at before creating the chat row. Older rows must retain their original text.
+export const promotedQuestionTask = (m: Pick<Message, "role" | "created_at">, task: DemoTask | undefined): DemoTask | null =>
+  m.role === "question" && task?.question && task.question.askedAt != null && m.created_at >= task.question.askedAt ? task : null;
 /** Successful detail loads are cached; a failed request can be selected again without evicting a newer load. */
 export function createDetailLoader<T>(fetchDetail: (uuid: string) => Promise<T>) {
   let selected: { uuid: string } | null = null;
@@ -157,22 +162,59 @@ export function installAdapter() {
     if (b.task) row.append(D.ttagBtn(b.task)); if (b.retry) { const r = D.el("button", "nc-btn", "Retry"); r.addEventListener("click", () => relay.redispatch(m.id)); row.append(r); }
     return row;
   };
-  const syncMessages = (ids: Iterable<string>) => {
-    const byId = new Map(store.state.messages.map((m) => [m.id, m]));
+  let messageScope = new Set<string>();
+  const clearMessages = () => { D.msgs.replaceChildren(); drawn.clear(); badgeRows.clear(); };
+  const syncMessages = () => {
+    const visible = S.showHistory ? store.state.messages : currentMessages(store.state.messages, store.state.tasks);
+    const ids = visible.map(m => m.id);
+    const nextScope = new Set(ids);
+    // A task archive/reopen can change visibility without a new chat frame.
+    const removed = [...messageScope].some(id => !nextScope.has(id));
+    const reordered = [...messageScope].some((id, index) => ids[index] !== id);
+    const scrollTop = D.msgs.scrollTop;
+    if (removed || reordered) clearMessages();
+    messageScope = nextScope;
+    const empty = document.getElementById?.("conversationEmpty"); empty?.remove();
+    const byId = new Map(visible.map((m) => [m.id, m]));
     for (const id of ids) {
       const m = byId.get(id); if (!m) continue;
       if (isDispatcherBadgeRow(m)) { drawn.add(id); continue; }                   // the badge chips under the user message already say this
       if (drawn.has(id)) { const old = badgeRows.get(id); if (old && m.role === "user") { const fresh = badgeRow(m); old.replaceWith(fresh); badgeRows.set(id, fresh); } continue; }
       drawn.add(id); const task = demoOf(m.task_uuid);
-      if (m.role === "user") { D.chatUser(plain(m)); const wrap = D.el("div", "m-row"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
+      // Snapshots retain recent messages after old archived tasks disappear. Preserve
+      // sender identity without inventing a live task or offering task controls.
+      const sender = task ?? (m.task_uuid ? { uuid: m.task_uuid, id: m.task_uuid.slice(0, 8), title: "Historical session", history: true } : null);
+      if (m.role === "user") { D.chatUser(plain(m)); const wrap = D.el("div", "m-receipt"); const row = badgeRow(m); wrap.append(row); D.msgs.append(wrap); badgeRows.set(id, row); }
       else if (promotedQuestionTask(m, task)) D.chatQuestion(task!);   // the task may have left waiting_input since: chatQuestion reads t.question.q, and the plain row below already carries the question text
-      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid) { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(task ?? null, m.text); }
-      else D.chatMsg(task ?? null, m.text);                                    // worker_summary | error | dispatcher_answer
+      else if (m.role === "system") { const uuid = closeConfirmUuid(m.text); if (uuid && store.state.tasks[uuid] && store.state.tasks[uuid].status !== "closed") { const wrap = D.el("div", "m-row"); wrap.append(D.el("div", "m-sys", m.text.split(" [close confirm")[0])); const b = D.el("button", "act danger", "Close"); b.addEventListener("click", () => run("close", api.close(uuid))); wrap.append(b); D.msgs.append(wrap); } else D.chatMsg(sender, m.text); }
+      else D.chatMsg(sender, m.text);                                    // worker_summary | error | dispatcher_answer
     }
-    D.scrollChat?.();
+    if (!visible.length) {
+      const empty = D.el("div", "conversation-empty", S.showHistory ? "No conversation history yet." : "No conversations for current tasks. Send a message to begin, or open History.");
+      empty.id = "conversationEmpty"; D.msgs.append(empty);
+    }
+    if (removed) D.msgs.scrollTop = scrollTop; else D.scrollChat?.();
   };
   /** The ledger is derived, never accumulated: a task changing status changes the disposition of every request that landed in it. */
-  const syncLedger = () => { D.LEDGER.length = 0; D.LEDGER.push(...requestRows(store.state.messages, store.state.tasks)); };
+  const syncLedger = () => {
+    const rows = requestRows(store.state.messages, store.state.tasks);
+    const current = currentRequestRows(rows, store.state.tasks);
+    const currentIds = new Set(current.map(r => r.id));
+    const displayed = S.showHistory ? rows.map(r => currentIds.has(r.id) ? r : { ...r, bucket: "settled", state: "Archived", st: "closed", actions: [], answerKind: r.answerKind === "question" ? null : r.answerKind, answer: r.answerKind === "question" ? null : r.answer }) : current;
+    D.LEDGER.length = 0; D.LEDGER.push(...displayed);
+  };
+  const historyToggle = document.getElementById?.("historyToggle");
+  const setHistory = (show: boolean) => {
+    S.showHistory = show;
+    historyToggle?.setAttribute("aria-pressed", String(show));
+    if (historyToggle) historyToggle.textContent = show ? "Hide history" : "Show history";
+    const label = document.getElementById?.("conversationScopeLabel"); if (label) label.textContent = show ? "Including past conversations" : "Current conversations";
+    clearMessages(); messageScope.clear();
+    syncMessages(); syncLedger(); D.renderLedger();
+  };
+  historyToggle?.addEventListener("click", () => setHistory(!S.showHistory));
+  // Also used by empty-state navigation without changing any task data.
+  D.setConversationHistory = setHistory;
   const syncEvents = (uuids: Iterable<string>) => { for (const uuid of uuids) { const t = demoOf(uuid); if (!t) continue; const list = store.state.events[uuid] ?? []; const have = new Set(t.events.map((e) => e.id)); for (const e of list) if (!have.has(e.seq) && isTimelineEvent(e.type)) t.events.push(eventLine(e)); if (t.events.length > 200) t.events.splice(0, t.events.length - 200); if (S.sel === t.id) D.refresh(); } };
   const flushNotifs = () => {                                                  // decisions were made at frame time; the DOM work happens here, once per render
     const { ops, chips } = notifs.drain();
@@ -181,10 +223,13 @@ export function installAdapter() {
   };
   const sync = () => {
     raf = 0; const d = store.drain(); const all = d.all;
+    if (all) for (const [id, task] of S.tasks) {
+      if (!store.state.tasks[task.uuid]) { S.tasks.delete(id); if (S.sel === id) S.sel = null; }
+    }
     const tasksChanged = syncTasks(all ? Object.keys(store.state.tasks) : d.tasks);
     flushNotifs();                                                             // after syncTasks so S.tasks holds the demo task the notification points at
     if (all || d.sys || d.projects) syncSystem();
-    if (all || d.messages.size) syncMessages(all ? store.state.messages.map((m) => m.id) : d.messages);
+    if (all || d.messages.size || d.tasks.size) syncMessages();
     if (d.events.size) syncEvents(d.events);
     const foreignChanged = all || d.foreign; if (foreignChanged) syncForeign();
     if (all || d.messages.size || d.tasks.size) { syncLedger(); if (!all && !tasksChanged && !foreignChanged) D.renderLedger(); }   // otherwise relayout() → refresh() draws it
@@ -193,7 +238,8 @@ export function installAdapter() {
       restoreSelection = false;
       const saved = sessionStorage.getItem(selectionKey);
       const task = saved ? demoOf(saved) : null;
-      if (task) D.select(task.id); else sessionStorage.removeItem(selectionKey);
+      // Restore navigation context without opening detail or moving keyboard focus.
+      if (task) { S.sel = task.id; D.refresh(); } else sessionStorage.removeItem(selectionKey);
     }
   };
   store.subscribe((f) => {

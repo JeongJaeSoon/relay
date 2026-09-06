@@ -353,3 +353,14 @@ test("a stale prompt left by a redispatch is absorbed, and the row reads its new
   ], {}).map((r) => [r.id, r.answer]));
   expect(by.A).toContain("task T-01 not found");
 });
+
+
+test("request navigation preserves a removed first split task UUID and surviving sibling UUIDs", () => {
+  const m = msg({ task_uuid: "removed-first", dispatch_json: { action: "split", task_ids: ["T-01", "T-02"] } });
+  const r = one(m, byId(task("surviving-second", "T-02", "done")));
+  expect(r.taskUuids).toEqual(["removed-first", "surviving-second"]);
+  const removed = one(msg({ task_uuid: "removed-only" }));
+  expect(removed.taskUuids).toEqual(["removed-only"]);
+  expect(removed.taskIds).toEqual([]);
+  expect(one(msg()).taskUuids).toEqual([]);
+});

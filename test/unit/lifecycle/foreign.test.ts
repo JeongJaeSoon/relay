@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildTestApp } from "../../helpers/app.ts";
-import { FOREIGN_GRACE_MS, foreignRows, isForeign, ownership, publishedChanged, reduceForeign, ForeignSessions } from "../../../src/lifecycle/foreign.ts";
+import { FOREIGN_GRACE_MS, displayRows, foreignRows, isForeign, ownership, publishedChanged, reduceForeign, ForeignSessions } from "../../../src/lifecycle/foreign.ts";
 import { OWNER_FILE } from "../../../src/lifecycle/outbox.ts";
 import { Watchdog } from "../../../src/lifecycle/watchdog.ts";
 import { setNow } from "../../../src/core/clock.ts";
@@ -65,8 +65,65 @@ test("reducer: the session registry supplies pid, start time and launch kind", (
   expect(published[0]).toMatchObject({ pid: 4242, started_at: 999, kind: "bg" });
 });
 
+test("reducer: terminal rows clear a stale pid and use retained roster metadata without a registry entry", () => {
+  const previous = new Map<string, ForeignSession>([["s1", { session_id: "s1", short_id: "ab", name: "n", cwd: "/c", busy: true,
+    pid: 4242, started_at: 111, kind: "old", state: "running", can_stop: true, managed: false, task_uuid: null, display_id: null, first_seen: 1, last_seen: 1 }]]);
+  const retained = row({ session_id: "s1", alive: false, raw: { state: "done", startedAt: 999, kind: "bg" } });
+  expect(reduceForeign(previous, [retained], 2).published[0]).toMatchObject({ state: "done", pid: null, started_at: 999, kind: "bg" });
+});
+
+test("display: terminal retained rows publish immediately and cannot be stopped", async () => {
+  const s = await buildTestApp();
+  const done = row({ session_id: "retained-done", short_id: "done1", alive: false, raw: { state: "done", status: "idle" } });
+  s.runner.rows.set("done1", done);
+  s.foreign.refresh(await s.runner.list(true), 1000);
+  expect(s.foreign.list()).toMatchObject([{ session_id: "retained-done", state: "done", can_stop: false, managed: false }]);
+  expect(await s.foreign.stop("retained-done")).toMatchObject({ ok: false, status: 404 });
+  expect(s.runner.calls.filter((c) => c.kind === "stop")).toEqual([]);
+});
+
+test("display: owner stamps annotate retained rows instead of hiding them", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "relay-retained-"));
+  writeFileSync(join(dir, OWNER_FILE), JSON.stringify({ relay_instance_id: "elsewhere", task_uuid: "missing-task", session_id: "stamped" }));
+  const s = await buildTestApp();
+  const stamped = row({ session_id: "stamped", short_id: "stamp1", cwd: dir, alive: false, raw: { state: "failed" } });
+  expect(displayRows(s.db, [stamped])).toMatchObject([{ managed: true, task_uuid: "missing-task", can_stop: false }]);
+  s.foreign.refresh([stamped], 1000);
+  expect(s.foreign.list()).toMatchObject([{ session_id: "stamped", state: "failed", managed: true, task_uuid: "missing-task", can_stop: false }]);
+});
+
+test("display: visible task identity deduplicates, but closed, orphaned and historical identities remain", async () => {
+  const s = await buildTestApp();
+  const visible = s.seedTask("running");
+  const closed = s.seedTask("closed", { session_id: "closed-sid", short_id: "closed1", process_state: "stopped" });
+  const parent = s.seedTask("closed", { session_id: "parent-sid", short_id: "parent1" });
+  s.seedTask("done", { parent_uuid: parent, session_id: "orphan-sid", short_id: "orphan1", process_state: "stopped" });
+  s.db.run("insert into process_instances(id,task_uuid,short_id,session_id,generation,started_at,ended_at) values('old-retained',?,'old1','old-sid',0,1,2)", [visible]);
+  const rows = [
+    row({ session_id: "sid1", short_id: "fake01" }),
+    row({ session_id: "closed-sid", short_id: "closed1", alive: false, raw: { state: "done" } }),
+    row({ session_id: "orphan-sid", short_id: "orphan1", alive: false, raw: { state: "stopped" } }),
+    row({ session_id: "old-sid", short_id: "old1", alive: false, raw: { state: "done" } }),
+  ];
+  const displayed = displayRows(s.db, rows);
+  expect(displayed.map((d) => d.row.session_id)).toEqual(["closed-sid", "orphan-sid", "old-sid"]);
+  expect(displayed[0]).toMatchObject({ task_uuid: closed, display_id: "T-02", can_stop: false });
+  expect(displayed[1]).toMatchObject({ display_id: "T-04", can_stop: false });
+  expect(displayed[2]).toMatchObject({ task_uuid: visible, display_id: "T-01", can_stop: false });
+});
+
+test("display: a child hidden beneath a queued ancestor does not suppress its retained roster row", async () => {
+  const s = await buildTestApp();
+  const queued = s.seedTask("queued", { session_id: null, short_id: null, process_state: "none" });
+  const middle = s.seedTask("running", { parent_uuid: queued, session_id: null, short_id: null });
+  const child = s.seedTask("done", { parent_uuid: middle, session_id: "hidden-sid", short_id: "hidden1", process_state: "stopped" });
+  const retained = row({ session_id: "hidden-sid", short_id: "hidden1", alive: false, raw: { state: "done" } });
+  expect(displayRows(s.db, [retained])).toMatchObject([{ task_uuid: child, display_id: "T-03", can_stop: false }]);
+});
+
 test("publishedChanged is news only: a heartbeat is not a change, busy/appear/disappear are", () => {
-  const f = (o: Partial<ForeignSession>): ForeignSession => ({ session_id: "s1", short_id: "ab", name: "n", cwd: "/c", busy: false, pid: 1, started_at: 1, kind: "bg", first_seen: 1, last_seen: 1, ...o });
+  const f = (o: Partial<ForeignSession>): ForeignSession => ({ session_id: "s1", short_id: "ab", name: "n", cwd: "/c", busy: false, pid: 1, started_at: 1, kind: "bg",
+    state: "idle", can_stop: true, managed: false, task_uuid: null, display_id: null, first_seen: 1, last_seen: 1, ...o });
   expect(publishedChanged([f({})], [f({ last_seen: 99_999 })])).toBe(false);
   expect(publishedChanged([f({})], [f({ busy: true })])).toBe(true);
   expect(publishedChanged([f({})], [])).toBe(true);

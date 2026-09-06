@@ -18,7 +18,7 @@ function environment(width: number) {
     };
     nodes.set(id, n); return n;
   }
-  for (const id of ["app", "canvas", "sidebar", "detail", "dBody", "dHead", "sidebarBtn", "palBtn"]) node(id);
+  for (const id of ["app", "canvas", "sidebar", "detail", "dBody", "dHead", "sidebarBtn", "palBtn", "chat"]) node(id);
   const context: any = { document, $: (id: string) => nodes.get(id.slice(1)), appEl: nodes.get("app"),
     window: { matchMedia: (query: string) => ({ matches: width <= Number(query.match(/\d+/)![0]) }) },
     getComputedStyle: () => ({ visibility: "visible" }),
@@ -31,10 +31,12 @@ test("narrow detail and compact task-list overlays disable only covered regions"
     const { context: c, nodes: n } = environment(width);
     n.get("detail").classList.add("open"); c.syncOverlayAccess();
     expect(n.get("canvas").inert).toBe(width <= 980);
-    expect(n.get("sidebar").inert).toBe(width <= 980);
+    expect(n.get("sidebar").inert).toBe(false);
+    expect(n.get("chat").inert).toBe(false);
     expect(n.get("detail").inert).toBe(false);
     n.get("app").classList.add("compact-sb-open"); c.syncOverlayAccess();
     if (width <= 640) { expect(n.get("detail").inert).toBe(true); expect(n.get("sidebar").inert).toBe(false); }
+    expect(n.get("chat").inert).toBe(width <= 640);
   }
 });
 test("refresh restores an equivalent task row but never reuses an old answer key for a new question", () => {

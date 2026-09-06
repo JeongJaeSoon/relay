@@ -86,11 +86,13 @@ export interface Command {
   state: CommandState; attempts: number; created_at: number; applied_at: number | null; error: string | null;
 }
 
-/** A Claude session running on this machine that relay did not start. Poll-derived and read-only: relay watches it,
- *  never dispatches to it, never gives it a permit and never reaps it. `busy` is null when the roster says nothing. */
+/** A retained Claude roster session not already represented by a visible Relay task. Poll-derived and read-only:
+ * no dispatch, permit, or automatic cleanup. Terminal sessions remain until removed from the roster. */
 export interface ForeignSession {
   session_id: string; short_id: string | null; name: string | null; cwd: string | null; busy: boolean | null;
   pid: number | null; started_at: number | null; kind: string | null;   // from the session registry (~/.claude/sessions), the only place these exist for a foreign session
+  state: "running" | "idle" | "done" | "stopped" | "failed" | "unknown";
+  can_stop: boolean; managed: boolean; task_uuid: string | null; display_id: string | null;
   first_seen: number; last_seen: number;                                // when relay's poll first/last saw it — not when the session began
 }
 

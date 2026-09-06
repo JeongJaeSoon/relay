@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
 const visibility = app.slice(app.indexOf("function graphTaskVisible(t){"), app.indexOf("/* ================= chat ================= */"));
 const render = app.slice(app.indexOf("function renderNodes(){"), app.indexOf("/* ---- sessions outside relay:"));
-const boxes = app.slice(app.indexOf("function graphBoxes(){"), app.indexOf("function fit(){"));
+const boxes = app.slice(app.indexOf("function graphBoxes(){"), app.indexOf("function fit("));
 const minimap = app.slice(app.indexOf("function updateMinimap(){"), app.indexOf("function mmJump(e){"));
 
 test("child graph visibility follows its parent while preserving task history", () => {
@@ -32,16 +32,17 @@ test("archive or missing-parent snapshot removes stale DOM and leaves an empty g
     const nodes = new Map([parent, child].map(t => ["node-" + t.id, { id: "node-" + t.id, remove() { nodes.delete(this.id); } }]));
     const hint = { style: {}, offsetLeft: 32, offsetTop: 106, offsetWidth: 224, offsetHeight: 80 };
     const mmEl = { style: {}, textContent: "stale markers" };
+    const mmShell = { style: {} };
     const context: any = { S: { tasks, foreign: new Map(), sel: null, paused: false }, tasksArr: () => [...tasks.values()], foreignArr: () => [],
       famOf: () => new Set(), canvas: { classList: { toggle() {} }, clientWidth: 800 },
       nodesBox: { querySelectorAll: () => [...nodes.values()] }, document: { getElementById: (id: string) => nodes.get(id) },
-      renderForeignNodes() {}, $: () => hint, gwEl: { offsetLeft: 32, offsetTop: 32, offsetWidth: 210, offsetHeight: 54 }, mmEl };
+      renderForeignNodes() {}, $: () => hint, gwEl: { offsetLeft: 32, offsetTop: 32, offsetWidth: 210, offsetHeight: 54 }, mmEl, mmShell };
     runInNewContext(visibility + render + boxes + minimap + "renderNodes(); result=graphBoxes(); empty=emptyHintBox(); updateMinimap();", context);
     expect(nodes.size).toBe(0);
     expect(context.result.map((b: any) => b.st)).toEqual(["gw"]);
     expect(hint.style).toMatchObject({ display: "flex" });
     expect(context.empty).not.toBeNull();
-    expect(mmEl.style).toMatchObject({ display: "none" });
+    expect(mmShell.style).toMatchObject({ display: "none" });
     expect(mmEl.textContent).toBe("");
     expect(tasks.get(child.id)).toBe(child);
   }
