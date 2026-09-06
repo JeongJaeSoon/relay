@@ -11,7 +11,7 @@ function scene(width: number, height: number, layout: string, populated = false,
     get offsetLeft() { return parseFloat(this.style.left); }, get offsetTop() { return parseFloat(this.style.top); },
     get offsetWidth() { return parseFloat(this.style.width); }, offsetHeight: 80 };
   const gateway = { offsetLeft: 32, offsetTop: 32, offsetWidth: 210, offsetHeight: 54 };
-  const view = { x: 0, y: 0, k: 1, manual: true };
+  const view = { x: 0, y: 0, k: 1, manual: true, overview: false };
   const tasks = populated ? [{ id: "T-01", x: 310, y: 32, status: "done" }] : [];
   const context = { view, S: { layout }, MINZ: .2, canvas: { clientWidth: width, clientHeight: height }, gwEl: gateway,
     $: (selector: string) => selector === "#emptyHint" ? hint : { classList: { remove() {} } },
@@ -42,5 +42,5 @@ test("fitted outside lane clears the zoom toolbar in both layouts", () => {
 
 test("hidden empty guidance does not change a populated graph's fit", () => {
   const { view } = scene(896, 620, "tree", true);
-  expect(view).toEqual({ x: -4, y: -8, k: 1, manual: false });
+  expect(view).toEqual({ x: -4, y: -8, k: 1, manual: false, overview: true });
 });

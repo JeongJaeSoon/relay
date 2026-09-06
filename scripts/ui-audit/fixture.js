@@ -1,6 +1,8 @@
 // Entirely invented data. No backend, filesystem sessions, or network mutations.
 S.reduce=true;S.maxw=24;S.tasks.clear();S.foreign.clear();
 const params=new URLSearchParams(location.search);
+document.body.dataset.requestLayout=params.get('request-layout')==='dividers'?'dividers':'plain';
+if(params.has('request-layout')){RZ.rqh=360;RZ.chh=340;RZ.ch=true;RZ.rqOpen=true;applyPanels()}
 const stress='긴단일식별자_'+'OrderExportStateTransition'.repeat(6);
 const statuses=['wait','run','run','queue','done','err','cancelled','closed','run','queue'];
 const taskCount=params.has('many')?60:params.has('few')?2:10;

@@ -28,7 +28,7 @@ function setup(saved: Record<string, unknown> = {}, viewport = 900) {
     localStorage: { getItem: () => stored, setItem: (_key: string, value: string) => { stored = value; writes++; } },
     document: { documentElement: { clientHeight: viewport, style: { setProperty: (name: string, value: string) => properties.set(name, value) } }, getElementById: (id: string) => node("#" + id), querySelector: node },
     $: node, window: { addEventListener() {}, matchMedia: () => ({ matches: false }) },
-    captureFocus() {}, restoreFocus() {}, updateMinimap() {}, syncOverlayAccess() {},
+    captureFocus() {}, restoreFocus() {}, updateMinimap() {}, syncOverlayAccess() {}, readable() {},
     S: { sel: null, fsel: null },
   };
   runInNewContext(shell + "\nglobalThis.settings=RZ;", context);
@@ -96,4 +96,21 @@ test("opening Messages dismisses the compact sidebar without changing Requests' 
   runInNewContext(code, context); context.showChatPane("messages");
   expect(calls).toEqual(["close", "access"]);
   expect(context.RZ.rqOpen).toBe(false);
+});
+
+
+test("Messages header collapse saves visibility while preserving its height and independent Requests state", () => {
+  const h = setup({ ch: true, chh: 410, rqh: 330, rqOpen: false });
+  const button = h.node("#messagesToggle");
+  expect(button.attributes).toMatchObject({ "aria-expanded": "true", "aria-label": "Collapse Messages" });
+  button.handlers.click();
+  expect(h.node("#app").classList.contains("hide-ch")).toBe(true);
+  expect(button.attributes).toMatchObject({ "aria-expanded": "false", "aria-label": "Expand Messages" });
+  expect(h.saved()).toMatchObject({ ch: false, chh: 410, rqh: 330, rqOpen: false });
+  const reloaded = setup(h.saved());
+  expect(reloaded.node("#messagesToggle").attributes["aria-expanded"]).toBe("false");
+  reloaded.node("#messagesToggle").handlers.click();
+  expect(reloaded.node("#app").classList.contains("hide-ch")).toBe(false);
+  expect(reloaded.saved()).toMatchObject({ ch: true, chh: 410, rqh: 330, rqOpen: false });
+  expect(reloaded.properties.get("--chh")).toBe("410px");
 });

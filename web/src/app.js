@@ -197,7 +197,6 @@ function jumpToRequest(r,taskId){
 /* ================= request ledger (collapsible sidebar section) =================
    Rows come from requestRows() in web/src/ledger.ts. This only draws that pure result and attaches the action buttons. */
 const LEDGER=[];                                                                          /* filled by the adapter, needs-you first */
-let ledgerFilter="open";                                                                  /* open = only requests not yet settled, all = everything */
 const LEDGER_ACTS={
   redispatch:{label:"Retry",run:r=>relay.redispatch(r.id)},
   retry_cleanup:{label:"Retry cleanup",run:r=>{const t=S.tasks.get(r.taskId);if(t)relay.retryCleanup(t)}},
@@ -205,7 +204,7 @@ const LEDGER_ACTS={
   close:{label:"Close",run:r=>{const t=S.tasks.get(r.taskId);if(t)relay.archive(t)}},
 };
 function ledgerRowEl(r){
-  const row=el("div","lg-row"+(r.bucket==="needs_you"?" attn":""));
+  const row=el("div","lg-row"+(r.bucket==="needs_you"?" attn":"")+(r.bucket==="settled"?" settled":""));
   const text=el("button","lg-msg",r.text);text.title=r.text;text.dataset.focusKey="request:"+r.id;
   text.setAttribute("aria-controls","msgs");
   row.dataset.request=r.id;
@@ -216,9 +215,9 @@ function ledgerRowEl(r){
   row.append(text);
   const st=el("div","lg-st");
   const pill=el("span","pill st-"+r.st+(r.disposition==="deciding"?" pulse":""));
-  pill.append(el("i","dot"),el("span",null,r.state));
+  const mark=r.st==="done"?el("span","completion-mark","✓"):el("i","dot");mark.setAttribute("aria-hidden","true");
+  pill.append(mark,el("span",null,r.state));
   st.append(pill,el("span","lg-disp",r.dispositionLabel));
-  const t=r.taskId?S.tasks.get(r.taskId):null;
   r.taskIds.forEach(id=>{const tt=S.tasks.get(id);if(tt)st.append(ttagBtn(tt,()=>jumpToRequest(r,id)))}); /* split requests can navigate to each agent */
   const known=new Set(r.taskIds.map(id=>S.tasks.get(id)).filter(Boolean).map(agentKey));
   (r.taskUuids||[]).filter(uuid=>!known.has(uuid)).forEach(uuid=>{
@@ -230,10 +229,7 @@ function ledgerRowEl(r){
   if(r.answer)row.append(inlineText(el("div","lg-ans "+(r.answerKind||"")),r.answer));
   const acts=el("div","lg-acts");
   r.actions.forEach(a=>{
-    if(a==="answer"){                                                                     /* the task's own options — the same chips the chat offers */
-      if(t&&t.question)t.question.chips.forEach(c=>acts.append(questionOption(t,c)));
-      return;
-    }
+    if(a==="answer")return; /* Answer options live in Messages; requests link to the conversation. */
     const spec=LEDGER_ACTS[a];if(!spec)return;
     const b=el("button","chip",spec.label);b.addEventListener("click",()=>spec.run(r));acts.append(b);
   });
@@ -250,16 +246,10 @@ function renderLedger(){
   const focused=captureFocus();
   const attn=LEDGER.filter(r=>r.bucket==="needs_you").length;
   const count=$("#lgCount");count.hidden=!attn;count.textContent=String(attn);count.setAttribute("aria-label",attn+" requests need your attention");
-  document.querySelectorAll("#segLedger button").forEach(b=>{b.classList.toggle("on",b.dataset.f===ledgerFilter);b.setAttribute("aria-pressed",String(b.dataset.f===ledgerFilter))});
-  const rows=ledgerFilter==="all"?LEDGER:LEDGER.filter(r=>r.bucket!=="settled");
+  const rows=LEDGER;
   list.textContent="";
   if(!rows.length){
-    const empty=el("div","lg-empty",LEDGER.length?"Nothing open — every request you sent has landed.":"Every message you send is a request. What happened to it shows up here.");
-    if(LEDGER.length&&ledgerFilter==="open"){
-      const b=el("button","act","Show all "+LEDGER.length);
-      b.addEventListener("click",()=>setLedgerFilter("all"));
-      empty.append(b);
-    }
+    const empty=el("div","lg-empty","Every message you send is a request. What happened to it shows up here.");
     list.append(empty);
     restoreFocus(focused,true);
     return;
@@ -268,7 +258,6 @@ function renderLedger(){
   list.scrollTop=scrollTop;
   restoreFocus(focused,true);
 }
-function setLedgerFilter(f){ledgerFilter=f;renderLedger()}
 
 /* ================= server actions (window.relay, installed by web/src/adapter.ts) ================= */
 function send(text){text=text.trim();if(!text||(askActive()&&!text.replace(ASK_RE,"").trim()))return Promise.resolve(false);return relay.send(text,askActive(),askTask&&askTask.uuid)}  /* resolve only after the server acknowledges the message */
@@ -509,10 +498,10 @@ function animateEdges(){ /* keeps the edges glued to the nodes through the 300ms
 
 /* ================= sidebar ================= */
 const GROUPS=[
-  {label:"Needs attention",match:t=>t.status==="wait"||t.status==="err"||t.status==="cancelled",cls:"attn"},
-  {label:"Running",match:t=>t.status==="run"},
-  {label:"Queued",match:t=>t.status==="queue"},
-  {label:"Done · Archived",match:t=>t.status==="done"||t.status==="closed"},
+  {label:"Needs attention",match:t=>t.status==="wait"||t.status==="err"||t.status==="cancelled",cls:"attn",countCls:"st-err"},
+  {label:"Running",match:t=>t.status==="run",countCls:"st-run"},
+  {label:"Queued",match:t=>t.status==="queue",countCls:"st-queue"},
+  {label:"Done · Archived",match:t=>t.status==="done"||t.status==="closed",countCls:"st-done"},
 ];
 function renderHeaderSummary(){
   const host=$("#headerSummary");if(!host)return;
@@ -523,10 +512,11 @@ function renderHeaderSummary(){
   const paused=S.paused?" · ⏸ paused":"";
   const warning=overSoft?" · over the soft limit":"";
   host.classList.toggle("warn",overSoft);
-  const summary=host.querySelector("summary");summary.textContent="";
-  summary.append(el("b","header-summary-agents",agents),el("span","header-summary-extra"," · "+queue+" · "+usage),el("span","header-summary-state",(S.paused?"⏸ paused":"")+(overSoft?" ⚠":"")),el("span","header-summary-chevron","⌄"));
-  summary.setAttribute("aria-label",agents+" · "+queue+" · "+usage+paused+warning+". Show activity details");
-  host.querySelector(".header-summary-panel").textContent=agents+" · "+queue+paused+"\n"+usage+warning;
+  host.textContent="";
+  host.append(el("b","header-summary-agents",agents),el("span","header-summary-queue",queue),el("span","header-summary-usage",usage));
+  if(S.paused||overSoft)host.append(el("span","header-summary-state",(S.paused?"⏸ paused":"")+(overSoft?" ⚠":"")));
+  host.setAttribute("aria-label",agents+" · "+queue+" · "+usage+paused+warning);
+  host.title=agents+" · "+queue+" · "+usage+paused+warning;
 }
 function renderSidebar(){
   const focused=captureFocus();
@@ -537,7 +527,7 @@ function renderSidebar(){
     const list=tasksArr().filter(t=>!t.sub&&g.match(t));
     const box=el("div","group");
     const h=el("div","group-h"+(g.cls&&list.length?" "+g.cls:""));
-    h.append(el("span",null,g.label),el("span","cnt",String(list.length)));
+    h.append(el("span",null,g.label),el("span","cnt "+g.countCls,String(list.length)));
     box.append(h);
     if(!list.length)box.append(el("div","group-empty","None"));
     list.forEach(t=>{
@@ -563,7 +553,7 @@ function renderSidebar(){
   if(fs.length){
     const box=el("div","group");
     const h=el("div","group-h");
-    h.append(el("span",null,"Outside relay"),el("span","cnt",String(fs.length)));
+    h.append(el("span",null,"Outside relay"),el("span","cnt st-queue",String(fs.length)));
     box.append(h);
     fs.forEach(f=>{
       const it=el("button","s-item st-foreign"+(S.fsel===f.key?" sel":""));
@@ -720,13 +710,20 @@ document.addEventListener("keydown",e=>{
 
 /* ================= pan / zoom ================= */
 const MINZ=.2,MAXZ=2;
-const view={x:24,y:20,k:1,manual:false}; /* Read resumes automatic positioning; overview and manual navigation hold it. */
+const view={x:24,y:20,k:1,manual:false,overview:false}; /* Read resumes automatic positioning; overview and manual navigation hold it. */
+function syncViewMode(){
+  const button=$("#zfit"),label=view.overview?"Return to readable view":"Fit all tasks";
+  button.classList.toggle("overview",view.overview);button.setAttribute("aria-pressed",String(view.overview));
+  button.setAttribute("aria-label",label);button.title=label;
+}
+function toggleOverview(){if(view.overview)readable();else{fit();touchView()}}
 function touchView(){view.manual=true;$("#zfit").classList.add("manual")}
 function applyView(smooth){
   world.style.transition=(smooth&&!S.reduce)?"transform .35s cubic-bezier(.22,.61,.36,1)":"none";
   world.style.transform="translate("+view.x+"px,"+view.y+"px) scale("+view.k+")";
   $("#zactual").textContent=Math.round(view.k*100)+"%";
   $("#zactual").setAttribute("aria-label","Zoom "+Math.round(view.k*100)+" percent. Reset to actual size");
+  syncViewMode();
   updateMinimap();
 }
 function graphBoxes(){
@@ -751,13 +748,14 @@ function emptyHintBox(){
   return {x:hint.offsetLeft,y:hint.offsetTop,w:hint.offsetWidth,h:hint.offsetHeight};
 }
 function fit(minScale=.01){
+  view.overview=minScale<1;
   view.manual=false;$("#zfit").classList.remove("manual");
   const boxes=graphBoxes();const hint=emptyHintBox();if(hint)boxes.push(hint);
   const minX=Math.min(...boxes.map(b=>b.x)),minY=Math.min(...boxes.map(b=>b.y));
   const maxX=Math.max(...boxes.map(b=>b.x+b.w)),maxY=Math.max(...boxes.map(b=>b.y+b.h));
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
-  // Reserve the right toolbar column, including when the outside lane is the rightmost content.
-  const left=28,right=60,top=Math.min(24,ch*.1),bottom=64;
+  // Leave room for the minimap above and the compact zoom toolbar below.
+  const left=28,right=Math.min(196,cw*.4),top=Math.min(24,ch*.1),bottom=64;
   view.k=Math.max(minScale,Math.min(1,(cw-left-right)/(maxX-minX),(ch-top-bottom)/(maxY-minY)));
   if(S.layout==="tree"){ /* top-left anchor */
     view.x=left-minX*view.k;
@@ -780,6 +778,7 @@ function maybeFit(){if(S.autofit&&!view.manual)readable()}
 function relayout(){layout();refresh();maybeFit();animateEdges()}
 function centerAt(n,p){
   if(!n)return;
+  view.overview=false;
   const cw=canvas.clientWidth,ch=canvas.clientHeight;
   view.k=Math.max(1,view.k);
   view.x=cw/2-(p.x+n.offsetWidth/2)*view.k;
@@ -791,10 +790,10 @@ function centerOnBox(f){centerAt(document.getElementById("fnode-"+f.key),f)}
 canvas.addEventListener("wheel",e=>{
   e.preventDefault();
   const unit=e.deltaMode===1?16:e.deltaMode===2?canvas.clientWidth:1;
-  if(!e.ctrlKey&&!e.metaKey&&(e.deltaX!==0||e.shiftKey)){
-    // Horizontal wheels and trackpad swipes pan in screen pixels at any zoom.
+  if(!e.ctrlKey&&!e.metaKey){
+    // Wheel and trackpad scrolling pan in screen pixels at any zoom.
     // Browsers may already translate Shift+wheel into deltaX.
-    view.x-=(e.deltaX||e.deltaY)*unit;
+    view.x-=(e.shiftKey?(e.deltaX||e.deltaY):e.deltaX)*unit;
     if(!e.shiftKey)view.y-=e.deltaY*(e.deltaMode===2?canvas.clientHeight:unit);
     touchView();applyView();return;
   }
@@ -828,8 +827,7 @@ function zoomBy(f){ /* zoom about the canvas centre */
 $("#zin").addEventListener("click",()=>zoomBy(1.25));
 $("#zout").addEventListener("click",()=>zoomBy(1/1.25));
 $("#zactual").addEventListener("click",()=>zoomBy(1/view.k));
-$("#zfit").addEventListener("click",()=>{fit();touchView()});
-$("#zread").addEventListener("click",readable);
+$("#zfit").addEventListener("click",toggleOverview);
 canvas.addEventListener("keydown",e=>{
   if(e.target!==canvas)return;
   const delta={ArrowLeft:[40,0],ArrowRight:[-40,0],ArrowUp:[0,40],ArrowDown:[0,-40]}[e.key];
@@ -841,11 +839,11 @@ canvas.addEventListener("keydown",e=>{
 let rzT;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{renderAsk();if(S.autofit&&!view.manual)readable();else updateMinimap()},120)});
 
 /* ================= minimap ================= */
-const mmEl=$("#minimap");
+const mmEl=$("#minimapMap"),mmShell=$("#minimap");
 let mmMap=null;
 function updateMinimap(){
   const hasTasks=graphTasks().length>0||S.foreign.size>0;
-  mmEl.style.display=hasTasks?"":"none";
+  mmShell.style.display=hasTasks?"":"none";
   if(!hasTasks){mmEl.textContent="";mmMap=null;return;}
   const boxes=graphBoxes();
   const pad=44;
@@ -1105,7 +1103,6 @@ $("#gearBtn").addEventListener("click",e=>{
 });
 $("#settings").addEventListener("click",e=>e.stopPropagation());
 document.querySelectorAll("#segTheme button").forEach(b=>b.addEventListener("click",()=>Theme.set(b.dataset.m)));
-document.querySelectorAll("#segLedger button").forEach(b=>b.addEventListener("click",()=>setLedgerFilter(b.dataset.f)));
 document.querySelectorAll("#segLayout button").forEach(b=>b.addEventListener("click",()=>setGraphLayout(b.dataset.l)));
 $("#maxwDec").addEventListener("click",()=>relay.setMax(S.maxw-1));
 $("#maxwInc").addEventListener("click",()=>relay.setMax(S.maxw+1));
@@ -1161,6 +1158,8 @@ function applyPanels(){
   appEl.classList.toggle("hide-sb",!RZ.sb);
   appEl.classList.toggle("hide-dt",!RZ.dt);
   appEl.classList.toggle("hide-ch",!RZ.ch);
+  $("#messagesToggle").setAttribute("aria-expanded",String(RZ.ch));
+  $("#messagesToggle").setAttribute("aria-label",RZ.ch?"Collapse Messages":"Expand Messages");
   updateMinimap();
   syncOverlayAccess();
   restoreFocus(focused,true);
@@ -1175,6 +1174,7 @@ function togglePanel(which){
   RZ[which]=!RZ[which];applyPanels();readable();saveRZ();
 }
 $("#sidebarBtn").addEventListener("click",()=>togglePanel("sb"));
+$("#messagesToggle").addEventListener("click",()=>togglePanel("ch"));
 function setGraphLayout(m){S.layout=m;layout();refresh();readable();animateEdges();renderSettings()}
 function makeResizer(sel,onMove,onReset){
   const h=document.querySelector(sel);

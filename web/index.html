@@ -112,23 +112,13 @@ header{
 .brand{display:flex;align-items:center;gap:8px;font-size:var(--fs-brand);font-weight:700;letter-spacing:-.01em}
 .brand .mark{display:block;width:24px;height:24px;flex:none}
 .hdr-actions{display:flex;align-items:center;gap:6px}
-.header-summary{position:relative;min-width:0;font-size:var(--fs-micro);color:var(--muted)}
-.header-summary summary{display:flex;align-items:center;gap:4px;min-width:0;white-space:nowrap;list-style:none;cursor:pointer;border-radius:6px;padding:5px 6px}
-.header-summary summary::-webkit-details-marker{display:none}
-.header-summary summary:hover,.header-summary[open] summary{background:var(--surface2)}
+.header-summary{display:flex;align-items:center;flex-wrap:wrap;gap:2px 12px;min-width:0;font-size:var(--fs-micro);line-height:1.35;color:var(--muted)}
+.header-summary>span,.header-summary>b{white-space:nowrap}
 .header-summary b{color:var(--text);font-weight:600}
-.header-summary-chevron{margin-left:3px}
-.header-summary[open] .header-summary-chevron{transform:rotate(180deg)}
 .header-summary.warn .header-summary-state{color:var(--c-wait);font-weight:600}
-.header-summary-panel{position:absolute;top:calc(100% + 8px);left:0;z-index:60;width:max-content;max-width:calc(100vw - 24px);padding:10px 12px;white-space:pre-line;background:var(--surface);color:var(--text);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow-lg)}
-.header-summary.warn .header-summary-panel{border-color:var(--c-wait-g)}
-@media(max-width:1000px){.header-summary-extra{display:none}}
+@media(max-width:1000px){.header-summary{gap:1px 8px;font-size:10px}}
 @media(max-width:640px){
-  .header-summary{flex:1;min-width:0}
-  .header-summary summary{padding:5px 0;gap:2px;font-size:10px}
-  .header-summary-agents{overflow:hidden;text-overflow:ellipsis}
-  .header-summary-state{max-width:16px;overflow:hidden}
-  .header-summary-panel{position:fixed;top:46px;left:10px;right:10px;width:auto}
+  .header-summary{flex:1;min-width:0;max-height:38px;overflow:hidden;gap:1px 6px;font-size:9px}
   header .conn{flex:none;margin-left:0}
   header #connTxt{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 }
@@ -163,10 +153,10 @@ header{
 .group{margin-bottom:4px}
 .group-h{
   display:flex;align-items:center;gap:6px;
-  padding:10px 14px 6px;border-bottom:1px solid var(--line);
+  padding:8px 14px;min-height:36px;border-bottom:1px solid var(--line);
   font-size:var(--fs-micro);font-weight:700;letter-spacing:.07em;color:var(--muted);
 }
-.group-h .cnt{margin-left:auto;font-weight:600}
+.group-h .cnt,.lg-count{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;min-width:22px;min-height:20px;padding:1px 7px;border-radius:999px;font-size:var(--fs-micro);font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:0;color:var(--st,var(--c-err));background:var(--st-bg,var(--c-err-bg));line-height:1.5}
 .group-h.attn{color:var(--c-err)}
 .s-item{
   display:flex;align-items:flex-start;gap:9px;width:100%;text-align:left;cursor:pointer;
@@ -273,17 +263,17 @@ header{
   position:absolute;left:12px;bottom:12px;display:flex;gap:12px;align-items:center;
   background:var(--surface);border:1px solid var(--line);border-radius:8px;
   padding:6px 12px;font-size:var(--fs-micro);color:var(--muted);box-shadow:var(--shadow-sm);
-  max-width:calc(100% - 24px);flex-wrap:wrap;row-gap:6px;
+  max-width:calc(100% - 152px);flex-wrap:wrap;row-gap:6px;
 }
 .legend span{display:flex;align-items:center;gap:5px}
-.canvas-tools{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:6px}
+.canvas-tools{position:absolute;right:12px;bottom:12px;display:flex;align-items:center;gap:4px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-sm)}
 .ct-btn{
   width:30px;height:30px;border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;
   background:var(--surface);border:1px solid var(--line-strong);box-shadow:var(--shadow-sm);
   font-size:14px;line-height:1;color:var(--text);
 }
 .ct-btn:hover{background:var(--surface2)}
-#zactual,#zread{font-size:10px;font-variant-numeric:tabular-nums}
+#zactual{width:42px;font-size:10px;font-variant-numeric:tabular-nums}
 #emptyHint{
   position:absolute;left:32px;top:110px;width:224px;display:flex;flex-direction:column;
   gap:4px;color:var(--muted);pointer-events:none;font-size:var(--fs-small);
@@ -358,30 +348,32 @@ header{
   font-size:var(--fs-micro);font-weight:700;letter-spacing:.07em;color:var(--muted);
 }
 .chat-h .sub{font-weight:400;letter-spacing:0}
+.messages-toggle{width:100%;border:0;border-bottom:1px solid var(--line);background:transparent;text-align:left;cursor:pointer;font-family:inherit}
+.messages-chevron{transition:transform .15s;font-size:16px}
+#app:not(.hide-ch) .messages-chevron{transform:rotate(90deg)}
 .chat-body{display:flex;flex:1;min-height:0}
 .chat-main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
 /* Requests is an independently resizable sidebar section. */
 #ledger{position:relative;height:var(--request-height,300px);max-height:calc(100% - 80px);background:var(--surface);flex:none;border-top:1px solid var(--line-strong);display:flex;flex-direction:column;min-height:0;min-width:0}
 #ledger.collapsed{height:40px}
-#ledger.collapsed .lg-tools,#ledger.collapsed .lg-list,#ledger.collapsed .rz-requests{display:none}
+#ledger.collapsed .lg-list,#ledger.collapsed .rz-requests{display:none}
 .rz-requests{top:-4px;left:0;right:0;height:8px;cursor:row-resize;touch-action:none}
 .requests-toggle{border:0;background:transparent;width:100%;text-align:left;cursor:pointer;font-family:inherit}
 .requests-heading{display:flex;align-items:center;flex:none;min-height:40px;border-bottom:1px solid var(--line)}
 .requests-heading .requests-toggle{flex:1;min-width:0;width:auto;border-bottom:0;letter-spacing:0;padding:7px 10px;gap:5px}
-.requests-heading .lg-tools{padding:0 8px 0 0}
-.requests-heading .lg-tools button{padding:0 7px}
 .requests-chevron{transition:transform .15s;font-size:16px}
 #ledger:not(.collapsed) .requests-chevron{transform:rotate(90deg)}
 .lg-h{
   display:flex;align-items:center;gap:8px;padding:7px 12px;min-height:40px;box-sizing:border-box;flex:none;border-bottom:1px solid var(--line);
   font-size:var(--fs-micro);font-weight:700;letter-spacing:.07em;color:var(--muted);
 }
-.lg-tools{display:flex;justify-content:flex-end;padding:6px 12px;flex:none}
-.lg-tools .seg{height:22px;flex:none}
-.lg-count{margin-left:auto;font-weight:700;letter-spacing:0;color:var(--c-err);background:var(--c-err-bg);border-radius:999px;padding:1px 7px}
-.lg-list{flex:1;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:11px}
+.lg-count[hidden]{display:none}
+.lg-list{flex:1;min-height:0;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:11px}
 .lg-row{display:flex;flex-direction:column;gap:6px;padding-left:8px;border-left:2px solid transparent;flex-shrink:0;min-width:0}
 .lg-row.attn{border-left-color:var(--c-wait-g)}
+.lg-row+.lg-row{position:relative;margin-top:4px;padding-top:12px}
+.lg-row+.lg-row::before{content:"";position:absolute;left:0;right:0;top:0;border-top:1px solid transparent}
+body[data-request-layout="dividers"] .lg-row+.lg-row::before{border-color:var(--line-strong)}
 .lg-row{cursor:pointer}
 .lg-row:hover .lg-msg{color:var(--accent)}
 .lg-msg{font-size:var(--fs-small);cursor:pointer;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
@@ -401,12 +393,12 @@ header{
 .lg-expand{align-self:flex-start;border:0;background:none;color:var(--muted);padding:2px 0;font-size:var(--fs-micro);cursor:pointer;text-decoration:underline}
 .pill.pulse{animation:lgPulse 1s ease-in-out infinite}
 @keyframes lgPulse{50%{opacity:.35}}
-#msgs{ /* 스크롤 컨테이너는 패널 전체 폭, 내용 열만 920px 중앙 정렬 → 스크롤바가 가장자리에 붙음 */
-  flex:1;overflow-y:auto;padding:10px 20px;display:grid;grid-template-columns:minmax(0,920px);justify-content:center;align-content:start;gap:8px;
+#msgs{ /* 스크롤 컨테이너는 패널 전체 폭, 내용 열만 최대 1200px 중앙 정렬 → 스크롤바가 가장자리에 붙음 */
+  flex:1;overflow-y:auto;padding:10px 20px;display:grid;grid-template-columns:minmax(0,1200px);justify-content:center;align-content:start;gap:8px;
 }
 .m-user{justify-self:end;max-width:64%;background:var(--accent-soft);border:1px solid var(--line);
   border-radius:12px 12px 3px 12px;padding:7px 12px;font-size:var(--fs-body)}
-.m-row{justify-self:start;max-width:78%;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.m-row{justify-self:start;max-width:86%;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
 .m-sender{display:flex;align-items:center;gap:6px;font-size:var(--fs-micro);color:var(--muted)}
 .m-receipt{justify-self:end;max-width:78%}
 .m-receipt .m-badges{justify-content:flex-end}
@@ -436,14 +428,14 @@ span.ttag.agent-tag{cursor:default}
   cursor:pointer;border:0;
 }
 .m-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;max-width:100%;min-width:0}
-.m-row.m-question{width:640px;min-width:0}
+.m-row.m-question{width:860px;min-width:0}
 .m-question-card{width:100%;min-width:0;box-sizing:border-box;overflow:hidden;background:var(--surface2);border:1px solid var(--line-strong);border-radius:12px 12px 12px 3px}
 .m-question-card .m-sys{border:0;border-bottom:1px solid var(--line);border-radius:0;padding:10px 12px;background:none}
 .m-question-card .m-chips{display:grid;grid-template-columns:minmax(0,1fr);gap:7px;margin:0;padding:10px;box-sizing:border-box}
 .m-question-card .question-option{width:100%;min-height:38px;box-sizing:border-box;padding:7px 10px}
-.chat-in{display:flex;align-items:flex-end;gap:8px;padding:10px 20px 12px;border-top:1px solid var(--line);justify-content:center} /* flex-end: the input grows upward, Send stays on the baseline */
+.chat-in{display:flex;align-items:flex-end;gap:8px;padding:10px max(20px,calc((100% - 1200px)/2)) 12px;border-top:1px solid var(--line);justify-content:center} /* flex-end: the input grows upward, Send stays on the baseline */
 #input{
-  flex:0 1 820px;min-width:0;min-height:38px;padding:7px 14px;border-radius:9px;line-height:1.5;resize:none;overflow-y:auto;
+  flex:1 1 0;min-width:0;min-height:38px;padding:7px 14px;border-radius:9px;line-height:1.5;resize:none;overflow-y:auto;
   max-height:clamp(38px,calc(var(--chh,232px) - 115px),186px); /* 8 lines at most, minus the dock chrome (33px header + 22px row padding) and 60px kept for the message list */
   background:var(--surface);border:1px solid var(--line-strong);
 }
@@ -566,13 +558,18 @@ input[type="checkbox"]{accent-color:var(--accent)}
 
 /* ---------- minimap ---------- */
 #minimap{
-  position:absolute;right:12px;bottom:12px;width:172px;height:116px;overflow:hidden;cursor:pointer;touch-action:none;
+  position:absolute;right:12px;top:12px;width:172px;height:min(116px,calc(100% - 76px));overflow:hidden;
   background:color-mix(in srgb, var(--surface) 74%, transparent);
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
   border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-lg);
   opacity:.85;transition:opacity .15s;
 }
-#minimap:hover{opacity:1}
+#minimap:hover,#minimap:focus-within{opacity:1}
+#minimapMap{position:absolute;inset:0;overflow:hidden;cursor:pointer;touch-action:none}
+#minimap #zfit{position:absolute;right:5px;bottom:5px;z-index:2;width:26px;height:26px}
+#zfit .fit-inward{display:none}
+#zfit[aria-pressed="true"] .fit-outward{display:none}
+#zfit[aria-pressed="true"] .fit-inward{display:block}
 .mm-node{position:absolute;border-radius:2.5px;background:var(--st-g);opacity:.9}
 .mm-gw{position:absolute;border-radius:2.5px;border:1px dashed var(--muted);opacity:.65}
 .mm-view{
@@ -585,8 +582,9 @@ input[type="checkbox"]{accent-color:var(--accent)}
 #app.hide-sb .sidebar-shell,#app.hide-sb .rz-sb{display:none}
 #app.hide-dt{--dw:0px}
 #app.hide-dt .detail,#app.hide-dt .rz-dt{display:none}
-#app.hide-ch{--chh:0px}
-#app.hide-ch .chat{display:none}
+#app.hide-ch{--chh:40px!important}
+#app.hide-ch #msgs,#app.hide-ch #composerScope,#app.hide-ch #chatForm,#app.hide-ch #conversationStatus,#app.hide-ch .rz-ch{display:none}
+#app.hide-ch .chat-h{height:39px;min-height:39px;border-bottom:0}
 
 /* ---------- 명령 팔레트 · 단축키 편집 ---------- */
 #palette,#keysEd{
@@ -668,7 +666,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
     display:flex;position:absolute;grid-area:auto;right:0;top:0;bottom:0;width:296px;max-width:100%;z-index:20;
     box-shadow:var(--shadow-lg);
   }
-  #minimap{display:none!important} /* the wrapping legend uses this space */
+  #minimap{width:128px;height:min(86px,calc(100% - 76px))}
 }
 @media (max-width:640px){
   #app{grid-template-columns:minmax(0,1fr)}
@@ -692,7 +690,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
   .legend{gap:6px 10px;padding:6px 8px}
 }
 @media (max-height:600px){
-  .canvas-tools{display:grid;grid-template-columns:repeat(2,30px)}
+  #minimap{width:128px;height:min(86px,calc(100% - 76px))}
   .legend{display:none}
 }
 @media (prefers-reduced-motion:reduce){
@@ -711,7 +709,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
 <div id="app">
   <header>
     <div class="brand"><img class="mark" src="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%238F4F00%22%2F%3E%3Cg%20stroke%3D%22%23fff%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20fill%3D%22none%22%20opacity%3D%22.92%22%3E%3Cpath%20d%3D%22M11.5%2016%20C16%2016%2017%2010.5%2021%2010.5%22%2F%3E%3Cpath%20d%3D%22M11.5%2016%20C16%2016%2017%2021.5%2021%2021.5%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%229.5%22%20cy%3D%2216%22%20r%3D%223.4%22%20fill%3D%22%23fff%22%2F%3E%3Ccircle%20cx%3D%2222.5%22%20cy%3D%2210.5%22%20r%3D%222.5%22%20fill%3D%22%23fff%22%2F%3E%3Ccircle%20cx%3D%2222.5%22%20cy%3D%2221.5%22%20r%3D%222.5%22%20fill%3D%22%23fff%22%2F%3E%3C%2Fsvg%3E" width="24" height="24" alt="">relay</div>
-    <details id="headerSummary" class="header-summary"><summary aria-label="Show activity details">Agents</summary><div class="header-summary-panel"></div></details>
+    <div id="headerSummary" class="header-summary" role="group" aria-label="Agent activity"></div>
     <span class="conn" id="conn"><i></i><span id="connTxt">Connected</span></span>
     <div class="hdr-actions">
       <button id="sidebarBtn" class="icon-btn" aria-label="Toggle task list" aria-expanded="false" aria-controls="sidebar" title="Task list">☰</button>
@@ -736,19 +734,14 @@ input[type="checkbox"]{accent-color:var(--accent)}
       <aside id="ledger" aria-label="Requests">
         <div class="rz rz-requests" role="separator" tabindex="0" aria-label="Resize Requests" aria-orientation="horizontal"></div>
         <div class="requests-heading">
-        <button class="lg-h requests-toggle" id="requestsToggle" aria-expanded="true" aria-controls="lgList segLedger"><span class="requests-chevron" aria-hidden="true">›</span>Requests<span class="lg-count" id="lgCount" hidden></span></button>
-        <div class="lg-tools">
-          <div class="seg" id="segLedger">
-            <button data-f="open" class="on">Open</button><button data-f="all">All</button>
-          </div>
-        </div>
+        <button class="lg-h requests-toggle" id="requestsToggle" aria-expanded="true" aria-controls="lgList"><span class="requests-chevron" aria-hidden="true">›</span>Requests<span class="lg-count" id="lgCount" hidden></span></button>
         </div>
         <div class="lg-list" id="lgList"></div>
       </aside>
   </aside>
   <section class="canvas-workspace" aria-label="Canvas workspace">
 
-    <section class="canvas" id="canvas" tabindex="0" aria-label="Task graph. Arrow keys pan, plus and minus zoom, zero shows actual size, Home fits all tasks." title="Horizontal scroll / Shift+wheel pan · Wheel zoom · Arrow keys pan · +/− zoom · 0 actual size · Home fit">
+    <section class="canvas" id="canvas" tabindex="0" aria-label="Task graph. Arrow keys pan, plus and minus zoom, zero shows actual size, Home fits all tasks." title="Scroll to pan · Pinch to zoom · Arrow keys pan · +/− zoom · 0 actual size · Home fit">
       <div id="world">
         <svg id="edges" width="2400" height="1600" viewBox="0 0 2400 1600" aria-hidden="true"></svg>
         <div class="gw" id="gw">
@@ -772,14 +765,18 @@ input[type="checkbox"]{accent-color:var(--accent)}
         <span class="st-cancelled"><i class="dot"></i>Cancelled</span>
         <span class="st-err"><i class="dot"></i>Error</span>
       </div>
-      <div class="canvas-tools">
-        <button class="ct-btn" id="zin" aria-label="Zoom in">+</button>
+      <div class="canvas-tools" role="group" aria-label="Graph zoom">
         <button class="ct-btn" id="zout" aria-label="Zoom out">−</button>
         <button class="ct-btn" id="zactual" aria-label="Reset to actual size" title="Actual size (100%)">100%</button>
-        <button class="ct-btn" id="zread" aria-label="Readable view" title="Readable view · select a task in the list to navigate">Read</button>
-        <button class="ct-btn" id="zfit" aria-label="Fit to view" title="Fit all sessions (overview)">⤢</button>
+        <button class="ct-btn" id="zin" aria-label="Zoom in">+</button>
       </div>
-      <div id="minimap" aria-hidden="true"></div>
+      <div id="minimap" role="region" aria-label="Graph overview">
+        <div id="minimapMap" aria-hidden="true"></div>
+        <button class="ct-btn" id="zfit" aria-label="Fit all sessions" title="Fit all sessions (overview)" aria-pressed="false">
+          <svg class="fit-outward" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5 M16 3h5v5 M21 16v5h-5 M8 21H3v-5"/></svg>
+          <svg class="fit-inward" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h5V3 M16 3v5h5 M21 16h-5v5 M8 21v-5H3"/></svg>
+        </button>
+      </div>
       <div id="toasts" aria-live="polite"></div>
     </section>
 
@@ -796,7 +793,7 @@ input[type="checkbox"]{accent-color:var(--accent)}
     <div class="chat-body">
 
       <div class="chat-main" id="chatMain">
-        <div class="chat-h"><span>Messages</span><span class="sub">Worker summaries and conversation</span></div>
+        <button type="button" class="chat-h messages-toggle" id="messagesToggle" aria-expanded="true" aria-controls="msgs composerScope chatForm conversationStatus"><span class="messages-chevron" aria-hidden="true">›</span><span>Messages</span><span class="sub">Worker summaries and conversation</span></button>
         <div id="conversationStatus" role="status" tabindex="-1" hidden></div>
         <div id="msgs" aria-live="polite"></div>
         <div id="composerScope" class="composer-scope"></div>

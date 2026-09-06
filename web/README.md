@@ -27,15 +27,16 @@ sessions (`RELAY_HOME=~/.config/relay-fake`, project `myapp` at `/tmp/relay-fake
 
 The sidebar's Requests section is one row per user message: the request, what relay did with it
 (`web/src/ledger.ts`, `requestRows(messages, tasks)`), the live state of that disposition, the answer
-if one came back, and the action that unblocks it. Ordered needs-you first, filtered to Open by
-default. It replaced the dispatch log, which said what the dispatcher decided and never said whether
+if one came back, and relevant task actions. All request history remains visible without Open/All
+filters, with needs-you requests first and status badges distinguishing active and completed requests. It replaced the dispatch log, which said what the dispatcher decided and never said whether
 an answer came back. Pure derivation over the snapshot the client already holds — no server change.
 
 Requests lives in the task sidebar (default width 350px) as a collapsible section with its own
 height control and independently scrolling history. Messages remains in the lower conversation area.
 User messages and their receipts align right; agent and Relay messages align left. Agents use an
 emoji-avatar-and-ID pill as the sender label; system messages use Relay. A question and its answer
-choices share one card, with long choices wrapping inside it. Clicking a request title
+choices share one card in Messages, with long choices wrapping inside it. Requests does not duplicate
+those answer choices. Clicking a request title
 jumps to that agent's latest message, focuses it and briefly highlights it; split-request task chips
 jump to each agent separately. Stable UUID-derived emoji avatars and colors match across the ledger,
 conversation, graph and task list. The ID remains readable alongside the avatar, so identity does not
@@ -44,14 +45,21 @@ depend on color alone.
 Task detail starts closed and opens inside the right side of the canvas on task selection. Closing it returns space to the graph;
 restoring a selection after reload does not reopen detail. Agents/queued/estimated token usage is a
 compact summary in the top header, whose Relay icon matches the browser favicon. The conversation keeps its responsive 45% default height and
-saved user height behavior; graph Read/overview navigation remains available without an Alignment
-setting. Wider parent/child
+saved user height behavior. Clicking the Messages header collapses it to a 40px header; reopening
+restores the height and draft. Conversation content and the composer use up to 1200px of available
+width. Scroll and trackpad gestures pan the graph; Shift+scroll moves horizontally.
+Only Ctrl/Meta-modified scrolling (including browser pinch gestures) zooms at the pointer.
+The minimap corner button toggles between fitting all tasks and returning to readable view, with
+its pressed state and accessible label reflecting the current mode. There is no separate Read button
+or Alignment setting. Bottom-right controls show minus, current percentage and plus; clicking the
+percentage resets to 100%. Wider parent/child
 cards use two-line titles and separated columns. Pointer focus no longer moves a node before its
 click can select it; keyboard focus still brings the node into view.
 
 For isolated layout QA, run `RELAY_UI_AUDIT_PORT=18814 bun scripts/ui-audit/serve.ts` from this
 worktree. `/?history` adds 24 historical request/answer pairs for independent scroll and latest-agent
-message navigation checks. The linked layout document lists the current verification plan, not a
+message navigation checks. `/?request-layout=plain` and `/?request-layout=dividers` compare identical
+Requests content and layout with only the row separators changed. The linked layout document lists the current verification plan, not a
 completed test report. The historical results below retain their original dates. This synthetic server
 does not operate installed Relay or real Claude sessions; Vimium Esc issue #58 remains separate.
 
