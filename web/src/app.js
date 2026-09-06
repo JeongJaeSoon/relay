@@ -194,7 +194,7 @@ function renderLedger(){
   const attn=LEDGER.filter(r=>r.bucket==="needs_you").length;
   const count=$("#lgCount");count.hidden=!attn;count.textContent=attn+" need"+(attn===1?"s":"")+" you";
   const requestsTab=$("#showRequests");
-  if(requestsTab){requestsTab.textContent="Requests"+(attn?" · "+attn+" need you":"")}
+  if(requestsTab){requestsTab.textContent="Requests"+(attn?" · "+count.textContent:"")}
   document.querySelectorAll("#segLedger button").forEach(b=>{b.classList.toggle("on",b.dataset.f===ledgerFilter);b.setAttribute("aria-pressed",String(b.dataset.f===ledgerFilter))});
   const rows=ledgerFilter==="all"?LEDGER:LEDGER.filter(r=>r.bucket!=="settled");
   list.textContent="";

@@ -18,6 +18,7 @@ test("default conversation uses 45% of available space, including a banner and s
     expect(available - height(viewport, null, banner)).toBeGreaterThanOrEqual(120);
   }
   expect(height(900, null)).toBeCloseTo(852 * .45);
+  expect(height(414, null)).toBe(240);
 });
 
 test("saved pixel heights survive viewport clamping and null restores responsive sizing", () => {
