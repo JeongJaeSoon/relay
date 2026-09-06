@@ -211,12 +211,13 @@ header{
 @keyframes flow{to{stroke-dashoffset:-11}}
 
 .gw{
-  position:absolute;width:210px;padding:9px 12px;border-radius:10px;
-  background:var(--surface2);border:1px dashed var(--line-strong);box-shadow:var(--shadow-sm);
+  position:absolute;width:260px;padding:8px 10px 8px 13px;border-radius:10px;
+  background:var(--surface);border:1px solid var(--line-strong);box-shadow:var(--shadow-sm);
   transition:left .35s cubic-bezier(.22,.61,.36,1),top .35s cubic-bezier(.22,.61,.36,1),opacity .25s;
 }
-.gw-t{font-size:var(--fs-body);font-weight:700}
-.gw-s{font-size:var(--fs-micro);color:var(--muted)}
+.gw-t{font-size:var(--fs-small);font-weight:700;line-height:1.4}
+.gw-s{font-size:var(--fs-micro);color:var(--muted);margin-top:2px}
+.gw::before{content:"";position:absolute;left:5px;top:10px;bottom:10px;width:3px;border-radius:2px;background:var(--c-queue-g)}
 .lane-label{
   position:absolute;display:none;
   font-size:var(--fs-micro);font-weight:700;letter-spacing:.07em;color:var(--muted);

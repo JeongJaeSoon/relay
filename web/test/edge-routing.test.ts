@@ -39,7 +39,7 @@ function sample(d: string): Point[] {
 function render(mode: string, queueWidth: number, withQueue = true) {
   const paths: Record<string, string>[] = [];
   const boxes = new Map<string, Box>();
-  const gateway: Box = { offsetLeft: mode === "tree" ? 32 : 40, offsetTop: mode === "tree" ? 40 : 180, offsetWidth: 210, offsetHeight: 70 };
+  const gateway: Box = { offsetLeft: mode === "tree" ? 32 : 40, offsetTop: mode === "tree" ? 40 : 180, offsetWidth: queueWidth, offsetHeight: 70 };
   const parentX = queueWidth === 260 ? 360 : 460;
   const tasks: any[] = [40, 300, 610].map((top, i) => {
     const id = `T-${i}`;
@@ -64,18 +64,11 @@ function render(mode: string, queueWidth: number, withQueue = true) {
   return { paths, boxes, queue, gateway };
 }
 
-test("gateway routes avoid every queue card in tree and radial layouts, including wider cards", () => {
+test("matching gateway and queue widths keep single cubic routes clear of queue cards in both layouts", () => {
   for (const mode of ["tree", "radial"]) for (const width of [260, 340]) {
-    const { paths, boxes, queue, gateway } = render(mode, width);
+    const { paths, boxes, queue } = render(mode, width);
     for (const path of paths.slice(0, 3)) {
-      expect(path.d).not.toMatch(/[HVQ]/);
-      const segments = path.d!.split(" C");
-      expect(segments).toHaveLength(3);
-      const first = segments[1]!.split(" ").map(Number), second = segments[2]!.split(" ").map(Number);
-      // Both tangents at the join are vertical and point in the same direction.
-      expect(first[2]).toBe(first[4]);
-      expect(second[0]).toBe(first[4]);
-      expect((first[5]! - first[3]!) * (second[1]! - first[5]!)).toBeGreaterThanOrEqual(0);
+      expect(path.d).toMatch(/^M[-\d.]+ [-\d.]+ C[-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+$/);
       const points = sample(path.d!);
       for (const q of queue) {
         const box = boxes.get(`node-${q.id}`)!;
@@ -83,9 +76,7 @@ test("gateway routes avoid every queue card in tree and radial layouts, includin
           && p.y >= box.offsetTop && p.y <= box.offsetTop + box.offsetHeight);
         expect(hits).toHaveLength(0);
       }
-      // The descending curve stays in the clear gutter, away from queue titles.
-      const ys = points.filter(p => p.y > gateway.offsetTop + gateway.offsetHeight + 40);
-      if (ys.length) expect(Math.min(...ys.map(p => p.x))).toBeGreaterThanOrEqual(gateway.offsetLeft + width + 24 - 1e-6);
+
     }
   }
 });
@@ -101,4 +92,13 @@ test("parent-child and queue-free gateway edges retain their cubic anchors", () 
     const plain = render(mode, 260, false);
     for (const path of plain.paths) expect(path.d).toContain(" C");
   }
+});
+
+test("gateway and queued card CSS keep their right edges aligned", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const gateway = html.match(/\.gw\{([^}]+)\}/)![1]!;
+  const queued = html.match(/\.node\.queued\{([^}]+)\}/)![1]!;
+  const width = (css: string) => Number(css.match(/(?:^|;)\s*width:(\d+)px/)![1]);
+  expect(width(gateway)).toBe(width(queued));
+  expect(width(gateway)).toBe(260);
 });

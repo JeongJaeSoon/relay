@@ -462,10 +462,6 @@ function renderEdges(){
   edgesSvg.textContent="";const fam=famOf(S.sel);
   const tree=S.layout==="tree", A=22; /* tree: anchored on the node's top (its title row) — the first row comes out horizontal */
   const qs=queuedTasks().filter(t=>!t.sub);
-  const queueRight=qs.reduce((right,t)=>{
-    const n=document.getElementById("node-"+t.id);
-    return n?Math.max(right,n.offsetLeft+n.offsetWidth):right;
-  },gwEl.offsetLeft+gwEl.offsetWidth);
   graphTasks().forEach(t=>{
     if(!t.sub&&t.status==="queue")return; /* queued tasks are chained below instead */
     const n=document.getElementById("node-"+t.id);if(!n)return;
@@ -483,15 +479,7 @@ function renderEdges(){
     const y2=tree?n.offsetTop+A:n.offsetTop+n.offsetHeight/2;
     const path=document.createElementNS("http://www.w3.org/2000/svg","path");
     const cx=Math.round((x1+x2)/2); /* the same S-bezier in both layouts — the first row has y1==y2, so it falls out horizontal */
-    if(!t.sub&&qs.length){
-      // Two tangent-matched curves clear the queue before descending. Keeping
-      // the second curve's control points in the gutter prevents card overlap.
-      const bend=Math.max(x1+24,queueRight+24);
-      const turnY=y1+Math.sign(y2-y1)*Math.min(24,Math.abs(y2-y1)/3);
-      path.setAttribute("d",`M${x1} ${y1} C${x1+(bend-x1)*.6} ${y1} ${bend} ${y1} ${bend} ${turnY} C${bend} ${turnY+(y2-turnY)*.5} ${bend} ${y2} ${x2} ${y2}`);
-    }else{
-      path.setAttribute("d","M"+x1+" "+y1+" C"+cx+" "+y1+" "+cx+" "+y2+" "+x2+" "+y2);
-    }
+    path.setAttribute("d","M"+x1+" "+y1+" C"+cx+" "+y1+" "+cx+" "+y2+" "+x2+" "+y2);
     path.setAttribute("class",edgeCls(t)+(fam.has(t.id)?" rel":""));
     edgesSvg.append(path);drawIn(path,t);
   });
