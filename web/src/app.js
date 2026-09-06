@@ -802,6 +802,14 @@ function centerOn(t){centerAt(document.getElementById("node-"+t.id),t)}
 function centerOnBox(f){centerAt(document.getElementById("fnode-"+f.key),f)}
 canvas.addEventListener("wheel",e=>{
   e.preventDefault();
+  const unit=e.deltaMode===1?16:e.deltaMode===2?canvas.clientWidth:1;
+  if(!e.ctrlKey&&!e.metaKey&&(e.deltaX!==0||e.shiftKey)){
+    // Horizontal wheels and trackpad swipes pan in screen pixels at any zoom.
+    // Browsers may already translate Shift+wheel into deltaX.
+    view.x-=(e.deltaX||e.deltaY)*unit;
+    if(!e.shiftKey)view.y-=e.deltaY*(e.deltaMode===2?canvas.clientHeight:unit);
+    touchView();applyView();return;
+  }
   const rect=canvas.getBoundingClientRect();
   const cx=e.clientX-rect.left,cy=e.clientY-rect.top;
   const k2=Math.min(MAXZ,Math.max(MINZ,view.k*(1-e.deltaY*.0012)));
