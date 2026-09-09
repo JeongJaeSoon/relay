@@ -89,6 +89,27 @@ describe("recover", () => {
     expect(report.invariants).toEqual([]);
   });
 
+  test("a SessionStart buffered during the refreshed roster read is replayed before absence reconciliation", async () => {
+    const s = await buildTestApp(); const t = s.seedTask("starting", { session_id: null, short_id: null, process_state: "starting", process_generation: 1 });
+    s.runner.rows.clear();
+    let listCalls = 0; const list = s.runner.list.bind(s.runner);
+    s.runner.list = async (all?: boolean) => {
+      listCalls++;
+      if (listCalls === 2) ingestHook(
+        { hook_event_name: "SessionStart", source: "startup", session_id: "sid-during-roster" },
+        { "x-relay-task": t, "x-relay-gen": "2" },
+        s.svc.ingestDeps,
+      );
+      return list(all);
+    };
+    const report = await recover(args(s));
+    const task = loadTask(s.db, t)!;
+    expect(listCalls).toBe(2); expect(report.crashed).toEqual([]);
+    expect(task).toMatchObject({ status: "running", process_state: "alive", process_generation: 2, session_id: "sid-during-roster" });
+    expect(s.db.query("select count(*) n from events where task_uuid=? and type='process.ended' and json_extract(payload_json,'$.reason')='recovery: not in agents list'").get(t)).toEqual({ n: 0 });
+    expect(report.invariants).toEqual([]);
+  });
+
   test("a replayed SessionStart keeps durable grace across an after-replay roster failure and the next recovery pass", async () => {
     const s = await buildTestApp(); const t = s.seedTask("starting", { session_id: null, short_id: null, process_state: "starting", process_generation: 1 });
     s.runner.rows.clear();

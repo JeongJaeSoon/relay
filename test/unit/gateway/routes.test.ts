@@ -24,6 +24,8 @@ describe("write routes", () => {
     const before = (s.db.query("select count(*) c from messages where role='user'").get() as any).c;
     const reply = await s.req("POST", "/api/messages", { text: "continue anyway", reply_to_task_id: uuid, client_message_id: "closing-reply" });
     expect(reply.status).toBe(409); expect(await reply.text()).toContain("cleanup is in progress");
+    const answer = await s.req("POST", `/api/tasks/${uuid}/answer`, { text: "continue anyway" });
+    expect(answer.status).toBe(409); expect(await answer.text()).toContain("cleanup is in progress");
     expect(s.db.query("select count(*) c from messages where role='user'").get()).toEqual({ c: before });
     expect(s.db.query("select count(*) c from commands where task_uuid=? and kind='send' and state='pending'").get(uuid)).toEqual({ c: 0 });
 

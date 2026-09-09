@@ -41,14 +41,18 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
   // Scheduler/outbox keep the recovery barrier closed even when a replayed hook requests more work.
   const beforeReplay = d.log.lastSeq();
   await replayBuffered();
-  const replayedLifecycle = d.db.query("select type, task_uuid, process_generation from events where type in ('process.started','process.ended') and seq>?").all(beforeReplay) as any[];
-  const replayedStarts = new Set(replayedLifecycle.filter((e) => e.type === "process.started").map((e) => `${e.task_uuid}:${e.process_generation}`));
-  const replayedEnds = new Set(replayedLifecycle.filter((e) => e.type === "process.ended").map((e) => `${e.task_uuid}:${e.process_generation}`));
   // The first roster read and hook replay have an async boundary between them. Refresh after replay so a session that
   // started in that window is not compared with a snapshot taken before it existed. A failed refresh is UNKNOWN, not
   // absence: leave the barrier up and let serve retry the whole recovery pass.
   rows = await readRoster("after replay");
   if (!rows) { slog.error("recovery: agents --json unavailable after hook replay — leaving reconciliation incomplete and staying in recovering mode"); return report; }
+  // Hooks can also arrive while that refreshed roster is being read. Drain once more before reconciliation; after this
+  // await the ownership loop is synchronous, so no buffered lifecycle event can slip between this replay and the
+  // absence decision. The final replay below still handles hooks that arrive during later async cleanup/resume work.
+  await replayBuffered();
+  const replayedLifecycle = d.db.query("select type, task_uuid, process_generation from events where type in ('process.started','process.ended') and seq>?").all(beforeReplay) as any[];
+  const replayedStarts = new Set(replayedLifecycle.filter((e) => e.type === "process.started").map((e) => `${e.task_uuid}:${e.process_generation}`));
+  const replayedEnds = new Set(replayedLifecycle.filter((e) => e.type === "process.ended").map((e) => `${e.task_uuid}:${e.process_generation}`));
   const aliveIds = new Set(rows.filter((r) => r.alive && r.session_id).map((r) => r.session_id!));
   const takenSession = (sid: string, uuid: string) => !!d.db.query("select 1 from tasks where session_id=? and uuid<>?").get(sid, uuid);
   // ① ownership / process state for every non-closed task
