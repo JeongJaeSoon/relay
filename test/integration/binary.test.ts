@@ -17,5 +17,6 @@ test("compiled binary serves the built dashboard and enforces the hook guard", a
   const result = await runBinarySmoke({ PATH: process.env.PATH, RELAY_SERVICE: "1", ANTHROPIC_API_KEY: "secret", BUN_CONFIG_VERBOSE_FETCH: "1" });
   expect(result.version).toMatch(/^relay \d+\.\d+\.\d+$/);
   expect(result.dashboardBytes).toBeGreaterThan(1_000);
+  expect(result.dashboardLang).toBe("en");
   expect(result.guardExitCode).toBe(2);
 }, 30_000);

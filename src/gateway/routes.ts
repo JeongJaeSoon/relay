@@ -1,4 +1,4 @@
-import { pendingCleanup } from "../lifecycle/cleanup.ts";
+import { closePending, pendingCleanup } from "../lifecycle/cleanup.ts";
 import { Hono } from "hono";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -44,7 +44,12 @@ export function apiRoutes(ctx: AppContext) {
     const cid = b.data.client_message_id ?? ulid();
     const dup = ctx.db.query("select id from messages where client_message_id=?").get(cid) as any; if (dup) return c.json({ message_id: dup.id }, 202);
     const reply = b.data.reply_to_task_id ?? null;
-    if (reply && !loadTask(ctx.db, reply)) return bad(c, "unknown task", 404);                 // validate before emit: messages.task_uuid is a foreign key
+    const replyTask = reply ? loadTask(ctx.db, reply) : null;
+    if (reply && !replyTask) return bad(c, "unknown task", 404);                              // validate before emit: messages.task_uuid is a foreign key
+    // Close is a durable stop/rm transaction over every owned generation. Do not append a send behind that cleanup:
+    // cleanup commands run first, so the task could become closed while the new send stayed pending forever.
+    if (replyTask?.status === "closed") return bad(c, "task is closed", 409);
+    if (replyTask && closePending(ctx.db, replyTask.uuid)) return bad(c, "task cleanup is in progress — wait for it to finish or retry cleanup first", 409);
     // Ask mode: the client declares a question the way it declares a reply target. Both entry paths — the toggle's
     // `ask` and the `?` the user typed — resolve here into `messages.ask`, which is what the dispatcher reads. The
     // declaration is stored as data, never re-derived from the text: only this layer knows the source it came from.
@@ -77,7 +82,7 @@ export function apiRoutes(ctx: AppContext) {
     if (!REDISPATCHABLE.includes(m.dispatch_state)) return bad(c, `cannot redispatch in ${m.dispatch_state} — ${notRedispatchable[m.dispatch_state] ?? "the decision already landed"}`, 409);
     ctx.log.emit({ type: "dispatch.requeued", payload: { message_id: id, patch: { dispatch_state: "pending", dispatch_error: null } } }); S.dispatcher.enqueue(id); return c.json({ ok: true });
   });
-  api.post("/tasks/:id/answer", async (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (t.status !== "waiting_input") return bad(c, `not waiting for input (${t.status}) — use POST /api/messages`, 409); const b = z.object({ text: z.string().min(1) }).safeParse(await c.req.json()); if (!b.success) return bad(c, "text required"); if (!S.tasks.answer(t.uuid, b.data.text, null)) return bad(c, "the permission request already expired (auto-denied) — the worker moved on", 409); return c.json({ ok: true }); });
+  api.post("/tasks/:id/answer", async (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (closePending(ctx.db, t.uuid)) return bad(c, "task cleanup is in progress — wait for it to finish or retry cleanup first", 409); if (t.status !== "waiting_input") return bad(c, `not waiting for input (${t.status}) — use POST /api/messages`, 409); const b = z.object({ text: z.string().min(1) }).safeParse(await c.req.json()); if (!b.success) return bad(c, "text required"); if (!S.tasks.answer(t.uuid, b.data.text, null)) return bad(c, "the permission request already expired (auto-denied) — the worker moved on", 409); return c.json({ ok: true }); });
   api.post("/tasks/:id/interrupt", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (["closed", "cancelled"].includes(t.status)) return bad(c, `cannot interrupt in ${t.status}`, 409); const a = attached(c, t); if (a) return a; S.tasks.interrupt(t.uuid); return c.json({ ok: true }); });
   api.post("/tasks/:id/close", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); const a = attached(c, t); if (a) return a; S.tasks.close(t.uuid); return c.json({ ok: true }); });
   api.post("/tasks/:id/retry-cleanup", (c) => {

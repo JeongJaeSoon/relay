@@ -30,5 +30,6 @@ describe("relay cli", () => {
     const deadPort = await availablePort();
     writeFileSync(join(process.env.RELAY_HOME, "config.toml"), `port = ${deadPort}\n`);
     await expect(client().get("/tasks")).rejects.toBeInstanceOf(RelayDown);
+    await expect(client().get("/tasks")).rejects.toThrow("relay: the server is not running — `brew services start relay` or `relay serve`");
   });
 });

@@ -16,6 +16,7 @@ import type { Dispatcher } from "../dispatcher/dispatcher.ts";
 import { getMeta } from "../db/db.ts";
 import { splitGuard } from "../dispatcher/schema.ts";
 import { holdsSlot } from "./state.ts";
+import { closePending } from "../lifecycle/cleanup.ts";
 
 interface Deps { db: Database; log: EventLog; cfg: Config; permits: PermitPool; scheduler: Scheduler; outbox: Outbox; projectNameOf: (id: string) => string; pendingPermissions: Map<string, PendingPermission> }
 /** 8 hex chars embedded as `[relay #xxxxxxxx]`; the worker echoes it back through UserPromptSubmit so relay can confirm delivery. */
@@ -35,6 +36,7 @@ export class TaskService {
   }
   paused() { return getMeta(this.d.db, "kill_switch") === "1"; }
   private byDisplay(id: string): Task | null { const r = this.d.db.query("select uuid from tasks where display_id=? and parent_uuid is null and status!='closed' order by num desc limit 1").get(id) as any; return r ? loadTask(this.d.db, r.uuid) : null; }
+  private closingReason(t: Task): string | null { return closePending(this.d.db, t.uuid) ? `${t.display_id} is being closed — wait for cleanup to finish or retry cleanup first` : null; }
   private chat(m: MessageInput) { this.d.log.emit({ type: "message.received", task_uuid: m.task_uuid, payload: m }); }
   private status(t: Task | string, status: Task["status"], patch: Record<string, unknown> = {}) { const uuid = typeof t === "string" ? t : t.uuid; this.d.log.emit({ type: "task.status_changed", task_uuid: uuid, payload: { status, patch: { status, ...patch } } }); }
   private spec(t: Task, prompt: string) {
@@ -57,6 +59,7 @@ export class TaskService {
       }
       case "route_to_task": {
         const t = this.byDisplay(dec.task_id!); if (!t) return this.needsConfirm(msg, dec, `task ${dec.task_id} not found`);
+        const closing = this.closingReason(t); if (closing) return this.needsConfirm(msg, dec, closing);
         if (t.status === "error") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); return this.needsConfirm(msg, null, `${t.display_id} is in the error state — restart it first`); }
         if (t.status === "waiting_input" && t.question?.source === "permission") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); this.answer(t.uuid, dec.prompt ?? msg.text, null); return; }
         const p = this.planRoute(msg, dec, t, msg.id);
@@ -84,6 +87,7 @@ export class TaskService {
       } else {
         const t = this.byDisplay(it.task_id!);
         if (!t) return this.needsConfirm(msg, dec, `${at}: task ${it.task_id} not found`);
+        const closing = this.closingReason(t); if (closing) return this.needsConfirm(msg, dec, `${at}: ${closing}`);
         if (t.status === "error") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is in the error state — restart it first`);
         if (t.status === "waiting_input" && t.question?.source === "permission") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is waiting on a permission answer — answer it first`);
         plan = this.planRoute(msg, it, t, key);
@@ -148,6 +152,10 @@ export class TaskService {
   /** Three cases (B1): permission question → resolve the held hook (worker continues; no scheduler); marker question → queue at head and send; otherwise a plain follow-up. Returns false for a late/unknown permission answer (API → 409). */
   answer(taskUuid: string, text: string, viaMessageId: string | null): boolean {
     const t = loadTask(this.d.db, taskUuid)!;
+    // Closing owns the task's command queue: stop/rm deliberately bypass ordinary sends, and accepting a follow-up
+    // behind them would let finishClose project `closed` while that send remains pending (I5). HTTP rejects before it
+    // records the message; this guard also protects internal callers that already hold a task UUID.
+    if (t.status === "closed" || closePending(this.d.db, t.uuid)) return false;
     if (viaMessageId) this.d.log.emit({ type: "dispatch.completed", payload: { message_id: viaMessageId, patch: { task_uuid: taskUuid, dispatch_state: "direct" } } });
     if (t.status === "waiting_input" && t.question?.source === "permission" && t.question.permission_tool_use_id) {
       const key = `${t.session_id}:${t.question.permission_tool_use_id}`; const p = this.d.pendingPermissions.get(key);

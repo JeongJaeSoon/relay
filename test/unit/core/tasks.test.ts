@@ -195,6 +195,21 @@ describe("TaskService", () => {
     expect(s.permits.active()).toBe(0);
     await s.settle(); expect(s.permits.active()).toBe(0); expect(loadTask(s.db, t)!.status).toBe("closed");
   });
+  test("a dispatcher route cannot append a send behind an in-flight close", async () => {
+    const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
+    const t = (s.db.query("select uuid from tasks").get() as any).uuid; s.hook(t, { hook_event_name: "SessionStart", source: "startup" });
+    let releaseStop!: () => void; const stopped = new Promise<void>((resolve) => { releaseStop = resolve; });
+    const stop = s.runner.stop.bind(s.runner); s.runner.stop = async (shortId) => { await stopped; return stop(shortId); };
+
+    s.svc.close(t);
+    const followup = s.userMsg("continue anyway");
+    s.svc.applyDecision(followup, { action: "route_to_task", task_id: "T-01", prompt: "continue anyway", confidence: "high" });
+    expect((s.db.query("select dispatch_state from messages where id=?").get(followup.id) as any).dispatch_state).toBe("needs_confirm");
+    expect(s.db.query("select count(*) c from commands where task_uuid=? and kind='send' and state='pending'").get(t)).toEqual({ c: 0 });
+
+    releaseStop(); await s.settle();
+    expect(loadTask(s.db, t)!.status).toBe("closed"); expect(assertInvariants(s.db, 2)).toEqual([]);
+  });
   test("a close whose rm is held on a locked worktree does not leave the task claiming a slot it gave up (I2)", async () => {
     const s = setup(); s.svc.applyDecision(s.userMsg("a"), { action: "new_task", project: "myapp", title: "a", size: "normal", prompt: "a", confidence: "high" }); await s.settle();
     const t = (s.db.query("select uuid from tasks").get() as any).uuid; s.hook(t, { hook_event_name: "SessionStart", source: "startup" });

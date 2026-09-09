@@ -14,14 +14,21 @@ import { ingestHook } from "../hooks/ingest.ts";
 import { drainInbox, inboxSize } from "../hooks/inbox.ts";
 import { setMeta } from "../db/db.ts";
 import { log as slog } from "../log.ts";
+/** A just-observed SessionStart outranks roster absence long enough for publication lag and the watchdog's repeated-
+ * absence check to take over. Persisted process_instances.started_at carries this evidence across recovery retries. */
+const START_OBSERVATION_GRACE_MS = 60_000;
 export interface RecoveryReport { reconciled: number; crashed: string[]; adopted: string[]; requeued: string[]; orphans: string[]; commands: { requeued: string[]; unknown: string[] }; inboxDrained: number; leasesReleased: string[]; redeciding: string[]; invariants: string[] }
 /** Ours = the roster row's cwd carries our owner stamp for this task (name/short id alone are not proof — roadmap B8/§6.3). */
 const ownedBy = (row: AgentRow, taskUuid: string, instanceId: string) => { const o = readOwner(row.cwd); return !!o && o.task_uuid === taskUuid && o.relay_instance_id === instanceId; };
 export async function recover(d: { db: Database; log: EventLog; runner: AgentRunner; permits: PermitPool; outbox: Outbox; dispatcher: Dispatcher; scheduler: Scheduler; tasks: TaskService; spool: { drain(options?: { includeInbox?: boolean }): Promise<unknown> }; maxAgents: () => number; instanceId: () => string }): Promise<RecoveryReport> {
   setMeta(d.db, "recovering", "1"); const report: RecoveryReport = { reconciled: 0, crashed: [], adopted: [], requeued: [], orphans: [], commands: { requeued: [], unknown: [] }, inboxDrained: 0, leasesReleased: [], redeciding: [], invariants: [] };
-  let rows: AgentRow[] | null = null;
-  for (let i = 0; i < 3 && !rows; i++) { try { rows = await d.runner.list(true); } catch (e) { slog.warn("agents --json failed during recovery", { attempt: i + 1, e: String(e) }); await Bun.sleep(1000); } }
-  if (!rows) { slog.error("recovery: agents --json unavailable — leaving tasks untouched, staying in recovering mode"); return report; }   // watchdog keeps retrying; hooks keep buffering (durably)
+  const readRoster = async (phase: "initial" | "after replay") => {
+    let observed: AgentRow[] | null = null;
+    for (let i = 0; i < 3 && !observed; i++) { try { observed = await d.runner.list(true); } catch (e) { slog.warn("agents --json failed during recovery", { phase, attempt: i + 1, e: String(e) }); if (i < 2) await Bun.sleep(1000); } }
+    return observed;
+  };
+  let rows = await readRoster("initial");
+  if (!rows) { slog.error("recovery: agents --json unavailable — leaving tasks untouched, staying in recovering mode"); return report; }   // serve retries recovery; hooks keep buffering durably
   const replayBuffered = async () => {
     const before = inboxSize(d.db);
     await d.spool.drain({ includeInbox: true });
@@ -34,8 +41,18 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
   // Scheduler/outbox keep the recovery barrier closed even when a replayed hook requests more work.
   const beforeReplay = d.log.lastSeq();
   await replayBuffered();
-  const replayedEnds = new Set((d.db.query("select task_uuid, process_generation from events where type='process.ended' and seq>?").all(beforeReplay) as any[])
-    .map((e) => `${e.task_uuid}:${e.process_generation}`));
+  // The first roster read and hook replay have an async boundary between them. Refresh after replay so a session that
+  // started in that window is not compared with a snapshot taken before it existed. A failed refresh is UNKNOWN, not
+  // absence: leave the barrier up and let serve retry the whole recovery pass.
+  rows = await readRoster("after replay");
+  if (!rows) { slog.error("recovery: agents --json unavailable after hook replay — leaving reconciliation incomplete and staying in recovering mode"); return report; }
+  // Hooks can also arrive while that refreshed roster is being read. Drain once more before reconciliation; after this
+  // await the ownership loop is synchronous, so no buffered lifecycle event can slip between this replay and the
+  // absence decision. The final replay below still handles hooks that arrive during later async cleanup/resume work.
+  await replayBuffered();
+  const replayedLifecycle = d.db.query("select type, task_uuid, process_generation from events where type in ('process.started','process.ended') and seq>?").all(beforeReplay) as any[];
+  const replayedStarts = new Set(replayedLifecycle.filter((e) => e.type === "process.started").map((e) => `${e.task_uuid}:${e.process_generation}`));
+  const replayedEnds = new Set(replayedLifecycle.filter((e) => e.type === "process.ended").map((e) => `${e.task_uuid}:${e.process_generation}`));
   const aliveIds = new Set(rows.filter((r) => r.alive && r.session_id).map((r) => r.session_id!));
   const takenSession = (sid: string, uuid: string) => !!d.db.query("select 1 from tasks where session_id=? and uuid<>?").get(sid, uuid);
   // ① ownership / process state for every non-closed task
@@ -44,6 +61,12 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
     // The roster was sampled before replay. A SessionEnd received in that interval is newer evidence;
     // do not resurrect its generation from the older "alive" row.
     const endedAfterSnapshot = replayedEnds.has(`${t.uuid}:${t.process_generation}`) && ["stopped", "crashed"].includes(t.process_state);
+    // Conversely, a SessionStart received after the first roster snapshot is affirmative liveness evidence even if
+    // `agents --json` publication still lags the hook. Do not turn that start into an immediate synthetic crash; the
+    // watchdog's repeated-absence grace will decide it later if the process really vanished.
+    const startedAfterSnapshot = replayedStarts.has(`${t.uuid}:${t.process_generation}`) && t.process_state === "alive";
+    const instance = d.db.query("select started_at from process_instances where task_uuid=? and generation=? order by started_at desc limit 1").get(t.uuid, t.process_generation) as { started_at: number } | null;
+    const recentlyStarted = t.process_state === "alive" && instance != null && now() - instance.started_at < START_OBSERVATION_GRACE_MS;
     const row = endedAfterSnapshot ? undefined : rows.find((r) => (t.session_id && r.session_id === t.session_id) || (t.short_id && r.short_id === t.short_id) || (!t.session_id && ownedBy(r, t.uuid, d.instanceId())));
     const patch: Record<string, unknown> = {};                                   // attach_state is kept: a user may still be in the terminal (watchdog releases stale leases)
     const pendingSpawn = !!d.db.query("select 1 from commands where task_uuid=? and kind='spawn' and state in ('pending','running')").get(t.uuid);
@@ -53,6 +76,7 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
       if (row.session_id && row.session_id !== t.session_id && !takenSession(row.session_id, t.uuid)) { patch.session_id = row.session_id; if (!t.session_id) report.adopted.push(t.uuid); }
       if (t.status === "starting") { patch.status = "running"; patch.started_at = t.started_at ?? now(); }
     }
+    else if (startedAfterSnapshot || recentlyStarted) { if (t.session_id) aliveIds.add(t.session_id); }
     else if (pendingSpawn && t.status === "starting") { patch.status = "queued"; patch.process_state = "none"; patch.queued_at = t.queued_at ?? now(); patch.qhead = true; report.requeued.push(t.uuid); }   // never ran: let the scheduler grant the slot again
     else if (["starting", "alive"].includes(t.process_state)) {
       const crashed = ["starting", "running"].includes(t.status) && !t.paused;

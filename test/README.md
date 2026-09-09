@@ -9,7 +9,7 @@ and runs the offline suite. These checks do not require Claude login or start re
 | Integration | `bun run test:integration` | Real HTTP/WS/SQLite flow with scripted workers; startup failure and cleanup |
 | Dashboard | `bun run test:web` | Adapter replay, attribution, request navigation, layout and chat timestamps |
 | Compiled binary | `bun run test:binary` | Actual production entry, embedded dashboard, CLI and guarded gateway with a fake CLI |
-| Visual development | `bun run dev:ui` | Invented UI data at localhost:8813 (`?dark`, `?empty`) |
+| Visual development | `bun run dev:ui` | Invented UI data at localhost:8813 (query flags below) |
 | Gateway development | `bun run dev:fake` | Real gateway with FakeRunner at localhost:8814, fresh temporary home and project |
 | Native worker | `bun run test:live` | Opt-in real Claude E2E in a temporary project |
 | Installed service | `RELAY_LIVE_TESTS=1 bash test/live/smoke-installed.sh <registered-project-name>` | Explicit real task, hooks, close and retained worktree on an installed Mac service |
@@ -17,6 +17,11 @@ and runs the offline suite. These checks do not require Claude login or start re
 `RELAY_DEV_PORT` and `RELAY_UI_AUDIT_PORT` change development ports. Development data is
 synthetic and separate from the installed service. The fake server prints its temporary URL;
 its temporary data can be inspected after stopping it.
+
+The synthetic UI harness accepts `/` plus these composable query flags: `few`, `many`, `empty`,
+`history`, `dark`, `slow`, `fail`, `missing`, `root`, `notifications`, `updates`, and
+`request-layout=plain|dividers`. This is the canonical route list; update it together with
+`test/support/ui/fixture.js`.
 
 ## Live probes
 

@@ -33,7 +33,7 @@ import dashboardHtml from "../web/dist/index.html" with { type: "file" };   // r
 const token = (file: string) => { if (!existsSync(file)) writeFileSync(file, Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"), { mode: 0o600 }); return readFileSync(file, "utf8").trim(); };
 export const VERSION = process.env.RELAY_VERSION ?? "dev";   // `bun build --define process.env.RELAY_VERSION="x.y.z"` stamps it into the binary
 type RuntimePeer = { start(): Promise<unknown>; stop(): void; socketPath: string };
-export type ServeDeps = { startServer: typeof startServer; recover: typeof recover; currentCliVersion: typeof currentCliVersion; createPeer: (onFrame: (frame: any) => void) => RuntimePeer; signals?: SignalSource; exit?: (code: number) => void };
+export type ServeDeps = { startServer: typeof startServer; recover: typeof recover; currentCliVersion: typeof currentCliVersion; createPeer: (onFrame: (frame: any) => void) => RuntimePeer; signals?: SignalSource; exit?: (code: number) => void; recoveryRetryMs?: number };
 const defaultDeps: ServeDeps = { startServer, recover, currentCliVersion, createPeer: (onFrame) => new PeerServer("relay", crypto.randomUUID(), onFrame), signals: process, exit: (code) => process.exit(code) };
 export async function serve(opts: { runner?: AgentRunner; runClaude?: RunClaude } = {}) {
   ensureDirs(); const cfg = loadConfig();
@@ -113,7 +113,22 @@ export async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: 
   const http = deps.startServer(ctx); runtime.add(() => http.stop()); log.info("listening", { port: cfg.port });
   const spool = new Spool(paths.spool, () => svc.ingestDeps);
   runtime.add(() => { for (const p of pendingPermissions.values()) p.resolve("deny"); });
-  await deps.recover({ db, log: evlog, runner, permits, outbox, dispatcher, scheduler, tasks: svc, spool, maxAgents, instanceId });
+  const recoveryArgs = { db, log: evlog, runner, permits, outbox, dispatcher, scheduler, tasks: svc, spool, maxAgents, instanceId };
+  let recoveryRetry: ReturnType<typeof setTimeout> | null = null; let recoveryStopped = false;
+  const retryRecovery = async () => {
+    recoveryRetry = null;
+    if (recoveryStopped || getMeta(db, "recovering") !== "1") return;
+    try { await deps.recover(recoveryArgs); } catch (e) { log.warn("periodic recovery retry failed", { e: String(e) }); }
+    if (!recoveryStopped && getMeta(db, "recovering") === "1") recoveryRetry = setTimeout(retryRecovery, deps.recoveryRetryMs ?? 5_000);
+  };
+  const scheduleRecoveryRetry = () => {
+    if (!recoveryStopped && !recoveryRetry && getMeta(db, "recovering") === "1") recoveryRetry = setTimeout(retryRecovery, deps.recoveryRetryMs ?? 5_000);
+  };
+  runtime.add(() => { recoveryStopped = true; if (recoveryRetry) clearTimeout(recoveryRetry); recoveryRetry = null; });
+  await deps.recover(recoveryArgs);
+  // A failed roster observation is deliberately not converted to absence. Keep serving reads and buffering hooks, then
+  // retry one recovery pass at a time until a trustworthy roster lets it lower the barrier.
+  scheduleRecoveryRetry();
   const timers = [setInterval(() => idle.tick(), 60_000), setInterval(() => usage.tick(), 60_000), setInterval(() => watchdog.tick().catch((e) => log.warn("watchdog", { e: String(e) })), 5_000), setInterval(() => spool.drain().catch(() => {}), 30_000), setInterval(() => spool.sweep(7), 3600_000),
     setInterval(() => { try { log.info("retention", sweep(db, 90, evlog)); } catch (e) { log.warn("retention", { e: String(e) }); } }, 24 * 3600_000)];
   runtime.add(() => timers.forEach(clearInterval));

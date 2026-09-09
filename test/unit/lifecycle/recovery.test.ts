@@ -6,6 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Spool } from "../../../src/hooks/spool.ts";
+import { ingestHook } from "../../../src/hooks/ingest.ts";
 import { setMeta, getMeta } from "../../../src/db/db.ts";
 const args = (s: Awaited<ReturnType<typeof buildTestApp>>) => ({ db: s.db, log: s.log, runner: s.runner, permits: s.permits, outbox: s.outbox, dispatcher: s.dispatcher, scheduler: s.scheduler, tasks: s.svc, spool: { drain: async () => 0 }, maxAgents: () => 10, instanceId: () => "inst-test" });
 describe("recover", () => {
@@ -68,6 +69,85 @@ describe("recover", () => {
     ].entries()) s.db.run("insert into hook_inbox(received_at,headers_json,body_json) values(?,?,?)", [i, JSON.stringify({ "x-relay-task": t, "x-relay-gen": "1" }), JSON.stringify({ ...body, session_id: "sid1" })]);
     const report = await recover(args(s));
     expect(report.crashed).toEqual([]); expect(loadTask(s.db, t)!.status).toBe("done"); expect(loadTask(s.db, t)!.process_state).toBe("stopped");
+  });
+
+  test("a buffered SessionStart newer than the roster snapshot is not immediately inferred dead", async () => {
+    const s = await buildTestApp(); const t = s.seedTask("starting", { session_id: null, short_id: null, process_state: "starting", process_generation: 1 });
+    s.runner.rows.clear();                                                       // the roster has not published the new process yet
+    let replayed = false;
+    const report = await recover({ ...args(s), spool: { drain: async () => {
+      if (!replayed) {
+        replayed = true;
+        ingestHook({ hook_event_name: "SessionStart", source: "startup", session_id: "sid-new" }, { "x-relay-task": t, "x-relay-gen": "2" }, s.svc.ingestDeps, { replay: true });
+      }
+      return 0;
+    } } });
+    const task = loadTask(s.db, t)!;
+    expect(report.crashed).toEqual([]);
+    expect(task.status).toBe("running"); expect(task.process_state).toBe("alive"); expect(task.process_generation).toBe(2); expect(task.session_id).toBe("sid-new");
+    expect(s.db.query("select count(*) n from events where task_uuid=? and type='process.ended' and json_extract(payload_json,'$.reason')='recovery: not in agents list'").get(t)).toEqual({ n: 0 });
+    expect(report.invariants).toEqual([]);
+  });
+
+  test("a SessionStart buffered during the refreshed roster read is replayed before absence reconciliation", async () => {
+    const s = await buildTestApp(); const t = s.seedTask("starting", { session_id: null, short_id: null, process_state: "starting", process_generation: 1 });
+    s.runner.rows.clear();
+    let listCalls = 0; const list = s.runner.list.bind(s.runner);
+    s.runner.list = async (all?: boolean) => {
+      listCalls++;
+      if (listCalls === 2) ingestHook(
+        { hook_event_name: "SessionStart", source: "startup", session_id: "sid-during-roster" },
+        { "x-relay-task": t, "x-relay-gen": "2" },
+        s.svc.ingestDeps,
+      );
+      return list(all);
+    };
+    const report = await recover(args(s));
+    const task = loadTask(s.db, t)!;
+    expect(listCalls).toBe(2); expect(report.crashed).toEqual([]);
+    expect(task).toMatchObject({ status: "running", process_state: "alive", process_generation: 2, session_id: "sid-during-roster" });
+    expect(s.db.query("select count(*) n from events where task_uuid=? and type='process.ended' and json_extract(payload_json,'$.reason')='recovery: not in agents list'").get(t)).toEqual({ n: 0 });
+    expect(report.invariants).toEqual([]);
+  });
+
+  test("a replayed SessionStart keeps durable grace across an after-replay roster failure and the next recovery pass", async () => {
+    const s = await buildTestApp(); const t = s.seedTask("starting", { session_id: null, short_id: null, process_state: "starting", process_generation: 1 });
+    s.runner.rows.clear();
+    let listCalls = 0; const list = s.runner.list.bind(s.runner);
+    s.runner.list = async (all?: boolean) => {
+      listCalls++;
+      if (listCalls === 1) return list(all);                                    // first pass's initial empty snapshot
+      if (listCalls <= 4) throw new Error("roster unavailable after replay");    // all three refresh attempts are unknown
+      return list(all);                                                         // retry: successful, but publication still lags
+    };
+    let replayed = false;
+    const spool = { drain: async () => {
+      if (!replayed) {
+        replayed = true;
+        ingestHook({ hook_event_name: "SessionStart", source: "startup", session_id: "sid-new" }, { "x-relay-task": t, "x-relay-gen": "2" }, s.svc.ingestDeps, { replay: true });
+      }
+      return 0;
+    } };
+    const first = await recover({ ...args(s), spool });
+    expect(first.crashed).toEqual([]); expect(getMeta(s.db, "recovering")).toBe("1");
+    expect(loadTask(s.db, t)!).toMatchObject({ status: "running", process_state: "alive", process_generation: 2, session_id: "sid-new" });
+
+    const second = await recover({ ...args(s), spool });
+    expect(second.crashed).toEqual([]); expect(getMeta(s.db, "recovering")).toBe("0");
+    expect(loadTask(s.db, t)!).toMatchObject({ status: "running", process_state: "alive", process_generation: 2, session_id: "sid-new" });
+    expect(s.db.query("select count(*) n from events where task_uuid=? and type='process.ended' and json_extract(payload_json,'$.reason')='recovery: not in agents list'").get(t)).toEqual({ n: 0 });
+    expect(second.invariants).toEqual([]);
+  });
+
+  test("durable SessionStart grace is bounded; an old absent generation is reconciled as crashed", async () => {
+    const s = await buildTestApp(); const t = s.seedTask("running");
+    s.log.emit({ type: "process.started", task_uuid: t, process_generation: 2, payload: { generation: 2, session_id: "sid-old", short_id: "old" } });
+    s.db.run("update process_instances set started_at=0 where task_uuid=? and generation=2", [t]);
+    s.runner.rows.clear();
+    const report = await recover(args(s));
+    expect(report.crashed).toEqual([t]);
+    expect(loadTask(s.db, t)!).toMatchObject({ status: "error", process_state: "crashed", process_generation: 2 });
+    expect(getMeta(s.db, "recovering")).toBe("0"); expect(report.invariants).toEqual([]);
   });
 
   test("replay keeps older-generation Stop and SessionEnd from changing the current worker", async () => {

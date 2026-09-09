@@ -162,10 +162,9 @@ export function claimReplies(ordered: Message[], tasks: Record<string, Task>): M
   // after it shifts by one. That is not hypothetical — a database written before the 0.1.1 English migration holds
   // prompts this file could not read, and two such requests silently rewrote every row after them.
   //
-  // ENFORCED, whatever the reason a request goes unmatched: pairing the last k of each list leaves the unmatched
-  // requests as the OLDEST ones, by construction. An unmatched request is therefore older than every matched one and
-  // cannot hold a reply belonging to a request after it. Nothing here depends on why it went unmatched — an
-  // unreadable prompt, a lost write, a disposition this file does not classify.
+  // Deliberate pairing direction, not an enforced invariant: taking the last k aligns the newer requests and replies.
+  // The temporal guard below can still decline a pair, so this function does not establish that every unmatched
+  // request is older than every matched one. It only refuses to claim a reply that precedes its request.
   //
   // Pairing from the newest end rather than the oldest is the whole of that, so do not "simplify" it back. The two
   // ends are not symmetric: a deficit is reachable through HISTORY, which is already written and cannot be undone,
@@ -224,7 +223,9 @@ function actionsOf(d: Disposition, task: Task | null): RequestAction[] {
  * Ordered needs-you first, then newest first — the two stranded requests must not sit below forty settled ones.
  */
 export function requestRows(messages: Message[], tasks: Record<string, Task>): RequestRow[] {
-  const ordered = [...messages].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+  // Array#sort is stable: equal timestamps retain the server's insertion order. IDs are not chronology; reordering
+  // ties by ID can place a reply before its request and change both attribution and the reading order in a bucket.
+  const ordered = [...messages].sort((a, b) => a.created_at - b.created_at);
   // A task's outcome is linked by task_uuid, never by position: the summary lands long after the request, usually after other requests.
   const outcome = new Map<string, string>();
   for (const m of ordered) if (m.task_uuid && (m.role === "worker_summary" || m.role === "error")) outcome.set(m.task_uuid, m.text);

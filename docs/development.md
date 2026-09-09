@@ -45,7 +45,7 @@ The UI audit harness serves synthetic fixtures and reloads the current dashboard
 RELAY_UI_AUDIT_PORT=18814 bun test/support/ui/serve.ts
 ```
 
-The current fixture supports `/`, `/?few`, `/?many`, `/?history`, `/?dark`, `/?slow`, and the `request-layout=plain|dividers` comparison. Treat harness behavior as UI evidence, not as proof of native worker integration. Check `test/support/ui/fixture.js` before documenting new fixture flags.
+The canonical synthetic query flags are listed in [`test/README.md`](../test/README.md). Treat harness behavior as UI evidence, not as proof of native worker integration. Update that list with `test/support/ui/fixture.js` whenever a fixture flag changes.
 
 ## Change rules
 
@@ -54,8 +54,10 @@ The current fixture supports `/`, `/?few`, `/?many`, `/?history`, `/?dark`, `/?s
 - Preserve transaction boundaries when a request state and its visible response must remain aligned.
 - Treat task UUID plus process generation as identity. Do not use a session name, short ID, PID, or current `tasks.session_id` as the complete lifecycle record.
 - Treat roster failures as unknown. Do not infer that a session disappeared from a failed or incomplete roster read.
+- Keep the recovery write barrier up after an unavailable roster read and retry without overlapping recovery passes. A lifecycle hook replayed after a roster snapshot is newer evidence than that snapshot.
 - Require a matching `.relay-owner` before Relay controls or removes a worktree. Foreign and ambiguous sessions are observation-only.
 - Stop every owned generation and recheck liveness before removing a session or shared worktree.
+- Do not accept a worker follow-up after task-level close cleanup starts. Interrupt-only stops are not closes and remain resumable.
 - Keep worker CLI compatibility code under `src/runner/` and cover measured protocol behavior with fixtures.
 - Keep user-facing strings in English while preserving intentional Korean input matchers.
 - Never put tokens, private transcripts, or real session data in fixtures, logs, screenshots, issues, or pull requests.
@@ -69,7 +71,7 @@ Use the narrowest relevant test while iterating, then run the full required set 
 | Event/projection/replay | `test/unit/core/` plus replay and state invariant tests |
 | Dispatch or Ask | dispatcher, gateway message, and integration pipeline tests |
 | Worker protocol | `test/unit/runner/` with recorded synthetic fixtures |
-| Ownership and cleanup | lifecycle unit tests plus `test/integration/owned-cleanup.test.ts` and follow-up generation tests |
+| Ownership, recovery and cleanup | lifecycle/runtime unit tests plus `test/integration/owned-cleanup.test.ts` and follow-up generation tests |
 | Dashboard | relevant `web/test/` files, full web tests, build, and viewport interaction checks |
 | CLI/package | CLI unit tests, binary integration tests, compile, and installed smoke script |
 
