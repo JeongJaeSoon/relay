@@ -90,7 +90,7 @@ fallback), `capabilities.json`, `hook-spool/`. Logs go to `~/Library/Logs/relay/
 - Service did not come up: `~/Library/Logs/relay/stderr.log`. After a failed boot relay writes
   `~/.config/relay/service-failed` and sleeps instead of restart-looping — doctor reports it and
   prints the `rm` + `brew services restart relay` fix.
-- `relay: 서버가 꺼져 있습니다` (exit 3) from any CLI command: `brew services start relay`.
+- A stopped server returns `relay: the server is not running` (exit 3) and suggests `brew services start relay` or `relay serve`.
 - A worker's hooks stopped arriving: check `relay doctor` for quarantined spool entries.
 
 ## Development

@@ -1,4 +1,4 @@
-import { pendingCleanup } from "../lifecycle/cleanup.ts";
+import { closePending, pendingCleanup } from "../lifecycle/cleanup.ts";
 import { Hono } from "hono";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -44,7 +44,12 @@ export function apiRoutes(ctx: AppContext) {
     const cid = b.data.client_message_id ?? ulid();
     const dup = ctx.db.query("select id from messages where client_message_id=?").get(cid) as any; if (dup) return c.json({ message_id: dup.id }, 202);
     const reply = b.data.reply_to_task_id ?? null;
-    if (reply && !loadTask(ctx.db, reply)) return bad(c, "unknown task", 404);                 // validate before emit: messages.task_uuid is a foreign key
+    const replyTask = reply ? loadTask(ctx.db, reply) : null;
+    if (reply && !replyTask) return bad(c, "unknown task", 404);                              // validate before emit: messages.task_uuid is a foreign key
+    // Close is a durable stop/rm transaction over every owned generation. Do not append a send behind that cleanup:
+    // cleanup commands run first, so the task could become closed while the new send stayed pending forever.
+    if (replyTask?.status === "closed") return bad(c, "task is closed", 409);
+    if (replyTask && closePending(ctx.db, replyTask.uuid)) return bad(c, "task cleanup is in progress — wait for it to finish or retry cleanup first", 409);
     // Ask mode: the client declares a question the way it declares a reply target. Both entry paths — the toggle's
     // `ask` and the `?` the user typed — resolve here into `messages.ask`, which is what the dispatcher reads. The
     // declaration is stored as data, never re-derived from the text: only this layer knows the source it came from.

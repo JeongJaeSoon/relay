@@ -93,7 +93,8 @@ exit 64
 
     const guard = await command([binary, "hook", "guard"], { cwd: scratch, env, stdin: JSON.stringify({ tool_name: "Bash", tool_input: { command: "sudo x" }, cwd: scratch }) });
     if (guard.exitCode !== 2) throw new Error(`hook guard unexpectedly exited ${guard.exitCode}: ${guard.stderr || guard.stdout}`);
-    return { version: stamped.stdout.trim(), dashboardBytes: html.length, guardExitCode: guard.exitCode };
+    const lang = html.match(/<html\s+lang="([^"]+)"/)?.[1] ?? null;
+    return { version: stamped.stdout.trim(), dashboardBytes: html.length, dashboardLang: lang, guardExitCode: guard.exitCode };
   } finally {
     if (server && server.exitCode === null) {
       await stopChild(server);

@@ -14,6 +14,23 @@ describe("write routes", () => {
     expect((await req("POST", "/api/messages", { text: "" })).status).toBe(400);
     expect((await req("POST", "/api/messages", { text: "x", reply_to_task_id: "nope" })).status).toBe(404);   // no FK explosion
   });
+  test("a direct follow-up cannot enter the command queue after close cleanup starts", async () => {
+    const s = await buildTestApp(); const uuid = s.seedTask("running");
+    let releaseStop!: () => void; const stopped = new Promise<void>((resolve) => { releaseStop = resolve; });
+    const stop = s.runner.stop.bind(s.runner);
+    s.runner.stop = async (shortId) => { await stopped; return stop(shortId); };
+
+    expect((await s.req("POST", `/api/tasks/${uuid}/close`)).status).toBe(200);
+    const before = (s.db.query("select count(*) c from messages where role='user'").get() as any).c;
+    const reply = await s.req("POST", "/api/messages", { text: "continue anyway", reply_to_task_id: uuid, client_message_id: "closing-reply" });
+    expect(reply.status).toBe(409); expect(await reply.text()).toContain("cleanup is in progress");
+    expect(s.db.query("select count(*) c from messages where role='user'").get()).toEqual({ c: before });
+    expect(s.db.query("select count(*) c from commands where task_uuid=? and kind='send' and state='pending'").get(uuid)).toEqual({ c: 0 });
+
+    releaseStop(); await s.settle(80);
+    expect(s.db.query("select status from tasks where uuid=?").get(uuid)).toEqual({ status: "closed" });
+    expect(s.invariants()).toEqual([]);
+  });
   test("task actions, settings, kill switch, attach lease", async () => {
     const { req, db, svc, seedTask } = await buildTestApp(); const uuid = seedTask("running");
     expect((await req("POST", `/api/tasks/${uuid}/answer`, { text: "x" })).status).toBe(409);               // not waiting

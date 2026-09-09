@@ -38,7 +38,7 @@ The gateway records and acknowledges a message before routing. The dispatcher se
 
 The scheduler grants a shared permit before a worker starts. The same pool accounts for worker subagents. A task waiting for user input releases its permit; queue order uses FIFO with an explicit queue-head override for work that must resume promptly. The global pause stops active work and prevents new spawn, resume, and send commands until resume.
 
-Each task has a durable, per-task outbox. Commands are idempotently keyed and run in insertion order, except cleanup commands are prioritized. A command left in an uncertain state blocks later commands until a person confirms or retries it. Startup recovery completes before normal writes resume; lifecycle hooks arriving during recovery enter a durable inbox.
+Each task has a durable, per-task outbox. Commands are idempotently keyed and run in insertion order, except cleanup commands are prioritized. A command left in an uncertain state blocks later commands until a person confirms or retries it. Startup recovery completes before normal writes resume; lifecycle hooks arriving during recovery enter a durable inbox. Recovery samples the roster again after replaying that inbox, treats a replayed `SessionStart` as newer evidence than the original roster snapshot, and leaves the write barrier up when either roster read is unavailable. The running server retries one recovery pass at a time until a trustworthy observation completes it.
 
 ## Native session identity
 
@@ -48,7 +48,7 @@ Each task has a durable, per-task outbox. Commands are idempotently keyed and ru
 
 Session names and paths are not ownership proof. Relay writes `.relay-owner` in a worktree with the Relay instance, task, and session identity. A same-named session without a matching owner stamp is foreign or ambiguous: it stays visible, but Relay does not adopt, stop, or remove it automatically.
 
-Closing a task stops every owned generation before removing any session. Removal rechecks current roster liveness because generations share a worktree. A refusal, unknown result, or surviving worktree leaves the task visible in an error state with recovery details; `closed` is recorded only after disposal is confirmed.
+Closing a task stops every owned generation before removing any session. Removal rechecks current roster liveness because generations share a worktree. Once the task-level removal command exists, direct and dispatcher-routed follow-ups are refused so no send can be stranded behind disposal. An interrupt-only stop remains resumable. A refusal, unknown result, or surviving worktree leaves the task visible in an error state with recovery details; `closed` is recorded only after disposal is confirmed.
 
 ## Worker observation and control
 
@@ -60,7 +60,7 @@ PreToolUse applies a fail-closed path and command guard. It confines writes to t
 
 ## Dashboard and interfaces
 
-The dashboard is a dependency-free vanilla web bundle embedded in the compiled binary. It treats server state as authoritative, receives snapshots plus resumable WebSocket frames, and derives notifications when frames are applied so background-tab animation throttling cannot hide events.
+The dashboard is a dependency-free vanilla web bundle embedded in the compiled binary. It treats server state as authoritative, receives snapshots plus resumable WebSocket frames, and derives notifications when frames are applied so background-tab animation throttling cannot hide events. Request rows retain the server's insertion order when persisted timestamps tie; generated IDs are identity, not a chronology tie-breaker.
 
 The CLI and MCP bridge call the same server APIs. `relay attach` takes an attach lease so automated sends do not race a person in a terminal. User-facing product text is English; Korean remains supported in input-intent matching.
 

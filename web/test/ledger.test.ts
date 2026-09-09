@@ -211,6 +211,21 @@ test("serialised and overlapped arrivals both keep each reason on its own reques
   expect(overlapped).toEqual(serialised);                                                        // the ordering must not change what a row says
 });
 
+test("equal timestamps retain server insertion order for reply attribution and bucket reading order", () => {
+  // SQLite can preserve four inserts in one millisecond. The IDs intentionally sort into a different order: they
+  // must not become a synthetic chronology when the snapshot reaches the browser.
+  const request = (id: string, taskId: string) => msg({ id, created_at: 1000, dispatch_state: "needs_confirm", dispatch_json: { action: "route_to_task", task_id: taskId, confidence: "high" } });
+  const prompt = (id: string, taskId: string) => msg({ id, role: "system", created_at: 1000, dispatch_state: "direct", text: `Routing needs confirmation (task ${taskId} not found). Which task? T-05 sample` });
+  const first = request("z-first-request", "T-01");
+  const second = request("a-second-request", "T-02");
+  const rows = requestRows([first, second, prompt("z-first-reply", "T-01"), prompt("a-second-reply", "T-02")], {});
+
+  expect(rows.map((row) => row.id)).toEqual([first.id, second.id]);
+  expect(rows.map((row) => row.bucket)).toEqual(["needs_you", "needs_you"]);
+  expect(rows[0].answer).toContain("task T-01 not found");
+  expect(rows[1].answer).toContain("task T-02 not found");
+});
+
 // drainPending() re-queues every pending message at once (restart, POST /resume-all), so every request row precedes
 // every reply row. No timing luck: with N outstanding, the last row took the first answer and the other N−1 degraded.
 test("a drained backlog gives every request its own reply, in order", () => {
