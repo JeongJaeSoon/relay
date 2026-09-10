@@ -7,7 +7,9 @@ import type { Database } from "bun:sqlite";
 import type { EventEnvelope } from "@shared/types.ts";
 import type { Config } from "../config.ts";
 import { applyProjection } from "./projections.ts";
-const PROJECTIONS = ["tasks", "messages", "commands", "process_instances", "permit_leases", "ws_frames", "projects"];
+// Child-first ordering matters with foreign keys. Goal membership intentionally has no task FK (see migration 3),
+// but its own aggregate projections are still cleared from leaves to root.
+const PROJECTIONS = ["goal_notification_claims", "goal_cycles", "goal_members", "goals", "commands", "process_instances", "permit_leases", "ws_frames", "messages", "tasks", "projects"];
 const KEEP_META = ["schema_version", "relay_instance_id", "max_concurrent_agents", "delivery_method", "version", "log_dir", "oauth_fallback", "cli_drift", "recovering"];   // operational keys are not event-sourced
 /** Wipes projection tables and re-applies events in seq order inside one transaction. Returns the number of events replayed. */
 export function rebuildProjections(db: Database, cfg: Config): number {

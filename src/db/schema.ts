@@ -51,5 +51,33 @@ export const MIGRATIONS: string[] = [
   -- too; a backfill without one is undone by the next replay. See the note at the top of replay.ts.
   update messages set ask=1 where role='user' and text like '? %';
   `,
+  /* 3 */ `
+  -- Goals are event-sourced, durable user-request lifetimes. They deliberately do not own tasks and goal_members
+  -- deliberately has no FK to tasks: retention may remove a closed task's task-scoped history, while the goal and
+  -- its immutable membership must remain replayable from the non-task-scoped goal events.
+  create table goals(
+    id text primary key, request_message_id text not null, original_request_json text not null,
+    status text not null check(status in ('active','completed')), current_generation integer not null check(current_generation > 0),
+    outcome text check(outcome in ('completed','completed_with_cancellations','cancelled')),
+    created_at integer not null, updated_at integer not null, completed_at integer, review_due_at integer, reviewed_at integer);
+  create table goal_members(
+    goal_id text not null references goals(id), split_item_id text not null, ordinal integer not null check(ordinal >= 0),
+    task_uuid text not null, task_display_id text not null, created_at integer not null,
+    primary key(goal_id, split_item_id), unique(goal_id, ordinal));
+  create index goal_members_task on goal_members(task_uuid, goal_id);
+  create table goal_cycles(
+    goal_id text not null references goals(id), generation integer not null check(generation > 0),
+    status text not null check(status in ('active','completed')),
+    outcome text check(outcome in ('completed','completed_with_cancellations','cancelled')),
+    opened_at integer not null, completed_at integer, member_states_json text,
+    primary key(goal_id, generation));
+  create table goal_notification_claims(
+    claim_id text primary key, goal_id text not null, generation integer not null,
+    outcome text not null check(outcome in ('completed','completed_with_cancellations','cancelled')),
+    task_uuids_json text not null, state text not null default 'pending' check(state in ('pending','delivered','reviewed','superseded')),
+    claimed_at integer not null, delivered_at integer, resolved_at integer, completion_event_id text not null,
+    unique(goal_id, generation), foreign key(goal_id, generation) references goal_cycles(goal_id, generation));
+  create index goal_claims_pending on goal_notification_claims(state, claimed_at);
+  `,
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;

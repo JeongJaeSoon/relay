@@ -44,3 +44,5 @@ export const redispatch = (id: string) => api.post(`/messages/${id}/redispatch`)
 export const taskDetail = (uuid: string) => api.get<{ task: unknown; events: unknown[]; commands: unknown[] }>(`/tasks/${uuid}`);
 
 export const retryCleanup = (uuid: string) => api.post(`/tasks/${uuid}/retry-cleanup`);
+export const markGoalNotificationDelivered = (claimId: string) => api.post(`/goal-notifications/${encodeURIComponent(claimId)}/delivered`);
+export const reviewGoal = (goalId: string) => api.post(`/goals/${encodeURIComponent(goalId)}/review`);

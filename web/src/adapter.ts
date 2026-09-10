@@ -9,6 +9,9 @@ import { diffNotifs, type NotifKind } from "./notify.ts";
 import { store } from "./store.ts";
 export interface DemoTaskCore { cleanup: boolean; id: string; uuid: string; num: number; title: string; project: string; size: string; status: StKey; statusLabel: string; step: string; startedAt: Date | null; endedAt: Date | null; question: { key?: string; askedAt?: number; q: string; chips: string[] } | null; sub: boolean; parent: string | null; children: string[]; sid: string; proc: string; gen: number; attached: string | null; worktree: string | null; branch: string; queuedAt: number; qhead: boolean; paused: boolean; model: string; effort: string; agentType: string | null; bornAt: number; tags: string[]; pending: null; msgUntil: number }
 export interface DemoEvent { id: number; at: Date; txt: string; payload: string | null }
+export function suppressGoalMemberTerminalNotice(kind: NotifKind, body: string | undefined, taskUuid: string, members: { task_uuid: string }[]): boolean {
+  return (kind === "done" || (kind === "err" && body === "Cancelled")) && members.some((member) => member.task_uuid === taskUuid);
+}
 /** What the demo engine holds in S.tasks: the server-derived core plus the engine's own fields (layout position, timeline) that survive updates. */
 export type DemoTask = DemoTaskCore & { events: DemoEvent[]; timers: unknown[]; x: number; y: number };
 const TERMINAL = new Set(["done", "needs_review", "error", "cancelled"]);
@@ -134,6 +137,7 @@ export function installAdapter() {
     setMax: (n: number) => run("limit change", api.patchSettings({ max_concurrent_agents: Math.max(1, n) })),
     registerProject: (p: { name: string; path: string; description: string; keywords: string[] }) => run("project registration", api.registerProject(p)), removeProject: (id: string) => run("project removal", api.removeProject(id)),
     redispatch: (messageId: string) => run("retry", api.redispatch(messageId)),
+    reviewGoal: (goalId: string) => run("goal review", api.reviewGoal(goalId)),
     stopForeign: (key: string) => run("stop", api.stopForeign(key)),           // the one write the dashboard can aim at a session relay does not own
     loadDetail: (t: DemoTask) => { const request = loadDetail(t.uuid); if (!request) return; request.then((d) => { const live = new Set(t.events.map((e) => e.id)); t.events = [...(d.events as EventEnvelope[]).filter((e) => isTimelineEvent(e.type)).map(eventLine).filter((e) => !live.has(e.id)), ...t.events].slice(-200); if (S.sel === t.id) D.refresh(); }).catch(() => {}); },
   };
@@ -226,9 +230,29 @@ export function installAdapter() {
   // Also used by empty-state navigation without changing any task data.
   D.setConversationHistory = setHistory;
   const syncEvents = (uuids: Iterable<string>) => { for (const uuid of uuids) { const t = demoOf(uuid); if (!t) continue; const list = store.state.events[uuid] ?? []; const have = new Set(t.events.map((e) => e.id)); for (const e of list) if (!have.has(e.seq) && isTimelineEvent(e.type)) t.events.push(eventLine(e)); if (t.events.length > 200) t.events.splice(0, t.events.length - 200); if (S.sel === t.id) D.refresh(); } };
+  const acknowledgingClaims = new Set<string>();
+  const syncGoals = () => {
+    for (const goal of Object.values(store.state.goals)) {
+      if (goal.reviewed_at != null || goal.status !== "completed") { D.withdrawGoal?.(goal.id); continue; }
+      const members = store.state.goalMembers.filter((m) => m.goal_id === goal.id);
+      const task = members.map((m) => demoOf(m.task_uuid)).find(Boolean) ?? { id: members.map((m) => m.task_display_id).join(" ") || "Goal", title: goal.original_request.text.slice(0, 80) };
+      const outcome = goal.outcome === "cancelled" ? "Cancelled" : goal.outcome === "completed_with_cancellations" ? "Completed with cancellations" : "Completed";
+      const due = goal.review_due_at == null ? "" : ` · Review/cleanup due ${new Date(goal.review_due_at).toLocaleString()}`;
+      D.notifyGoal?.(goal.id, goal.current_generation, task, `${outcome} · ${members.map((m) => m.task_display_id).join(" ")}${due}`);
+      const claim = Object.values(store.state.goalNotifications).find((n) => n.goal_id === goal.id && n.generation === goal.current_generation && n.state === "pending");
+      if (claim && !acknowledgingClaims.has(claim.claim_id)) {
+        acknowledgingClaims.add(claim.claim_id);
+        api.markGoalNotificationDelivered(claim.claim_id).catch((e) => note(`goal notification acknowledgement failed: ${(e as Error).message}`)).finally(() => acknowledgingClaims.delete(claim.claim_id));
+      }
+    }
+  };
   const flushNotifs = () => {                                                  // decisions were made at frame time; the DOM work happens here, once per render
     const { ops, chips } = notifs.drain();
-    for (const o of ops) { const d = demoOf(o.taskUuid); if (!d) continue; if (o.op === "withdraw") D.withdrawNotif(d.id, o.kind); else D.notify(o.kind, d, o.body); }
+    for (const o of ops) {
+      const d = demoOf(o.taskUuid); if (!d) continue;
+      if (o.op === "withdraw") D.withdrawNotif(d.id, o.kind);
+      else if (o.kind && !suppressGoalMemberTerminalNotice(o.kind, o.body, o.taskUuid, store.state.goalMembers)) D.notify(o.kind, d, o.body);
+    }
     for (const uuid of chips) { const d = demoOf(uuid); if (d) document.querySelectorAll(`.m-chips[data-task="${d.id}"] .chip`).forEach((b) => ((b as HTMLButtonElement).disabled = true)); }
   };
   const sync = () => {
@@ -241,6 +265,7 @@ export function installAdapter() {
     if (all || d.sys || d.projects) syncSystem();
     if (all || d.messages.size || d.tasks.size) syncMessages();
     if (d.events.size) syncEvents(d.events);
+    if (all || d.goals.size || d.goalNotifications.size) syncGoals();
     const foreignChanged = all || d.foreign; if (foreignChanged) syncForeign();
     if (all || d.messages.size || d.tasks.size) { syncLedger(); if (!all && !tasksChanged && !foreignChanged) D.renderLedger(); }   // otherwise relayout() → refresh() draws it
     if (tasksChanged || foreignChanged || all) D.relayout();                   // one layout+render per animation frame, whatever arrived

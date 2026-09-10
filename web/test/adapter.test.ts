@@ -1,8 +1,16 @@
 import { expect, test } from "bun:test";
-import { badgeParts, closeConfirmUuid, createNotifQueue, eventLine, isDispatcherBadgeRow, isTimelineEvent, messageDayKey, promotedQuestionTask, toDemoForeign, toDemoTask } from "../src/adapter.ts";
+import { badgeParts, closeConfirmUuid, createNotifQueue, eventLine, isDispatcherBadgeRow, isTimelineEvent, messageDayKey, promotedQuestionTask, suppressGoalMemberTerminalNotice, toDemoForeign, toDemoTask } from "../src/adapter.ts";
 import { store } from "../src/store.ts";
 const base = (uuid: string, status: any, extra: Record<string, unknown> = {}) => ({ uuid, num: 3, display_id: "T-03", project_id: "p", title: "인증 리팩토링", status, size: "normal", effort: "xhigh", model: "claude-opus-5", session_id: "s", short_id: "ab12", worktree_path: "/w", branch: "relay-abc", base_sha: null, process_state: "alive", process_generation: 2, turn_state: "busy", attach_state: "none", attached_by: null, paused: false, last_summary: null, last_step: "Edit src/auth.ts", question: null, parent_uuid: null, agent_id: null, agent_type: null, queued_at: null, qhead: false, started_at: 1000, ended_at: null, created_at: 900, updated_at: 1, closed_at: null, usage_tokens: 0, summary_json: null, ...extra }) as any;
 const ctx = { projects: [{ id: "p", name: "myapp" }] as any, tasks: {} as any };
+test("goal members suppress per-task done notices so a single or split goal gets one aggregate completion", () => {
+  const members = [{ task_uuid: "u1" }, { task_uuid: "u2" }];
+  expect(suppressGoalMemberTerminalNotice("done", "Done", "u1", members)).toBe(true);
+  expect(suppressGoalMemberTerminalNotice("done", "Done", "u2", members)).toBe(true);
+  expect(suppressGoalMemberTerminalNotice("err", "Cancelled", "u1", members)).toBe(true);
+  expect(suppressGoalMemberTerminalNotice("err", "Session error", "u1", members)).toBe(false);
+  expect(suppressGoalMemberTerminalNotice("done", "Done", "outside", members)).toBe(false);
+});
 test("toDemoTask maps status/label/step/question/children into the demo shape", () => {
   const parent = base("u1", "waiting_input", { question: { text: "어느 파일?", options: ["a.txt", "b.txt"], asked_at: 1, source: "marker" } }); const child = base("u2", "running", { display_id: "T-03.1", parent_uuid: "u1", agent_type: "relay-explore", num: -3001 });
   const tasks = { u1: parent, u2: child };

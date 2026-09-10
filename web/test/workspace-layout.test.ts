@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
 const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const dock = app.slice(app.indexOf("function contentHeight()"), app.indexOf("function applySizes(){"));
 function height(viewport: number, saved: number | null, banner = 0, width = 390) {
   const context: any = { RZ: { chh: saved }, document: { documentElement: { clientHeight: viewport, clientWidth: width } },
@@ -46,6 +47,22 @@ test("desktop permits ratios beyond the mobile cap while keeping a usable canvas
   expect(height(1200, .7, 0, 640)).toBe(520);
   expect(height(1200, .7, 0, 641)).toBeCloseTo(1152 * .7);
   expect(height(900, 1, 0, 1280)).toBe(732);
+});
+
+test("completion toasts own the top-right corner while the minimap stays above graph controls", () => {
+  expect(html).toContain("#toasts{position:absolute;right:12px;top:12px;width:320px;max-width:calc(100% - 24px)");
+  expect(html).toContain("position:absolute;right:12px;top:auto;bottom:52px;width:min(172px,calc(100% - 24px))");
+  expect(html).toMatch(/@container graph \(max-width:640px\)\{\s*\.canvas-tools\{display:none\}\s*#minimap\{bottom:12px\}\s*\}/);
+  expect(html).toMatch(/@container graph \(max-height:580px\)\{[\s\S]*?#canvas\.has-toasts #minimap:not\(:focus-within\)\{visibility:hidden;pointer-events:none\}[\s\S]*?#minimap:focus-within \+ #toasts \.toast~\.toast\{display:none\}[\s\S]*?\}/);
+  expect(html).toMatch(/@container graph \(max-height:360px\)\{[\s\S]*?#minimap:focus-within \+ #toasts\{visibility:hidden\}[\s\S]*?\}/);
+  expect(html).toContain('<div id="notifLive" class="visually-hidden" aria-live="polite" aria-atomic="false"></div>');
+  expect(html).toContain('<div id="toasts"></div>');
+  const maximumToastStackBottom = 12 + 3 * 102 + 2 * 8; // top inset + three two-line cards + gaps
+  const earliestVisibleMinimapTop = 581 - 52 - 176; // first height outside the policy, with expanded minimap
+  expect(earliestVisibleMinimapTop).toBeGreaterThan(maximumToastStackBottom);
+  const oneToastBottom = 12 + 102;
+  const focusedMinimapTop = 361 - 52 - 176; // first height where a focused map and one toast are both visible
+  expect(focusedMinimapTop).toBeGreaterThan(oneToastBottom);
 });
 
 test("many sessions stay readable, selected work anchors after updates, and overview remains available", () => {

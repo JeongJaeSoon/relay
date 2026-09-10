@@ -11,7 +11,7 @@ describe("store.applyFrame", () => {
     store.applyFrame({ seq: 8, idx: 5, type: "task.created", task: task("old", "queued") }); expect(store.state.tasks.old).toBeUndefined();
   });
   test("snapshot sets the cursor to (as_of_seq, MAX) so frames of that seq are dropped and later ones apply", () => {
-    store.applySnapshot({ as_of_seq: 5, tasks: [task("s", "running")], projects: [], state: { paused: false } as any, messages: [], foreign: [] });
+    store.applySnapshot({ as_of_seq: 5, tasks: [task("s", "running")], projects: [], state: { paused: false } as any, messages: [], foreign: [], goals: [], goal_members: [], goal_notifications: [] });
     store.applyFrame({ seq: 5, idx: 0, type: "task.created", task: task("x", "queued") }); expect(store.state.tasks.x).toBeUndefined();
     store.applyFrame({ seq: 6, idx: 0, type: "task.created", task: task("y", "queued") }); expect(store.state.tasks.y).toBeDefined();
   });
@@ -39,6 +39,15 @@ describe("store.applyFrame", () => {
     let n = 0; const off = store.subscribe(() => n++);
     store.applyFrame({ seq: 1, idx: 0, type: "system.state", state: { paused: true } as any }); store.applyFrame({ seq: 1, idx: 0, type: "system.state", state: { paused: true } as any });
     expect(n).toBe(1); expect(store.state.sys?.paused).toBe(true); off();
+  });
+  test("durable goal and notification frames survive snapshot/reconnect state", () => {
+    const goal = { id: "goal:m1", request_message_id: "m1", original_request: { message_id: "m1", source: "user", client_message_id: "c1", text: "ship it", ask: false, created_at: 1 }, status: "completed", current_generation: 1, outcome: "completed", created_at: 1, updated_at: 2, completed_at: 2, reviewed_at: null } as any;
+    const member = { goal_id: goal.id, split_item_id: "m1:0", ordinal: 0, task_uuid: "u", task_display_id: "T-01", created_at: 1 } as any;
+    const claim = { claim_id: "goal:m1:completion:1", goal_id: goal.id, generation: 1, outcome: "completed", task_uuids: ["u"], state: "pending", claimed_at: 2, delivered_at: null, completion_event_id: "e" } as any;
+    store.applySnapshot({ as_of_seq: 5, tasks: [], projects: [], state: {} as any, messages: [], foreign: [], goals: [goal], goal_members: [member], goal_notifications: [claim] });
+    expect(store.state.goals[goal.id]).toEqual(goal); expect(store.state.goalMembers).toEqual([member]); expect(store.state.goalNotifications[claim.claim_id].state).toBe("pending");
+    store.applyFrame({ seq: 6, idx: 0, type: "goal.notification", claim: { ...claim, state: "delivered", delivered_at: 3 } });
+    expect(store.state.goalNotifications[claim.claim_id].state).toBe("delivered"); expect([...store.state.dirty.goalNotifications]).toContain(claim.claim_id);
   });
 });
 

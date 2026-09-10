@@ -35,6 +35,17 @@ you ──chat/CLI/MCP──▶ dispatcher (claude -p, one shot)
 The event log is the source of truth; `tasks`/`messages`/`commands` are projections that
 `relay db rebuild` can replay from scratch. Every write goes through one path (`EventLog.emit`).
 
+### Durable goal lifecycle (issue #39)
+
+Relay persists each goal's original
+request and immutable task/split-item membership in its event log and replayable projections.
+Completion distinguishes `completed`, `completed_with_cancellations`, and `cancelled`; active, input-waiting,
+error, and review-required members block it, while `closed` remains cleanup only. A completed goal
+creates a durable idempotent notification claim and may request a safe stop for the exact owned
+worker generation, but never a close or worktree removal. Completed goals remain visible until an
+explicit review. Any eventual removal requires an explicit close plus clean and remote-contained
+preflight; a Claude refusal is an additional guard, not the primary policy.
+
 ## CLI
 
 | Command | What it does |
@@ -76,7 +87,7 @@ Human-readable English output by default; `--json` prints JSON only, for scripts
 | `[worker.effort] small / normal / epic` | `high` / `xhigh` / `xhigh` | Effort per task size |
 | `[usage] daily_ceiling_tokens / max_tool_calls_per_turn` | `null` / `400` | Usage guards |
 | `[usage.wall_clock_min] small / normal / epic` | `20` / `120` / `480` | Wall-clock budget per task size |
-| `[idle] stop_after_min / close_after_hours` | `15` / `72` | Idle stop and auto-close |
+| `[idle] stop_after_min / close_after_hours` | `15` / `72` | Idle stop and visible review/cleanup-due timing; never automatic goal-member close or removal |
 | `[pool] subagent_parallel_per_task` | `null` | Per-task subagent cap (null = global pool only) |
 
 Other files under `~/.config/relay/`: `relay.db`, `api-token`, `hook-token`, `token` (OAuth

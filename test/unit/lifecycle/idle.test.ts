@@ -3,7 +3,7 @@ import { buildTestApp } from "../../helpers/app.ts";
 import { IdleReaper } from "../../../src/lifecycle/idle.ts";
 import { setNow } from "../../../src/core/clock.ts";
 import { loadTask } from "../../../src/core/events.ts";
-test("idle reaper stops idle-but-alive tasks after 15 min (once) and closes done tasks after 72h; running tasks are untouched", async () => {
+test("idle reaper stops idle-but-alive tasks after 15 min (once), but never closes or removes them after 72h", async () => {
   const s = await buildTestApp(); const t0 = Date.now(); setNow(() => t0);
   const done = s.seedTask("done", { updated_at: t0 }); const run = s.seedTask("running", { updated_at: t0 });
   const err = s.seedTask("error", { updated_at: t0 }); const ask = s.seedTask("waiting_input", { updated_at: t0 });
@@ -16,12 +16,12 @@ test("idle reaper stops idle-but-alive tasks after 15 min (once) and closes done
     expect(s.db.query("select count(*) c from events where type='idle.deadline' and task_uuid=?").get(run)).toEqual({ c: 0 });
     expect(s.db.query("select count(*) c from commands where kind='stop' and task_uuid=?").get(ask)).toEqual({ c: 1 });   // waiting_input is stopped but never closed
     setNow(() => t0 + 73 * 3600_000); reaper.tick(); await s.settle();
-    expect(loadTask(s.db, done)!.status).toBe("closed"); expect(loadTask(s.db, run)!.status).toBe("running");
-    // An errored task leaked its session forever, because `close` is the only path that disposes of one and nothing
-    // ever called it for an error. It waits on nobody, so the same deadline applies.
-    expect(loadTask(s.db, err)!.status).toBe("closed");
+    expect(loadTask(s.db, done)!.status).toBe("done"); expect(loadTask(s.db, run)!.status).toBe("running");
+    expect(loadTask(s.db, err)!.status).toBe("error");
     // A question nobody answered is not garbage — closing it would discard the question.
     expect(loadTask(s.db, ask)!.status).toBe("waiting_input");
+    expect(s.db.query("select count(*) c from commands where kind='rm'").get()).toEqual({ c: 0 });
+    expect(s.runner.calls.filter((c) => c.kind === "rm")).toEqual([]);
   } finally { setNow(null); }
 });
 
@@ -39,17 +39,16 @@ test("an errored task whose session came back is stopped by the 15-min deadline,
   } finally { setNow(null); }
 });
 
-test("a close the CLI refused is not re-attempted on every tick, and the task stays visible instead of closed", async () => {
+test("the close-after deadline never attempts rm, even when Claude would report retained work", async () => {
   const s = await buildTestApp(); const t0 = Date.now(); setNow(() => t0);
   const done = s.seedTask("done", { updated_at: t0, process_state: "stopped", worktree_path: "/tmp/myapp/.claude/worktrees/relay-abc" });
   s.runner.keepWorktree = { reason: "worktree has commits that are not pushed anywhere", keptPath: "/tmp/myapp/.claude/worktrees/relay-abc" };
   const reaper = new IdleReaper(s.db, s.log, s.ctx.cfg, s.outbox, s.svc);
   try {
-    setNow(() => t0 + 73 * 3600_000); reaper.tick(); await s.settle();
-    // the refusal moved `updated_at`, so only a sweep past the NEXT deadline can prove the guard rather than the clock
-    setNow(() => t0 + 2 * 73 * 3600_000); reaper.tick(); reaper.tick(); await s.settle();
-    expect(s.runner.calls.filter((c) => c.kind === "rm").length).toBe(1);   // one attempt; resolving the worktree is a person's job
-    expect(loadTask(s.db, done)!.status).toBe("error"); expect(s.runner.rows.size).toBe(1);
+    setNow(() => t0 + 73 * 3600_000); reaper.tick(); reaper.tick(); await s.settle();
+    expect(s.db.query("select count(*) c from commands where kind='rm' and task_uuid=?").get(done)).toEqual({ c: 0 });
+    expect(s.runner.calls.filter((c) => c.kind === "rm")).toEqual([]);
+    expect(loadTask(s.db, done)!.status).toBe("done"); expect(s.runner.rows.size).toBe(1);
   } finally { setNow(null); }
 });
 

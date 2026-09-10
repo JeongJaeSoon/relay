@@ -10,7 +10,7 @@ describe("db", () => {
     expect(migrate(db)).toEqual({ from: 0, to: SCHEMA_VERSION });
     expect(migrate(db)).toEqual({ from: SCHEMA_VERSION, to: SCHEMA_VERSION });
     const tables = db.query("select name from sqlite_master where type='table' order by name").all().map((r: any) => r.name);
-    for (const t of ["projects", "tasks", "messages", "events", "commands", "process_instances", "permit_leases", "ws_frames", "meta"]) expect(tables).toContain(t);
+    for (const t of ["projects", "tasks", "messages", "events", "commands", "process_instances", "permit_leases", "ws_frames", "meta", "goals", "goal_members", "goal_cycles", "goal_notification_claims"]) expect(tables).toContain(t);
   });
   test("a file db is backed up before a real migration, not on first creation", () => {
     const dir = mkdtempSync(join(tmpdir(), "relay-db-")); const file = join(dir, "relay.db");

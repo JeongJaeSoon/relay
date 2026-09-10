@@ -58,6 +58,10 @@ The canonical synthetic query flags are listed in [`test/README.md`](../test/REA
 - Require a matching `.relay-owner` before Relay controls or removes a worktree. Foreign and ambiguous sessions are observation-only.
 - Stop every owned generation and recheck liveness before removing a session or shared worktree.
 - Do not accept a worker follow-up after task-level close cleanup starts. Interrupt-only stops are not closes and remain resumable.
+- Persist the original request and immutable task/split-item membership through goal events and replayable projections; never infer durable membership only from a current task row or dispatcher payload.
+- Treat `queued`, `starting`, `running`, `waiting_input`, `error`, and `needs_review` as goal-completion blockers. Keep `completed`, `completed_with_cancellations`, and `cancelled` distinct, and treat `closed` as cleanup rather than a completion result.
+- Key goal-completion notifications and any automatic stop intent by goal completion generation. Completion may request a generation-bound safe stop, but it must never initiate close or removal.
+- Do not let idle timing delete goal members. Worktree removal requires an explicit close action plus dirty and remote-containment preflight checks; a native Claude refusal is only a second safety layer.
 - Keep worker CLI compatibility code under `src/runner/` and cover measured protocol behavior with fixtures.
 - Keep user-facing strings in English while preserving intentional Korean input matchers.
 - Never put tokens, private transcripts, or real session data in fixtures, logs, screenshots, issues, or pull requests.
@@ -72,6 +76,7 @@ Use the narrowest relevant test while iterating, then run the full required set 
 | Dispatch or Ask | dispatcher, gateway message, and integration pipeline tests |
 | Worker protocol | `test/unit/runner/` with recorded synthetic fixtures |
 | Ownership, recovery and cleanup | lifecycle/runtime unit tests plus `test/integration/owned-cleanup.test.ts` and follow-up generation tests |
+| Goal membership and completion (issue #39) | event/projection/replay tests; split, retry/reopen, cancelled/needs-review, concurrent terminal transitions, notification-claim recovery, and no-auto-remove tests |
 | Dashboard | relevant `web/test/` files, full web tests, build, and viewport interaction checks |
 | CLI/package | CLI unit tests, binary integration tests, compile, and installed smoke script |
 

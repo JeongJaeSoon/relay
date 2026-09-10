@@ -1,12 +1,12 @@
 // web/src/store.ts — server frames in, one plain object out. No framework: the adapter renders through the demo engine.
-import type { EventEnvelope, ForeignSession, Message, Project, SystemState, Task, TasksSnapshot, WsFrame } from "@shared/types.ts";
+import type { EventEnvelope, ForeignSession, Goal, GoalMember, GoalNotificationClaim, Message, Project, SystemState, Task, TasksSnapshot, WsFrame } from "@shared/types.ts";
 export type Conn = "ok" | "reconnecting" | "resync";
-export interface State { seq: number; idx: number; conn: Conn; sys: SystemState | null; projects: Project[]; tasks: Record<string, Task>; messages: Message[]; events: Record<string, EventEnvelope[]>; foreign: ForeignSession[]; dirty: Dirty }
-export interface Dirty { tasks: Set<string>; messages: Set<string>; events: Set<string>; sys: boolean; projects: boolean; foreign: boolean; all: boolean }
+export interface State { seq: number; idx: number; conn: Conn; sys: SystemState | null; projects: Project[]; tasks: Record<string, Task>; messages: Message[]; events: Record<string, EventEnvelope[]>; foreign: ForeignSession[]; goals: Record<string, Goal>; goalMembers: GoalMember[]; goalNotifications: Record<string, GoalNotificationClaim>; dirty: Dirty }
+export interface Dirty { tasks: Set<string>; messages: Set<string>; events: Set<string>; goals: Set<string>; goalNotifications: Set<string>; sys: boolean; projects: boolean; foreign: boolean; all: boolean }
 export interface Store { state: State; subscribe(fn: (f?: WsFrame) => void): () => void; applyFrame(f: WsFrame): void; applySnapshot(s: TasksSnapshot): void; setConn(c: Conn): void; drain(): Dirty; reset(): void }
 const EVENTS_CAP = 200;
-const freshDirty = (): Dirty => ({ tasks: new Set(), messages: new Set(), events: new Set(), sys: false, projects: false, foreign: false, all: false });
-const initial = (): State => ({ seq: 0, idx: 0, conn: "reconnecting", sys: null, projects: [], tasks: {}, messages: [], events: {}, foreign: [], dirty: freshDirty() });
+const freshDirty = (): Dirty => ({ tasks: new Set(), messages: new Set(), events: new Set(), goals: new Set(), goalNotifications: new Set(), sys: false, projects: false, foreign: false, all: false });
+const initial = (): State => ({ seq: 0, idx: 0, conn: "reconnecting", sys: null, projects: [], tasks: {}, messages: [], events: {}, foreign: [], goals: {}, goalMembers: [], goalNotifications: {}, dirty: freshDirty() });
 export function createStore(): Store {
   const state = initial(); const subs = new Set<(f?: WsFrame) => void>(); const emit = (frame?: WsFrame) => { for (const f of subs) f(frame); };   // the applied frame reaches subscribers so notification diffing can happen per frame, not per render
   const upsertMessage = (m: Message) => { const i = state.messages.findIndex((x) => x.id === m.id); if (i >= 0) state.messages[i] = m; else { state.messages.push(m); state.messages.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)); } state.dirty.messages.add(m.id); };
@@ -25,12 +25,15 @@ export function createStore(): Store {
         case "chat.message": case "dispatch.updated": upsertMessage(f.message); break;
         case "task.created": case "task.updated": state.tasks[f.task.uuid] = f.task; state.dirty.tasks.add(f.task.uuid); break;
         case "task.event": { const list = state.events[f.task_uuid] ?? []; list.push(f.event); if (list.length > EVENTS_CAP) list.splice(0, list.length - EVENTS_CAP); state.events[f.task_uuid] = list; state.dirty.events.add(f.task_uuid); break; }
+        case "goal.updated": state.goals[f.goal.id] = f.goal; if (f.members) { state.goalMembers = state.goalMembers.filter((m) => m.goal_id !== f.goal.id).concat(f.members); } state.dirty.goals.add(f.goal.id); break;
+        case "goal.notification": state.goalNotifications[f.claim.claim_id] = f.claim; state.dirty.goalNotifications.add(f.claim.claim_id); break;
       }
       emit(f);
     },
     applySnapshot(s) {
       state.seq = s.as_of_seq; state.idx = Number.MAX_SAFE_INTEGER;                                      // every frame of as_of_seq is inside the snapshot
       state.sys = s.state; state.projects = s.projects; state.tasks = Object.fromEntries(s.tasks.map((t) => [t.uuid, t])); state.messages = [...s.messages].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)); state.foreign = s.foreign ?? [];
+      state.goals = Object.fromEntries((s.goals ?? []).map((g) => [g.id, g])); state.goalMembers = s.goal_members ?? []; state.goalNotifications = Object.fromEntries((s.goal_notifications ?? []).map((n) => [n.claim_id, n]));
       state.dirty.all = true; emit();
     },
     setConn(c) { state.conn = c; state.dirty.sys = true; emit(); },                              // always emits: the first ws.onclose repeats the initial "reconnecting", and the dashboard must still be told it is not connected

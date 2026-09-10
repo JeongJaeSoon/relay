@@ -9,6 +9,7 @@ import { now } from "../core/clock.ts";
 import { ulid } from "../core/ids.ts";
 import { sweep } from "../lifecycle/retention.ts";
 import { CliError, client } from "./client.ts";
+import { backfillLegacyGoals } from "../core/goals.ts";
 
 const say = (s: string) => process.stdout.write(s + "\n");
 const refuseIfUp = async (what: string) => { if (await client().up()) throw new CliError(`relay: the server is running — run \`brew services stop relay\` (or quit relay serve) before ${what}`); };
@@ -44,13 +45,13 @@ async function restore(file?: string) {
 
 function sweepCmd() {
   const cfg = loadConfig(); const d = openDb(paths.db); migrate(d);
-  try { const r = sweep(d, 90, new EventLog(d, () => {}, cfg)); say(`Sweep complete: ${r.events} events · ${r.blobs} blobs${r.vacuumed ? " · VACUUM run" : ""}`); } finally { d.close(); }
+  try { const log = new EventLog(d, () => {}, cfg); backfillLegacyGoals(d, log); const r = sweep(d, 90, log); say(`Sweep complete: ${r.events} events · ${r.blobs} blobs${r.vacuumed ? " · VACUUM run" : ""}`); } finally { d.close(); }
 }
 
 async function rebuild() {
   await refuseIfUp("a projection rebuild");
   const cfg = loadConfig(); const d = openDb(paths.db); migrate(d);
-  try { say(`Replay complete: ${rebuildProjections(d, cfg)} events`); } finally { d.close(); }
+  try { backfillLegacyGoals(d, new EventLog(d, () => {}, cfg)); say(`Replay complete: ${rebuildProjections(d, cfg)} events`); } finally { d.close(); }
 }
 
 /** `relay setup` path when the server is down: emit project.registered straight into the log (the log is the source of truth). */

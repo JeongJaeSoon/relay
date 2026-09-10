@@ -1008,12 +1008,21 @@ setInterval(()=>{
 const N={items:[],dnd:false,open:false,expand:{}};
 const NKIND={wait:"Needs input",err:"Stopped · errored",done:"Done"};
 let nseq=0;
-const toastsBox=$("#toasts"),ncEl=$("#notifCenter"),notifBtn=$("#notifBtn");
+const toastsBox=$("#toasts"),notifLive=$("#notifLive"),ncEl=$("#notifCenter"),notifBtn=$("#notifBtn");
+function announceNotif(it){
+  const line=el("span",null,`${NKIND[it.kind]??"Notification"}: ${it.title}. ${it.body}`);notifLive.append(line);
+  while(notifLive.children.length>10)notifLive.firstChild.remove();
+}
 function notify(kind,t,body){
   const it={id:++nseq,kind,taskId:t.id,title:t.title,body,at:new Date(),loc:N.dnd?"center":"toast",timer:null};
-  N.items.push(it);
+  N.items.push(it);announceNotif(it);
   renderNotif();
   if(it.loc==="toast")armToast(it);
+}
+function notifyGoal(goalId,generation,t,body){
+  if(N.items.some(i=>i.goalId===goalId&&i.generation===generation))return;
+  const it={id:++nseq,kind:"done",taskId:t.id,title:t.title,body,goalId,generation,at:new Date(),loc:N.dnd?"center":"toast",timer:null};
+  N.items.push(it);announceNotif(it);renderNotif();if(it.loc==="toast")armToast(it);
 }
 function armToast(it){clearTimeout(it.timer);it.timer=setTimeout(()=>hideToast(it),5000)}
 function hideToast(it){ /* auto-hide moves it to the centre; it does not drop it */
@@ -1022,9 +1031,15 @@ function hideToast(it){ /* auto-hide moves it to the centre; it does not drop it
   if(c){c.classList.add("out");setTimeout(()=>{c.remove();renderNotif()},250)}
   else renderNotif();
 }
-function dropNotif(it){clearTimeout(it.timer);N.items=N.items.filter(x=>x!==it)}
+function dropNotif(it){clearTimeout(it.timer);N.items=N.items.filter(x=>x!==it);if(it.goalId)globalThis.relay?.reviewGoal?.(it.goalId)}
 function withdrawNotif(taskId,kind){ /* a notification resolved through some other path withdraws itself */
-  N.items.filter(i=>i.taskId===taskId&&(!kind||i.kind===kind)).forEach(dropNotif);
+  // Goal items have their own explicit review lifetime. A task transition (including close) must neither withdraw
+  // nor silently review a goal merely because the goal notification happens to point at that task card.
+  N.items.filter(i=>!i.goalId&&i.taskId===taskId&&(!kind||i.kind===kind)).forEach(dropNotif);
+  renderNotif();
+}
+function withdrawGoal(goalId){
+  N.items.filter(i=>i.goalId===goalId).forEach(i=>{clearTimeout(i.timer);N.items=N.items.filter(x=>x!==i)});
   renderNotif();
 }
 function openFromNotif(it){ /* a click means the node has been looked at, which means read */
@@ -1046,6 +1061,7 @@ function ncard(it){
 function renderToasts(){
   const live=N.items.filter(i=>i.loc==="toast");
   while(live.length>3)hideToast(live.shift()); /* the overflow leaves by the same slide-out path */
+  canvas.classList.toggle("has-toasts",live.length>0); /* a short graph yields its corner until transient cards move to the centre */
   [...toastsBox.children].forEach(c=>{
     if(!live.some(i=>"toast-"+i.id===c.id)&&!c.classList.contains("out"))c.remove();
   });
@@ -1139,7 +1155,7 @@ notifBtn.addEventListener("click",e=>{
 });
 ncEl.tabIndex=-1;$("#settings").tabIndex=-1; /* focus moves into the panel when it opens */
 $("#ncClose").addEventListener("click",()=>{N.open=false;renderNotif()});
-$("#ncClear").addEventListener("click",()=>{N.items.forEach(i=>clearTimeout(i.timer));N.items=[];renderNotif()});
+$("#ncClear").addEventListener("click",()=>{[...N.items].forEach(dropNotif);renderNotif()});
 $("#ncDnd").addEventListener("change",e=>{N.dnd=e.target.checked;renderNotif();renderSettings()});
 document.addEventListener("click",e=>{
   if(N.open&&!e.target.closest("#notifCenter")&&!e.target.closest("#notifBtn")){N.open=false;renderNotif()}
@@ -1365,7 +1381,7 @@ function commands(){
     {t:"Open notifications",run:()=>{N.open=true;N.items.forEach(i=>{if(i.loc==="toast"){clearTimeout(i.timer);i.loc="center"}});renderNotif()}},
     {t:"Open settings",run:()=>{SET.open=true;renderSettings()}},
     {t:"Toggle do not disturb",run:()=>{N.dnd=!N.dnd;renderNotif();renderSettings()}},
-    {t:"Clear all notifications",run:()=>{N.items.forEach(i=>clearTimeout(i.timer));N.items=[];renderNotif()}},
+    {t:"Clear all notifications",run:()=>{[...N.items].forEach(dropNotif);renderNotif()}},
     {t:"Max concurrent agents +1",run:()=>relay.setMax(S.maxw+1)},
     {t:"Max concurrent agents −1",run:()=>relay.setMax(S.maxw-1)},
     {t:"Toggle automatic readable positioning",run:()=>{S.autofit=!S.autofit;renderSettings()}},

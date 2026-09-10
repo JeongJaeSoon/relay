@@ -9,6 +9,7 @@ import { EventLog, loadTask, type EmitInput } from "../core/events.ts";
 import { commandId } from "../core/ids.ts";
 import type { AgentRow, AgentRunner, RmOutcome, SpawnSpec } from "../runner/runner.ts";
 import { pendingCleanup } from "./cleanup.ts";
+import { removalSafety } from "./worktree-safety.ts";
 import { log as slog } from "../log.ts";
 import { getMeta } from "../db/db.ts";
 
@@ -18,7 +19,7 @@ export type CommandPayload =
   // `target` on stop/rm names a SUPERSEDED generation's session instead of the task's own (a reap): `--bg --resume`
   // forks, so `tasks.session_id` names only the LAST session a task has run while the earlier ones stay registered with
   // the CLI. A reap never touches the task's process state — the process it names is already dead.
-  | { kind: "stop"; reason: string; target?: ReapTarget }
+  | { kind: "stop"; reason: string; target?: ReapTarget; expected?: GoalStopExpectation }
   | { kind: "resume"; prompt: string; marker: string }
   // An rm with no `target` is the task's OWN disposal, and its outcome — not the caller — decides whether the task
   // ends up `closed`: `claude rm` refuses a worktree that still holds work, and for a finished relay task that
@@ -28,6 +29,8 @@ export type CommandPayload =
 /** A superseded session. `short_id` is what `claude stop`/`claude rm` take, but the hook path does not learn it until
  *  after the fork's SessionStart is projected, so it is often null and resolved from the roster at reap time. */
 export interface ReapTarget { session_id: string; short_id: string | null }
+/** An automatic goal stop is authorized only for this exact completed cycle and worker identity. */
+export interface GoalStopExpectation { goal_id: string; generation: number; process_generation: number; session_id: string }
 export interface OutboxDeps { delivery: () => DeliveryMethod; isPaused: () => boolean; settingsJson: (t: Task, gen: number) => string; env: (t: Task, gen: number) => Record<string, string>; socketPathFor: (row: AgentRow) => string; instanceId: () => string }
 /** The CLI's own words for why it kept the session, plus the path to look at — the path is the actionable half, since
  *  the user's next move is to look at the commits in it. `reason` is only ever missing if the wording changes. */
@@ -101,15 +104,34 @@ export class Outbox {
   confirm(id: string) { const c = rowToCommand(this.db.query("select * from commands where id=?").get(id)); this.log.emit({ type: "command.applied", task_uuid: c.task_uuid, payload: { id } }); this.kick(c.task_uuid); }
   retry(id: string) { const c = rowToCommand(this.db.query("select * from commands where id=?").get(id)); this.log.emit({ type: "command.requeued", task_uuid: c.task_uuid, payload: { id } }); this.kick(c.task_uuid); }
   /** Drop pending commands that no longer make sense (interrupt/close). Keeps I5: closed ⇒ no pending commands. */
+  pendingCancellationInputs(taskUuid: string, kinds: CommandKind[], reason: string): EmitInput[] {
+    return (this.db.query("select id, kind from commands where task_uuid=? and state in ('pending','unknown')").all(taskUuid) as any[])
+      .filter((r) => kinds.includes(r.kind))
+      .map((r) => ({ type: "command.failed", task_uuid: taskUuid, causation_id: r.id, payload: { id: r.id, error: `cancelled: ${reason}` } }));
+  }
   cancelPending(taskUuid: string, kinds: CommandKind[], reason: string) {
-    for (const r of this.db.query("select id, kind from commands where task_uuid=? and state in ('pending','unknown')").all(taskUuid) as any[])
-      if (kinds.includes(r.kind)) this.log.emit({ type: "command.failed", task_uuid: taskUuid, causation_id: r.id, payload: { id: r.id, error: `cancelled: ${reason}` } });
+    const inputs = this.pendingCancellationInputs(taskUuid, kinds, reason);
+    if (inputs.length) this.log.emitMany(inputs);
+  }
+  goalStopRunning(taskUuid: string): boolean {
+    return !!this.db.query("select 1 from commands where task_uuid=? and kind='stop' and state='running' and json_extract(payload_json,'$.expected.goal_id') is not null limit 1").get(taskUuid);
+  }
+  /** Fresh work supersedes a goal stop that has not reached the supervisor. A running one is never cancelled by
+   * guessing; callers reject the new action until its generation-bound outcome has settled. */
+  pendingGoalStopCancellationInputs(taskUuid: string, reason: string): EmitInput[] {
+    return (this.db.query("select id from commands where task_uuid=? and kind='stop' and state in ('pending','unknown') and json_extract(payload_json,'$.expected.goal_id') is not null").all(taskUuid) as any[])
+      .map((r) => ({ type: "command.failed", task_uuid: taskUuid, causation_id: r.id, payload: { id: r.id, error: `cancelled: ${reason}` } }));
+  }
+  cancelPendingGoalStops(taskUuid: string, reason: string) {
+    const inputs = this.pendingGoalStopCancellationInputs(taskUuid, reason);
+    if (inputs.length) this.log.emitMany(inputs);
   }
   /** Startup (B3 crash points): a command left `running` by a crash. spawn → pending (apply() adopts an already-running session by owner file); others → unknown (user confirms/retries; a marker echo still promotes send/resume). */
   reconcileRunning(): { requeued: string[]; unknown: string[] } {
     const out = { requeued: [] as string[], unknown: [] as string[] };
     for (const r of this.db.query("select id, task_uuid, kind, payload_json from commands where state='running' order by rowid").all() as any[]) {
-      if (r.kind === "spawn") { this.log.emit({ type: "command.requeued", task_uuid: r.task_uuid, payload: { id: r.id } }); out.requeued.push(r.id); }
+      const payload = JSON.parse(r.payload_json) as CommandPayload;
+      if (r.kind === "spawn" || (r.kind === "stop" && "expected" in payload && payload.expected)) { this.log.emit({ type: "command.requeued", task_uuid: r.task_uuid, payload: { id: r.id } }); out.requeued.push(r.id); }
       else {
         this.log.emit({ type: "command.unknown", task_uuid: r.task_uuid, causation_id: r.id, payload: { id: r.id, error: "relay restarted during execution" } }); out.unknown.push(r.id);
         if (r.kind === "rm") this.parkStrandedClose(r.task_uuid, r.id, "relay restarted during execution");
@@ -210,6 +232,7 @@ export class Outbox {
     // A reap has no urgency and may take the shared worktree with it, so unlike a real stop/rm it waits for detach.
     if (k === "rm" && this.db.query("select 1 from commands where task_uuid=? and kind='stop' and state in ('pending','running','unknown','failed')").get(t.uuid)) return false;
     if (k === "rm" && (cmd.payload as CommandPayload & { target?: ReapTarget }).target) return t.attach_state === "none";   // a reap rm may take the shared worktree: never while the user is inside it
+    if (k === "stop" && (cmd.payload as CommandPayload & { expected?: GoalStopExpectation }).expected && t.attach_state !== "none") return false;
     if (k === "stop" || k === "rm") return true;
     if (t.attach_state !== "none") return false;
     if (this.deps.isPaused()) return false;
@@ -224,6 +247,27 @@ export class Outbox {
     return true;
   }
   private applied(cmd: Command, t: Task, extra: Record<string, unknown> = {}) { this.log.emit({ type: "command.applied", task_uuid: t.uuid, causation_id: cmd.id, payload: { id: cmd.id, ...extra } }); }
+  private goalStopStillAuthorized(t: Task, expected: GoalStopExpectation): boolean {
+    const live = loadTask(this.db, t.uuid);
+    if (!live || live.attach_state !== "none" || live.process_generation !== expected.process_generation || live.session_id !== expected.session_id || !["alive", "starting"].includes(live.process_state)) return false;
+    const goal = this.db.query("select status,current_generation from goals where id=?").get(expected.goal_id) as { status: string; current_generation: number } | null;
+    if (!goal || goal.status !== "completed" || goal.current_generation !== expected.generation) return false;
+    if (this.db.query("select 1 from goal_members gm join goals g on g.id=gm.goal_id where gm.task_uuid=? and g.status='active' limit 1").get(t.uuid)) return false;
+    if (this.db.query("select 1 from commands where task_uuid=? and kind in ('spawn','send','resume') and state in ('pending','running') limit 1").get(t.uuid)) return false;
+    return true;
+  }
+  private async applyGoalStop(cmd: Command, t: Task, expected: GoalStopExpectation, reason: string) {
+    if (!this.goalStopStillAuthorized(t, expected)) { this.applied(cmd, t, { skipped: "stale goal or worker identity" }); return; }
+    const rows = await this.runner.list(true); // a failed roster read throws: unknown is safer than treating it as absence
+    if (!this.goalStopStillAuthorized(t, expected)) { this.applied(cmd, t, { skipped: "goal or worker changed during roster read" }); return; }
+    const row = rows.find((r) => r.session_id === expected.session_id);
+    if (row?.alive && !row.short_id) throw new Error("goal stop target has no short id");
+    if (row?.alive && row.short_id) { await this.runner.stop(row.short_id); if (!(await this.waitGone(row.short_id))) throw new Error("goal stop not confirmed"); }
+    // The event is pinned to the worker generation captured by goal completion. Projection ignores it if a newer
+    // generation appeared while the supervisor call was in flight.
+    this.log.emit({ type: "process.ended", task_uuid: t.uuid, causation_id: cmd.id, process_generation: expected.process_generation, payload: { generation: expected.process_generation, reason, crashed: false } });
+    this.applied(cmd, t, { goal_id: expected.goal_id, goal_generation: expected.generation });
+  }
   private patch(t: Task, patch: Record<string, unknown>, cmd: Command) { this.log.emit({ type: "task.patched", task_uuid: t.uuid, causation_id: cmd.id, payload: { patch } }); }
   /** One superseded session, stopped or removed. Never touches the task's process state — the process it names is a
    *  dead one — and never deletes `.relay-owner`: that stamp belongs to the TASK, and the live generation is still
@@ -275,6 +319,9 @@ export class Outbox {
   private async removeSession(t: Task, shortId: string): Promise<RmOutcome> {
     const dir = t.worktree_path; const owner = readOwner(dir);
     const ours = owner?.task_uuid === t.uuid && owner.relay_instance_id === this.deps.instanceId();
+    const project = this.db.query("select is_git from projects where id=?").get(t.project_id) as { is_git: number } | null;
+    const preflight = removalSafety(dir, t.base_sha, project?.is_git !== 0, ours);
+    if (!preflight.safe) return { worktreeKept: true, reason: preflight.reason, keptPath: dir ?? undefined };
     if (ours && dir) unlinkSync(join(dir, OWNER_FILE));
     try {
       const result = await this.runner.rm(shortId);
@@ -390,6 +437,7 @@ export class Outbox {
       }
       case "stop": {
         if (p.target) { await this.reapOne(cmd, t, p.target, "stop"); return; }
+        if (p.expected) { await this.applyGoalStop(cmd, t, p.expected, p.reason); return; }
         const rows = await this.runner.list(true);
         this.assertSpawnIdentified(t, rows);
         const row = this.cleanupRow(t, rows);

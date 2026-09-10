@@ -14,6 +14,7 @@ import { ForeignSessions } from "../../src/lifecycle/foreign.ts";
 import { TaskService } from "../../src/core/tasks.ts";
 import { Dispatcher, type RunClaude } from "../../src/dispatcher/dispatcher.ts";
 import { assertInvariants } from "../../src/core/state.ts";
+import { reconcileGoalsForTask } from "../../src/core/goals.ts";
 export const decide = (o: unknown): RunClaude => async () => ({ code: 0, stdout: JSON.stringify({ structured_output: o, usage: { input_tokens: 10, output_tokens: 1 } }), stderr: "" });
 export async function buildTestApp(runClaude?: RunClaude, max = 10) {
   const cfg = parseConfig(""); const db = openDb(":memory:"); migrate(db);
@@ -22,6 +23,16 @@ export async function buildTestApp(runClaude?: RunClaude, max = 10) {
   log.emit({ type: "project.registered", payload: { id: "p1", name: "myapp", path: "/tmp/myapp", description: "", keywords: [], base_ref: "head", is_git: true, created_at: 1 } });   // via the log, so replay can rebuild it
   let maxAgents = max; const permits = new PermitPool(db, log, () => maxAgents); const runner = new FakeRunner(); let svc!: TaskService;
   const outbox = new Outbox(db, log, runner, { delivery: () => "resume", isPaused: () => svc.paused(), settingsJson: () => "{}", env: () => ({}), socketPathFor: (r) => `/tmp/${r.pid}.sock`, instanceId: () => "inst-test" });
+  log.onCommitted((events) => {
+    const touched = new Set(events.flatMap((event) => event.task_uuid ? [event.task_uuid] : []));
+    for (const taskUuid of touched) for (const result of reconcileGoalsForTask(db, log, taskUuid)) {
+      if (result.action !== "completed") continue;
+      for (const commandId of result.stop_command_ids ?? []) {
+        const row = db.query("select task_uuid from commands where id=?").get(commandId) as { task_uuid: string } | null;
+        if (row) outbox.kick(row.task_uuid);
+      }
+    }
+  });
   const scheduler = new Scheduler(db, log, permits, (t) => svc.startSlot(t), () => svc.paused());
   const pendingPermissions = new Map<string, PendingPermission>(); svc = new TaskService({ db, log, cfg, permits, scheduler, outbox, projectNameOf: () => "myapp", pendingPermissions });
   const dispatcher = new Dispatcher(db, log, cfg, { runClaude: runClaude ?? decide({ action: "answer_directly", answer: "ok", confidence: "high" }), onDecision: (m, d, p) => svc.applyDecision(m, d, p), onNeedsConfirm: (m, d, r) => svc.needsConfirm(m, d, r), isPaused: () => svc.paused() });
