@@ -1008,17 +1008,21 @@ setInterval(()=>{
 const N={items:[],dnd:false,open:false,expand:{}};
 const NKIND={wait:"Needs input",err:"Stopped · errored",done:"Done"};
 let nseq=0;
-const toastsBox=$("#toasts"),ncEl=$("#notifCenter"),notifBtn=$("#notifBtn");
+const toastsBox=$("#toasts"),notifLive=$("#notifLive"),ncEl=$("#notifCenter"),notifBtn=$("#notifBtn");
+function announceNotif(it){
+  const line=el("span",null,`${NKIND[it.kind]??"Notification"}: ${it.title}. ${it.body}`);notifLive.append(line);
+  while(notifLive.children.length>10)notifLive.firstChild.remove();
+}
 function notify(kind,t,body){
   const it={id:++nseq,kind,taskId:t.id,title:t.title,body,at:new Date(),loc:N.dnd?"center":"toast",timer:null};
-  N.items.push(it);
+  N.items.push(it);announceNotif(it);
   renderNotif();
   if(it.loc==="toast")armToast(it);
 }
 function notifyGoal(goalId,generation,t,body){
   if(N.items.some(i=>i.goalId===goalId&&i.generation===generation))return;
   const it={id:++nseq,kind:"done",taskId:t.id,title:t.title,body,goalId,generation,at:new Date(),loc:N.dnd?"center":"toast",timer:null};
-  N.items.push(it);renderNotif();if(it.loc==="toast")armToast(it);
+  N.items.push(it);announceNotif(it);renderNotif();if(it.loc==="toast")armToast(it);
 }
 function armToast(it){clearTimeout(it.timer);it.timer=setTimeout(()=>hideToast(it),5000)}
 function hideToast(it){ /* auto-hide moves it to the centre; it does not drop it */
@@ -1057,6 +1061,7 @@ function ncard(it){
 function renderToasts(){
   const live=N.items.filter(i=>i.loc==="toast");
   while(live.length>3)hideToast(live.shift()); /* the overflow leaves by the same slide-out path */
+  canvas.classList.toggle("has-toasts",live.length>0); /* a short graph yields its corner until transient cards move to the centre */
   [...toastsBox.children].forEach(c=>{
     if(!live.some(i=>"toast-"+i.id===c.id)&&!c.classList.contains("out"))c.remove();
   });

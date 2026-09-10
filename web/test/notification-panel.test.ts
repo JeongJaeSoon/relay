@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 const app = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
 class Node {
   children: Node[] = []; attrs: Record<string,string> = {}; handlers: Record<string,any> = {};
-  classList = { toggle() {} }; textContent = ""; disabled = false; clicks = 0;
+  classes = new Set<string>(); classList = { toggle: (name: string, on: boolean) => on ? this.classes.add(name) : this.classes.delete(name), contains: (name: string) => this.classes.has(name) }; textContent = ""; disabled = false; clicks = 0;
   constructor(public tag = "div", public cls = "", text = "") { this.textContent = text; }
   append(...nodes: Node[]) { this.children.push(...nodes); }
   setAttribute(key: string, value: string) { this.attrs[key] = value; }
@@ -25,6 +25,16 @@ test("keyboard activation of a dismiss button cannot also activate its notificat
   expect(dismissed).toBe(1); expect(card.clicks).toBe(0);
   card.handlers.keydown({ target: card, key: "Enter", preventDefault() {} });
   expect(card.clicks).toBe(1);
+});
+
+test("notification announcements stay semantic when visual toast cards must be hidden", () => {
+  const notifLive = new Node();
+  const c: any = { el, notifLive, NKIND: { done: "Done" } };
+  runInNewContext(app.slice(app.indexOf("function announceNotif("), app.indexOf("function notify(")), c);
+  c.announceNotif({ kind: "done", title: "Export", body: "All checks passed" });
+  expect(notifLive.children).toHaveLength(1);
+  expect(notifLive.children[0]!.tag).toBe("span");
+  expect(notifLive.children[0]!.textContent).toBe("Done: Export. All checks passed");
 });
 
 test("empty notification panel disables clear and reports open/count/DND state accessibly", () => {
@@ -53,4 +63,13 @@ test("automatic task withdrawal cannot review or remove a durable goal notificat
   expect(c.N.items).toEqual([goal]); expect(reviewed).toEqual([]);
   c.dropNotif(goal);
   expect(c.N.items).toEqual([]); expect(reviewed).toEqual(["g1"]);
+});
+
+test("toast rendering reserves a short canvas corner only while transient cards are present", () => {
+  const canvas = new Node(), toastsBox = new Node();
+  const c: any = { N: { items: [] }, canvas, toastsBox, hideToast() {}, document: { getElementById: () => ({}) } };
+  runInNewContext(app.slice(app.indexOf("function renderToasts("), app.indexOf("function renderCenter(")), c);
+  c.renderToasts(); expect(canvas.classList.contains("has-toasts")).toBe(false);
+  c.N.items = [{ id: 1, loc: "toast" }]; c.renderToasts(); expect(canvas.classList.contains("has-toasts")).toBe(true);
+  c.N.items[0].loc = "center"; c.renderToasts(); expect(canvas.classList.contains("has-toasts")).toBe(false);
 });

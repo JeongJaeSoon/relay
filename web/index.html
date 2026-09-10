@@ -284,6 +284,7 @@ header{
 .canvas-tools{position:absolute;right:12px;bottom:12px;display:flex;align-items:center;gap:2px;padding:0;filter:drop-shadow(0 1px 2px rgba(23,32,42,.12))}
 @container graph (max-width:640px){
   .canvas-tools{display:none}
+  #minimap{bottom:12px}
 }
 .canvas-tools .ct-btn{background:transparent;border-color:transparent;box-shadow:none}
 .canvas-tools .ct-btn:hover{background:color-mix(in srgb,var(--surface) 65%,transparent)}
@@ -504,6 +505,7 @@ span.ttag.agent-tag{cursor:default}
 }
 
 /* ---------- notifications ---------- */
+.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 .conn{display:flex;align-items:center;gap:5px;margin-left:auto;font-size:var(--fs-micro);color:var(--muted)}
 .conn i{width:7px;height:7px;border-radius:50%;background:var(--c-done)}
 #notifBtn .nb{
@@ -514,7 +516,7 @@ span.ttag.agent-tag{cursor:default}
 #notifBtn.has .nb{display:inline-flex}
 #notifBtn.dnd{color:var(--muted)}
 #notifBtn.dnd::after{content:"";position:absolute;left:50%;top:50%;width:18px;height:2px;margin:-1px 0 0 -9px;background:currentColor;transform:rotate(-40deg);border-radius:1px} /* 방해 금지 = 벨에 사선 */
-#toasts{position:absolute;right:54px;top:12px;width:320px;max-width:calc(100% - 66px);display:flex;flex-direction:column;gap:8px;z-index:19;pointer-events:none}
+#toasts{position:absolute;right:12px;top:12px;width:320px;max-width:calc(100% - 24px);display:flex;flex-direction:column;gap:8px;z-index:19;pointer-events:none}
 #toasts .ncard{pointer-events:auto}
 .ncard{
   position:relative;background:var(--surface);border:1px solid var(--line-strong);
@@ -626,13 +628,23 @@ input[type="checkbox"]{accent-color:var(--accent)}
 
 /* ---------- minimap ---------- */
 #minimap{
-  position:absolute;right:12px;top:12px;width:min(172px,calc(100% - 24px));height:min(116px,calc(100% - 76px));overflow:hidden;
+  position:absolute;right:12px;top:auto;bottom:52px;width:min(172px,calc(100% - 24px));height:min(116px,calc(100% - 76px));overflow:hidden;
   background:color-mix(in srgb, var(--surface) 74%, transparent);
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
   border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-lg);
   opacity:.85;transition:opacity .15s,width .18s ease,height .18s ease;
 }
 #minimap:hover,#minimap:focus-within{opacity:1;width:min(260px,calc(100% - 24px));height:min(176px,calc(100% - 76px))}
+@container graph (max-height:580px){
+  /* Three clamped cards can occupy ~320px; include the minimap's 176px focused expansion plus breathing room. */
+  #canvas.has-toasts #minimap:not(:focus-within){visibility:hidden;pointer-events:none}
+  /* Never hide a focused fit control. Keep one transient card and leave the rest in the notification centre. */
+  #minimap:focus-within + #toasts .toast~.toast{display:none}
+}
+@container graph (max-height:360px){
+  /* There is no room even for one card beside the expanded focused map; the notification badge remains visible. */
+  #minimap:focus-within + #toasts{visibility:hidden}
+}
 #minimapMap{position:absolute;inset:0;overflow:hidden;cursor:pointer;touch-action:none}
 #minimap #zfit{position:absolute;right:5px;bottom:5px;z-index:2;width:26px;height:26px}
 #zfit .fit-inward{display:none}
@@ -867,7 +879,8 @@ input[type="checkbox"]{accent-color:var(--accent)}
           <svg class="fit-inward" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h5V3 M16 3v5h5 M21 16h-5v5 M8 21v-5H3"/></svg>
         </button>
       </div>
-      <div id="toasts" aria-live="polite"></div>
+      <div id="notifLive" class="visually-hidden" aria-live="polite" aria-atomic="false"></div>
+      <div id="toasts"></div>
     </section>
 
     <aside class="detail" id="detail" aria-label="Task detail">
