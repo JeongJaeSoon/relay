@@ -33,6 +33,32 @@ describe("write routes", () => {
     expect(s.db.query("select status from tasks where uuid=?").get(uuid)).toEqual({ status: "closed" });
     expect(s.invariants()).toEqual([]);
   });
+  test("a direct follow-up commits its message, goal and delivery together and refuses a running goal stop before writing", async () => {
+    const s = await buildTestApp(); const uuid = s.seedTask("running");
+    const before = (s.db.query("select max(seq) seq from events").get() as any).seq;
+    const accepted = await s.req("POST", "/api/messages", { text: "continue", reply_to_task_id: uuid, client_message_id: "direct-atomic" });
+    expect(accepted.status).toBe(202);
+    expect(s.db.query("select type from events where seq>? order by seq limit 3").all(before).map((r: any) => r.type)).toEqual(["message.received", "goal.created", "command.queued"]);
+    expect(s.db.query("select count(*) c from goals where request_message_id=(select id from messages where client_message_id='direct-atomic')").get()).toEqual({ c: 1 });
+
+    const blocked = s.seedTask("done");
+    const stop = s.outbox.commandInput(blocked, "guard-running", { kind: "stop", reason: "goal completed", expected: { goal_id: "g-old", generation: 1, process_generation: 1, session_id: "sid2" } });
+    s.log.emitMany([stop.input, { type: "command.running", task_uuid: blocked, payload: { id: stop.id } }]);
+    const messages = (s.db.query("select count(*) c from messages").get() as any).c;
+    const refused = await s.req("POST", "/api/messages", { text: "too late", reply_to_task_id: blocked, client_message_id: "blocked-direct" });
+    expect(refused.status).toBe(409); expect(await refused.text()).toContain("goal stop");
+    const attach = await s.req("POST", `/api/tasks/${blocked}/attach-lease`, { by: "cli" });
+    expect(attach.status).toBe(409); expect(await attach.text()).toContain("goal stop");
+    expect(s.db.query("select count(*) c from messages").get()).toEqual({ c: messages });
+    expect(s.db.query("select count(*) c from goals where request_message_id='blocked-direct'").get()).toEqual({ c: 0 });
+
+    const waiting = s.seedTask("waiting_input", { question: { source: "permission", text: "allow?", options: ["Allow", "Deny"], asked_at: 1, permission_tool_use_id: "expired" } });
+    const beforeLate = { messages: (s.db.query("select count(*) c from messages").get() as any).c, goals: (s.db.query("select count(*) c from goals").get() as any).c };
+    const late = await s.req("POST", "/api/messages", { text: "Allow", reply_to_task_id: waiting, client_message_id: "late-direct" });
+    expect(late.status).toBe(409); expect(await late.text()).toContain("expired");
+    expect({ messages: (s.db.query("select count(*) c from messages").get() as any).c, goals: (s.db.query("select count(*) c from goals").get() as any).c }).toEqual(beforeLate);
+    expect(s.db.query("select status,question_json from tasks where uuid=?").get(waiting)).toEqual({ status: "running", question_json: null });
+  });
   test("task actions, settings, kill switch, attach lease", async () => {
     const { req, db, svc, seedTask } = await buildTestApp(); const uuid = seedTask("running");
     expect((await req("POST", `/api/tasks/${uuid}/answer`, { text: "x" })).status).toBe(409);               // not waiting

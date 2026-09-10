@@ -14,6 +14,7 @@ import { ingestHook } from "../hooks/ingest.ts";
 import { drainInbox, inboxSize } from "../hooks/inbox.ts";
 import { setMeta } from "../db/db.ts";
 import { log as slog } from "../log.ts";
+import { reconcileAllGoals } from "../core/goals.ts";
 /** A just-observed SessionStart outranks roster absence long enough for publication lag and the watchdog's repeated-
  * absence check to take over. Persisted process_instances.started_at carries this evidence across recovery retries. */
 const START_OBSERVATION_GRACE_MS = 60_000;
@@ -124,6 +125,14 @@ export async function recover(d: { db: Database; log: EventLog; runner: AgentRun
   // parallelising the dispatcher has to re-close this first; it breaks silently.
   for (const r of d.db.query("select id from messages where role='user' and dispatch_state='deciding'").all() as any[]) {
     d.log.emit({ type: "dispatch.requeued", payload: { message_id: r.id, patch: { dispatch_state: "pending", dispatch_error: null } } }); report.redeciding.push(r.id);
+  }
+  // Repair derived goal completion after every buffered hook and interrupted command has been projected. Any stop
+  // intents remain held by the recovery barrier until identity and roster reconciliation are completely finished.
+  for (const result of reconcileAllGoals(d.db, d.log)) if (result.action === "completed") {
+    for (const commandId of result.stop_command_ids ?? []) {
+      const row = d.db.query("select task_uuid from commands where id=?").get(commandId) as { task_uuid: string } | null;
+      if (row) d.outbox.kick(row.task_uuid);
+    }
   }
   setMeta(d.db, "recovering", "0");
   // ⑦ resume work

@@ -40,6 +40,16 @@ The scheduler grants a shared permit before a worker starts. The same pool accou
 
 Each task has a durable, per-task outbox. Commands are idempotently keyed and run in insertion order, except cleanup commands are prioritized. A command left in an uncertain state blocks later commands until a person confirms or retries it. Startup recovery completes before normal writes resume; lifecycle hooks arriving during recovery enter a durable inbox. Recovery samples the roster again after replaying that inbox, treats a replayed `SessionStart` as newer evidence than the original roster snapshot, and leaves the write barrier up when either roster read is unavailable. The running server retries one recovery pass at a time until a trustworthy observation completes it.
 
+## Goal-lifecycle contract (issue #39)
+
+Relay maintains a durable goal aggregate above tasks. It preserves the initial user request and immutable membership records, including deterministic split-item IDs, in the event log and replayable projections. A task may participate in more than one goal when routing requires it; retry or reopen starts a new completion generation rather than rewriting an earlier completion.
+
+A goal is complete only when every member has reached a terminal result for its current generation. `queued`, `starting`, `running`, `waiting_input`, `error`, and `needs_review` block completion. All-success members yield `completed`; a mixture of successful and cancelled members yields `completed_with_cancellations`; all-cancelled members yield `cancelled`. `closed` is cleanup state, not a success result and not evidence that an obligation was completed.
+
+Completion appends an idempotent, durable notification claim keyed by goal and completion generation. A claim records whether the dashboard delivered it, explicit review consumed it, or a retry superseded it; those outcomes are not conflated. Completion may also create only generation-bound safe-stop intents for owned workers after rechecking that the generation is still current, the goal is still complete, no other active goal needs the worker, and the worker is not attached, foreign, or ambiguous. A goal completion never creates a close or remove command.
+
+Completed goals remain visible until an explicit user review action. The `[idle].close_after_hours` setting is review/cleanup-due policy, not authority to close goal members. Removing a worktree requires an explicit close action plus clean/remote-containment preflight checks; a Claude removal refusal remains defense in depth. This contract preserves Relay's local single-user boundary, native-Claude runtime, event-log source of truth, and ownership safety rules.
+
 ## Native session identity
 
 `claude --bg --resume` forks a new session ID. Relay therefore identifies a task by its UUID and process-generation chain rather than by one session ID. `tasks.session_id` is the current binding; `process_instances` retains every generation so late hooks and cleanup can be attributed correctly.

@@ -141,6 +141,10 @@ describe("dispatch corpus", () => {
     const id = s.say("T-01은 계속 가고, gamma-tool 예제 수정은 따로 해줘"); await settle();
     expect(loadMessage(s.db, id)!.dispatch_state as string).toBe("dispatched");
     expect(created(s.db)).toEqual(["T-02"]); expect(routed(s.db)).toEqual(["T-01"]);
+    expect(s.db.query("select split_item_id,ordinal,task_display_id from goal_members where goal_id=? order by ordinal").all(`goal:${id}`)).toEqual([
+      { split_item_id: `${id}:0`, ordinal: 0, task_display_id: "T-01" },
+      { split_item_id: `${id}:1`, ordinal: 1, task_display_id: "T-02" },
+    ]);
   });
 
   test("the next decision's context names every task the split made, not a bare `split`", async () => {

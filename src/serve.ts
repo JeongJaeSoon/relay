@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { ensureDirs, loadConfig, paths } from "./config.ts";
 import { openDb, migrate, setMeta, getMeta } from "./db/db.ts";
 import { EventLog } from "./core/events.ts";
+import { backfillLegacyGoals, reconcileGoalsForTask } from "./core/goals.ts";
 import { WsHub } from "./gateway/ws.ts";
 import { startServer, type AppContext } from "./gateway/server.ts";
 import { PermitPool } from "./core/permits.ts";
@@ -57,6 +58,7 @@ export async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: 
   setMeta(db, "recovering", "1");                                            // before the HTTP server opens: every hook buffers until reconcile is done
   let hub!: WsHub; let foreign: ForeignSessions | undefined;
   const evlog = new EventLog(db, (f) => hub.broadcast(f), cfg); hub = new WsHub(() => evlog, cfg, db, () => foreign?.list() ?? []);
+  const goalsBackfilled = backfillLegacyGoals(db, evlog); if (goalsBackfilled) log.info("legacy goals backfilled", { count: goalsBackfilled });
   const caps = loadCapabilities(); setMeta(db, "delivery_method", caps.delivery); setMeta(db, "version", VERSION); setMeta(db, "log_dir", paths.logDir); setMeta(db, "oauth_fallback", oauth ? "1" : "0");
   // Everything relay knows about the CLI was measured once, into capabilities.json. A `claude update` since then can
   // turn into quiet misbehaviour, so say so — but never block the boot and never re-probe: the probe spawns a real
@@ -86,6 +88,16 @@ export async function boot(cfg: ReturnType<typeof loadConfig>, opts: { runner?: 
     env: (t, gen) => workerEnv({ taskUuid: t.uuid, port: cfg.port, hookToken: hookTokenFor(tokens.hook, t.uuid), oauthToken: oauth, maxAgents: maxAgents(), gen }),   // per-task token + generation nonce
     // background roster rows carry no pid, so the inbox socket comes from the session registry (roadmap C3)
     socketPathFor: (r) => socketPathForSession(r.session_id) ?? join(existsSync("/tmp/cc-socks") ? "/tmp/cc-socks" : `/tmp/cc-socks-${process.getuid?.() ?? 501}`, `${r.pid}.sock`), instanceId });
+  evlog.onCommitted((events) => {
+    const touched = new Set(events.flatMap((event) => event.task_uuid ? [event.task_uuid] : []));
+    for (const taskUuid of touched) for (const result of reconcileGoalsForTask(db, evlog, taskUuid)) {
+      if (result.action !== "completed") continue;
+      for (const commandId of result.stop_command_ids ?? []) {
+        const row = db.query("select task_uuid from commands where id=?").get(commandId) as { task_uuid: string } | null;
+        if (row) outbox.kick(row.task_uuid);
+      }
+    }
+  });
   const scheduler = new Scheduler(db, evlog, permits, (t) => svc.startSlot(t), () => svc.paused());
   svc = new TaskService({ db, log: evlog, cfg, permits, scheduler, outbox, projectNameOf: (id) => (db.query("select name from projects where id=?").get(id) as any)?.name ?? id, pendingPermissions });
   svc.ingestDeps.policy = new PermissionPolicy(cfg.worker.allow_push);

@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import type { Task } from "@shared/types.ts";
+import type { Message, Task } from "@shared/types.ts";
 import { isAsk, stripAsk } from "@shared/ask.ts";
 import type { AppContext } from "./server.ts";
 import { snapshot } from "./snapshot.ts";
@@ -12,6 +12,7 @@ import { now } from "../core/clock.ts";
 import { ulid } from "../core/ids.ts";
 import { getMeta } from "../db/db.ts";
 import { ingestHook } from "../hooks/ingest.ts";
+import { goalNotificationDeliveredInput, goalReviewedInput, rowToGoalNotificationClaim } from "../core/goals.ts";
 export function apiRoutes(ctx: AppContext) {
   const api = new Hono();
   // ---- worker hook stream (Task 8) ----
@@ -65,8 +66,14 @@ export function apiRoutes(ctx: AppContext) {
     const text = ask ? stripAsk(b.data.text) : b.data.text;            // the `?` is the gesture, not part of the question
     if (ask && !text) return bad(c, "empty question");
     const id = ulid();
-    ctx.log.emit({ type: "message.received", task_uuid: reply ?? askTask, payload: { id, role: "user", source: b.data.source, client_message_id: cid, dispatch_state: reply ? "direct" : "pending", text, task_uuid: reply ?? askTask, reply_to_task_uuid: reply, ask, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() } });
-    if (reply) S.tasks.answer(reply, b.data.text, id); else S.dispatcher.enqueue(id);
+    const message: Message = { id, role: "user", source: b.data.source, client_message_id: cid, dispatch_state: reply ? "direct" : "pending", text, task_uuid: reply ?? askTask, reply_to_task_uuid: reply, ask, dispatch_json: null, dispatch_error: null, chain_prev_id: null, created_at: now() };
+    if (replyTask) {
+      const accepted = S.tasks.receiveDirect(message);
+      if (!accepted.ok) return bad(c, accepted.error, 409);
+    } else {
+      ctx.log.emit({ type: "message.received", task_uuid: askTask, payload: message });
+      S.dispatcher.enqueue(id);
+    }
     return c.json({ message_id: id }, 202);
   });
   // Redispatch re-runs the decision, and a decision always mints FRESH task uuids — so it is only ever offered for the
@@ -90,8 +97,13 @@ export function apiRoutes(ctx: AppContext) {
     for (const command of pendingCleanup(ctx.db, t.uuid)) if (["failed", "unknown"].includes(command.state)) S.outbox.retry(command.id);
     S.outbox.kick(t.uuid); return c.json({ ok: true });
   });
-  api.post("/tasks/:id/retry", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (!["error", "cancelled", "needs_review"].includes(t.status)) return bad(c, `cannot retry in ${t.status}`, 409); const a = attached(c, t); if (a) return a; if (t.cleanup_pending) return bad(c, "cleanup is unfinished — use Retry cleanup", 409); S.tasks.retry(t.uuid); return c.json({ ok: true }); });
-  api.post("/tasks/:id/attach-lease", async (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); const b = z.object({ by: z.string().default("cli") }).parse(await c.req.json().catch(() => ({}))); return c.json(S.tasks.attachLease(t.uuid, b.by)); });
+  api.post("/tasks/:id/retry", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); if (!["error", "cancelled", "needs_review"].includes(t.status)) return bad(c, `cannot retry in ${t.status}`, 409); const a = attached(c, t); if (a) return a; if (t.cleanup_pending) return bad(c, "cleanup is unfinished — use Retry cleanup", 409); if (S.outbox.goalStopRunning(t.uuid)) return bad(c, "the completed goal stop is still settling — retry when it finishes", 409); S.tasks.retry(t.uuid); return c.json({ ok: true }); });
+  api.post("/tasks/:id/attach-lease", async (c) => {
+    const t = withTask(c); if (!t) return bad(c, "not found", 404);
+    const b = z.object({ by: z.string().default("cli") }).parse(await c.req.json().catch(() => ({})));
+    try { return c.json(S.tasks.attachLease(t.uuid, b.by)); }
+    catch (e) { return bad(c, String((e as Error).message ?? e), 409); }
+  });
   api.delete("/tasks/:id/attach-lease", (c) => { const t = withTask(c); if (!t) return bad(c, "not found", 404); S.tasks.releaseAttach(t.uuid); return c.json({ ok: true }); });
   api.post("/projects", async (c) => {
     const b = z.object({ name: z.string().min(1), path: z.string().min(1), description: z.string().default(""), keywords: z.array(z.string()).default([]), base_ref: z.enum(["fresh", "head"]).default("fresh") }).safeParse(await c.req.json()); if (!b.success) return bad(c, "invalid project");
@@ -112,5 +124,14 @@ export function apiRoutes(ctx: AppContext) {
   api.post("/foreign/:id/stop", async (c) => { const r = await ctx.foreign.stop(c.req.param("id")); return r.ok ? c.json({ ok: true }) : c.json({ error: r.error }, r.status); });
   api.post("/commands/:id/confirm", (c) => { S.outbox.confirm(c.req.param("id")); return c.json({ ok: true }); });
   api.post("/commands/:id/retry", (c) => { S.outbox.retry(c.req.param("id")); return c.json({ ok: true }); });
+  api.post("/goals/:id/review", (c) => {
+    try { ctx.log.emit(goalReviewedInput(ctx.db, c.req.param("id"))); return c.json({ ok: true }); }
+    catch (e) { return bad(c, String((e as Error).message ?? e), 409); }
+  });
+  api.post("/goal-notifications/:id/delivered", (c) => {
+    const row = ctx.db.query("select * from goal_notification_claims where claim_id=?").get(c.req.param("id"));
+    if (!row) return bad(c, "not found", 404);
+    ctx.log.emit(goalNotificationDeliveredInput(rowToGoalNotificationClaim(row))); return c.json({ ok: true });
+  });
   return api;
 }

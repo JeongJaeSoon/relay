@@ -5,7 +5,7 @@ import { parseConfig } from "../../../src/config.ts";
 import { FakeRunner } from "../../helpers/fake-runner.ts";
 import { LOCK_HOLD_MS, Outbox, readOwner } from "../../../src/lifecycle/outbox.ts";
 import { setNow } from "../../../src/core/clock.ts";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
+import { mkdirSync, mkdtempSync, renameSync, writeFileSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
 
 const cfg = parseConfig("");
 /** Stand in for ~/.claude/jobs/<short>/state.json, the only place the CLI exposes a session's worktree path. */
@@ -24,6 +24,11 @@ function setup(delivery: "socket" | "resume" = "resume") {
   const live = (uuid: string, short = "fake1", busy = false) => { runner.rows.set(short, { short_id: short, session_id: "sid", name: "n", cwd: "/p", pid: 9, alive: true, busy, waiting_for: null, raw: {} }); };
   const states = () => db.query("select state from commands order by rowid").all().map((r: any) => r.state);
   return { db, log, runner, ob, mk, live, states, setPaused: (v: boolean) => (paused = v) };
+}
+function seedGoal(db: ReturnType<typeof openDb>, taskUuid: string, status: "active" | "completed" = "completed", id = "g1", generation = 1) {
+  db.run("insert into goals(id,request_message_id,original_request_json,status,current_generation,outcome,created_at,updated_at,completed_at) values(?,?,?,?,? ,?,1,1,?)", [id, `m-${id}`, JSON.stringify({ message_id: `m-${id}`, source: "user", client_message_id: null, text: id, ask: false, created_at: 1 }), status, generation, status === "completed" ? "completed" : null, status === "completed" ? 1 : null]);
+  db.run("insert into goal_cycles(goal_id,generation,status,outcome,opened_at,completed_at,member_states_json) values(?,?,?,?,1,?,?)", [id, generation, status, status === "completed" ? "completed" : null, status === "completed" ? 1 : null, status === "completed" ? JSON.stringify([{ split_item_id: `${id}:0`, task_uuid: taskUuid, task_display_id: "T-01", status: "done" }]) : null]);
+  db.run("insert into goal_members(goal_id,split_item_id,ordinal,task_uuid,task_display_id,created_at) values(?,?,0,?,'T-01',1)", [id, `${id}:0`, taskUuid]);
 }
 describe("Outbox", () => {
   test("spawn applies once, is idempotent by key, and only runs once the scheduler granted a slot (status=starting)", async () => {
@@ -364,6 +369,7 @@ test("stop retries reconcile an absent identity and do not call a reused short i
 for (const kind of ["stop", "rm"] as const) for (const proof of ["absent", "task", "instance", "session", "valid"] as const)
 test(`${kind} with only a short id requires a matching session owner stamp (${proof})`, async () => {
   const s = setup(); const dir = mkdtempSync(join(tmpdir(), "relay-short-owner-"));
+  s.db.run("update projects set is_git=0");                                  // this fixture is an owner directory, not a Git worktree; removal preflight has its own real-repo tests
   s.mk("u1", "done", { short_id: "fake1", process_state: "stopped", worktree_path: dir });
   s.live("u1"); s.runner.rows.get("fake1")!.alive = kind === "stop";
   if (proof !== "absent") writeFileSync(join(dir, ".relay-owner"), JSON.stringify({
@@ -396,6 +402,17 @@ for (const outcome of ["refused", "unknown"] as const) test(`ownership stamp sur
   expect(loadTask(s.db, "u1")!.status).toBe("error");
 });
 
+test("explicit cleanup reaches native rm for a clean Git worktree whose only untracked file is the verified owner stamp", async () => {
+  const s = setup(); const dir = mkdtempSync(join(tmpdir(), "relay-clean-owned-"));
+  const git = (...args: string[]) => { const p = Bun.spawnSync(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" }); if (p.exitCode) throw new Error(p.stderr.toString()); return p.stdout.toString().trim(); };
+  git("init", "-q"); git("config", "user.name", "Relay Test"); git("config", "user.email", "relay@example.invalid"); writeFileSync(join(dir, "tracked"), "base\n"); git("add", "tracked"); git("commit", "-qm", "base"); const base = git("rev-parse", "HEAD");
+  const stamp = { relay_instance_id: "inst", task_uuid: "u1", session_id: "sid" }; writeFileSync(join(dir, ".relay-owner"), JSON.stringify(stamp));
+  s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped", worktree_path: dir, base_sha: base }); s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
+  const rm = s.runner.rm.bind(s.runner); s.runner.rm = async (short) => { const result = await rm(short); renameSync(dir, `${dir}-removed`); return result; };
+  s.ob.enqueue("u1", "close-clean-owned", { kind: "rm" }); await s.ob.run("u1");
+  expect(s.runner.calls.filter((c) => c.kind === "rm")).toHaveLength(1); expect(loadTask(s.db, "u1")!.status).toBe("closed");
+});
+
 test("retry after own rm succeeded but its acknowledgement was lost uses roster absence", async () => {
   const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "stopped" });
   s.live("u1"); s.runner.rows.get("fake1")!.alive = false;
@@ -414,4 +431,41 @@ test("successful fork deregistration preserves the stamp for the remaining share
   s.ob.enqueue("u1","close",{kind:"rm"});await s.ob.run("u1");
   expect(readOwner(dir)).toEqual(owner);
   expect(loadTask(s.db,"u1")!.status).toBe("error");
+});
+
+describe("generation-bound goal stops", () => {
+  test("stale worker identity is a durable no-op and never stops the replacement", async () => {
+    const s = setup(); s.mk("u1", "done", { session_id: "sid-new", short_id: "new", process_state: "alive", process_generation: 2 });
+    seedGoal(s.db, "u1"); s.runner.rows.set("new", { short_id: "new", session_id: "sid-new", name: "n", cwd: "/p", pid: 2, alive: true, busy: false, waiting_for: null, raw: {} });
+    s.ob.enqueue("u1", "goal-stop", { kind: "stop", reason: "goal completed", expected: { goal_id: "g1", generation: 1, process_generation: 1, session_id: "sid-old" } });
+    await s.ob.run("u1"); expect(s.runner.calls).toHaveLength(0); expect(s.states()).toEqual(["applied"]); expect(s.runner.rows.get("new")!.alive).toBe(true);
+  });
+  test("the exact completed cycle stops once, while attach and another active goal block it", async () => {
+    const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "alive", process_generation: 1, attach_state: "leased" }); s.live("u1"); seedGoal(s.db, "u1");
+    s.ob.enqueue("u1", "goal-stop", { kind: "stop", reason: "goal completed", expected: { goal_id: "g1", generation: 1, process_generation: 1, session_id: "sid" } });
+    await s.ob.run("u1"); expect(s.states()).toEqual(["pending"]); expect(s.runner.calls).toHaveLength(0);
+    s.log.emit({ type: "attach.released", task_uuid: "u1", payload: { patch: { attach_state: "none", attached_by: null } } }); seedGoal(s.db, "u1", "active", "g2");
+    await s.ob.run("u1"); expect(s.states()).toEqual(["applied"]); expect(s.runner.calls).toHaveLength(0); // shared active work wins
+    s.db.run("update goals set status='completed',outcome='completed',completed_at=2 where id='g2'");
+    s.ob.enqueue("u1", "goal-stop-2", { kind: "stop", reason: "goal completed", expected: { goal_id: "g2", generation: 1, process_generation: 1, session_id: "sid" } });
+    await s.ob.run("u1"); expect(s.runner.calls.filter((c) => c.kind === "stop")).toHaveLength(1); expect(loadTask(s.db, "u1")!.process_state).toBe("stopped");
+  });
+  test("an attach acquired during the roster await makes the guarded stop a no-op", async () => {
+    const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "alive", process_generation: 1 }); s.live("u1"); seedGoal(s.db, "u1");
+    const list = s.runner.list.bind(s.runner); let attach = true;
+    s.runner.list = async (fresh) => {
+      const rows = await list(fresh);
+      if (attach) { attach = false; s.log.emit({ type: "attach.acquired", task_uuid: "u1", payload: { by: "cli", patch: { attach_state: "leased", attached_by: "cli" } } }); }
+      return rows;
+    };
+    s.ob.enqueue("u1", "goal-stop-race", { kind: "stop", reason: "goal completed", expected: { goal_id: "g1", generation: 1, process_generation: 1, session_id: "sid" } });
+    await s.ob.run("u1");
+    expect(s.states()).toEqual(["applied"]); expect(s.runner.calls.filter((c) => c.kind === "stop")).toHaveLength(0); expect(loadTask(s.db, "u1")!.attach_state).toBe("leased");
+  });
+  test("a crash during a guarded stop requeues it for fresh identity and roster validation", () => {
+    const s = setup(); s.mk("u1", "done", { session_id: "sid", short_id: "fake1", process_state: "alive", process_generation: 1 }); seedGoal(s.db, "u1");
+    const c = s.ob.enqueue("u1", "goal-stop", { kind: "stop", reason: "goal completed", expected: { goal_id: "g1", generation: 1, process_generation: 1, session_id: "sid" } });
+    s.db.run("update commands set state='running' where id=?", [c.id]);
+    expect(s.ob.reconcileRunning()).toEqual({ requeued: [c.id], unknown: [] }); expect(s.states()).toEqual(["pending"]);
+  });
 });

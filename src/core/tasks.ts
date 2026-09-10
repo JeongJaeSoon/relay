@@ -17,6 +17,7 @@ import { getMeta } from "../db/db.ts";
 import { splitGuard } from "../dispatcher/schema.ts";
 import { holdsSlot } from "./state.ts";
 import { closePending } from "../lifecycle/cleanup.ts";
+import { goalCreatedInput, reopenLatestCompletedGoalForTask, splitItemIdFor } from "./goals.ts";
 
 interface Deps { db: Database; log: EventLog; cfg: Config; permits: PermitPool; scheduler: Scheduler; outbox: Outbox; projectNameOf: (id: string) => string; pendingPermissions: Map<string, PendingPermission> }
 /** 8 hex chars embedded as `[relay #xxxxxxxx]`; the worker echoes it back through UserPromptSubmit so relay can confirm delivery. */
@@ -54,16 +55,35 @@ export class TaskService {
       case "new_task": {
         const p = this.planNewTask(msg, dec, msg.id, 0);
         if ("error" in p) return this.needsConfirm(msg, dec, p.error);
-        this.d.log.emitMany([...p.created, done({ task_uuid: p.uuid }), badgeIn, ...p.rest]);   // task row first (FK), then the message patch, badge, started chat, spawn
+        this.d.log.emitMany([...p.created, goalCreatedInput(msg, [{ split_item_id: splitItemIdFor(msg.id, 0), task_uuid: p.uuid, task_display_id: p.display_id, ordinal: 0 }]), done({ task_uuid: p.uuid }), badgeIn, ...p.rest]);   // task row first (FK), then immutable goal membership, message patch, badge, started chat, spawn
         void this.d.scheduler.pump(); return;
       }
       case "route_to_task": {
         const t = this.byDisplay(dec.task_id!); if (!t) return this.needsConfirm(msg, dec, `task ${dec.task_id} not found`);
         const closing = this.closingReason(t); if (closing) return this.needsConfirm(msg, dec, closing);
+        if (this.d.outbox.goalStopRunning(t.uuid)) return this.needsConfirm(msg, dec, `${t.display_id} is finishing its generation-bound goal stop — retry routing when it settles`);
         if (t.status === "error") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); return this.needsConfirm(msg, null, `${t.display_id} is in the error state — restart it first`); }
-        if (t.status === "waiting_input" && t.question?.source === "permission") { this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn]); this.answer(t.uuid, dec.prompt ?? msg.text, null); return; }
+        if (t.status === "waiting_input" && t.question?.source === "permission" && t.question.permission_tool_use_id) {
+          const text = dec.prompt ?? msg.text; const key = `${t.session_id}:${t.question.permission_tool_use_id}`; const permission = this.d.pendingPermissions.get(key);
+          if (!permission) return this.needsConfirm(msg, dec, `${t.display_id}'s permission request already expired — route this as ordinary work if it is still needed`, [
+            { type: "question.answered", task_uuid: t.uuid, causation_id: msg.id, payload: { text, patch: { question: null }, late: true } },
+            { type: "task.status_changed", task_uuid: t.uuid, payload: { status: "running", patch: { status: "running", turn_state: "busy" } } },
+          ]);
+          this.d.log.emitMany([
+            goalCreatedInput(msg, [{ split_item_id: splitItemIdFor(msg.id, 0), task_uuid: t.uuid, task_display_id: t.display_id, ordinal: 0 }]),
+            done({ task_uuid: t.uuid }), badgeIn,
+            { type: "question.answered", task_uuid: t.uuid, causation_id: msg.id, payload: { text, patch: { question: null } } },
+            { type: "task.status_changed", task_uuid: t.uuid, payload: { status: "running", patch: { status: "running", turn_state: "busy" } } },
+          ]);
+          permission.resolve(/^(허용|allow|yes|y)$/i.test(text.trim()) ? "allow" : "deny");
+          return;
+        }
         const p = this.planRoute(msg, dec, t, msg.id);
-        this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn, ...p.rest]); this.d.outbox.kick(t.uuid); void this.d.scheduler.pump(); return;
+        this.d.log.emitMany([
+          ...this.d.outbox.pendingGoalStopCancellationInputs(t.uuid, "superseded by a new goal"),
+          goalCreatedInput(msg, [{ split_item_id: splitItemIdFor(msg.id, 0), task_uuid: t.uuid, task_display_id: t.display_id, ordinal: 0 }]),
+          done({ task_uuid: t.uuid }), badgeIn, ...p.rest,
+        ]); this.d.outbox.kick(t.uuid); void this.d.scheduler.pump(); return;
       }
       case "answer_directly": { this.d.log.emitMany([done(), badgeIn, { type: "message.received", payload: { ...sysMsg(dec.answer ?? ""), role: "dispatcher_answer" } }]); return; }
       case "close_task": { const t = this.byDisplay(dec.task_id!); if (!t) return this.needsConfirm(msg, dec, `task ${dec.task_id} not found`); this.d.log.emitMany([done({ task_uuid: t.uuid }), badgeIn, { type: "message.received", task_uuid: t.uuid, payload: sysMsg(`Close ${t.display_id} ${t.title}? [close confirm: POST /api/tasks/${t.uuid}/close]`, t.uuid) }]); return; }
@@ -88,6 +108,7 @@ export class TaskService {
         const t = this.byDisplay(it.task_id!);
         if (!t) return this.needsConfirm(msg, dec, `${at}: task ${it.task_id} not found`);
         const closing = this.closingReason(t); if (closing) return this.needsConfirm(msg, dec, `${at}: ${closing}`);
+        if (this.d.outbox.goalStopRunning(t.uuid)) return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is finishing its generation-bound goal stop — retry routing when it settles`);
         if (t.status === "error") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is in the error state — restart it first`);
         if (t.status === "waiting_input" && t.question?.source === "permission") return this.needsConfirm(msg, dec, `${at}: ${t.display_id} is waiting on a permission answer — answer it first`);
         plan = this.planRoute(msg, it, t, key);
@@ -105,6 +126,8 @@ export class TaskService {
     const ids = plans.map((p) => p.display_id);
     this.d.log.emitMany([
       ...plans.flatMap((p) => p.created),                                                   // task rows first: the message patch, the chat rows and the commands below all reference them
+      ...plans.flatMap((p) => this.d.outbox.pendingGoalStopCancellationInputs(p.uuid, "superseded by a new goal")),
+      goalCreatedInput(msg, plans.map((p, ordinal) => ({ split_item_id: splitItemIdFor(msg.id, ordinal), task_uuid: p.uuid, task_display_id: p.display_id, ordinal }))),
       done({ task_uuid: plans[0].uuid, dispatch_json: { ...dec, task_ids: ids } }),         // C.4.4: messages.task_uuid holds one value — the first — and dispatch_json carries the whole list
       { type: "message.received", payload: sysMsg(`dispatcher · split · ${plans.length} · ${ids.join(" ")}`) },
       ...plans.flatMap((p) => p.rest),
@@ -138,10 +161,10 @@ export class TaskService {
     if (["done", "needs_review", "cancelled", "waiting_input"].includes(t.status)) rest.push({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: "queued", patch: { status: "queued", queued_at: now(), qhead: true, ended_at: null } } });
     return { uuid: t.uuid, display_id: t.display_id, project_id: t.project_id, created: [], rest, kick: true };
   }
-  needsConfirm(msg: Message, dec: DispatchDecision | null, reason: string) {
+  needsConfirm(msg: Message, dec: DispatchDecision | null, reason: string, prefix: EmitInput[] = []) {
     const active = this.d.db.query("select display_id, title from tasks where parent_uuid is null and status not in ('closed') order by updated_at desc limit 6").all() as any[];
     const opts = active.map((t) => `${t.display_id} ${t.title}`).join(" / ");
-    const inputs: EmitInput[] = [{ type: "message.received", payload: sysMsg(`Routing needs confirmation (${reason}${dec ? `, candidate: ${dec.action}${dec.task_id ? " " + dec.task_id : ""}` : ""}). Which task? ${opts || "(no active tasks — for a new one, name the project)"}`) }];
+    const inputs: EmitInput[] = [...prefix, { type: "message.received", payload: sysMsg(`Routing needs confirmation (${reason}${dec ? `, candidate: ${dec.action}${dec.task_id ? " " + dec.task_id : ""}` : ""}). Which task? ${opts || "(no active tasks — for a new one, name the project)"}`) }];
     // Only patch a message that exists: sendTo() calls this with a synthetic id for a follow-up that never was a chat row.
     const existing = loadMessage(this.d.db, msg.id);
     if (existing && existing.dispatch_state !== "needs_confirm") inputs.unshift({ type: "dispatch.completed", payload: { message_id: msg.id, patch: { dispatch_state: "needs_confirm", dispatch_json: dec } } });
@@ -149,6 +172,45 @@ export class TaskService {
   }
   /** Scheduler granted a slot: spawn (never ran) or let the pending send/resume command run (ran before). */
   async startSlot(t: Task) { await this.d.outbox.run(t.uuid); }
+  /** Accept a user message explicitly addressed to one task. The message, immutable goal declaration, stale-stop
+   * cancellation, delivery command and runnable status share one transaction: no crash point can create a goal for
+   * work that was never queued. */
+  receiveDirect(message: Message): { ok: true } | { ok: false; error: string } {
+    const taskUuid = message.reply_to_task_uuid;
+    const t = taskUuid ? loadTask(this.d.db, taskUuid) : null;
+    if (!taskUuid || !t) return { ok: false, error: "reply target not found" };
+    if (t.status === "closed" || closePending(this.d.db, taskUuid)) return { ok: false, error: "task cleanup is in progress" };
+    if (this.d.outbox.goalStopRunning(taskUuid)) return { ok: false, error: "the completed goal stop is still settling" };
+    if (t.status === "error") return { ok: false, error: `${t.display_id} is in the error state — restart it first` };
+
+    const inputs: EmitInput[] = [
+      { type: "message.received", task_uuid: taskUuid, payload: message },
+      ...this.d.outbox.pendingGoalStopCancellationInputs(taskUuid, "superseded by a direct follow-up"),
+      goalCreatedInput(message, [{ split_item_id: splitItemIdFor(message.id, 0), task_uuid: taskUuid, task_display_id: t.display_id, ordinal: 0 }]),
+    ];
+    if (t.status === "waiting_input" && t.question?.source === "permission" && t.question.permission_tool_use_id) {
+      const key = `${t.session_id}:${t.question.permission_tool_use_id}`; const p = this.d.pendingPermissions.get(key);
+      if (!p) {
+        this.d.log.emitMany([
+          { type: "question.answered", task_uuid: taskUuid, causation_id: message.id, payload: { text: message.text, patch: { question: null }, late: true } },
+          { type: "task.status_changed", task_uuid: taskUuid, payload: { status: "running", patch: { status: "running", turn_state: "busy" } } },
+        ]);
+        return { ok: false, error: "the permission request already expired" };
+      }
+      inputs.push({ type: "question.answered", task_uuid: taskUuid, causation_id: message.id, payload: { text: message.text, patch: { question: null } } });
+      inputs.push({ type: "task.status_changed", task_uuid: taskUuid, payload: { status: "running", patch: { status: "running", turn_state: "busy" } } });
+      this.d.log.emitMany(inputs);
+      p.resolve(/^(허용|allow|yes|y)$/i.test(message.text.trim()) ? "allow" : "deny");
+      return { ok: true };
+    }
+
+    const send = this.d.outbox.commandInput(taskUuid, message.id, { kind: "send", text: message.text, marker: marker(), message_id: message.id });
+    if (t.status === "waiting_input") inputs.push({ type: "question.answered", task_uuid: taskUuid, causation_id: message.id, payload: { text: message.text, patch: { question: null } } });
+    inputs.push(send.input);
+    if (["done", "needs_review", "cancelled", "waiting_input"].includes(t.status)) inputs.push({ type: "task.status_changed", task_uuid: taskUuid, payload: { status: "queued", patch: { status: "queued", queued_at: now(), qhead: true, ended_at: null } } });
+    this.d.log.emitMany(inputs); this.d.outbox.kick(taskUuid); void this.d.scheduler.pump();
+    return { ok: true };
+  }
   /** Three cases (B1): permission question → resolve the held hook (worker continues; no scheduler); marker question → queue at head and send; otherwise a plain follow-up. Returns false for a late/unknown permission answer (API → 409). */
   answer(taskUuid: string, text: string, viaMessageId: string | null): boolean {
     const t = loadTask(this.d.db, taskUuid)!;
@@ -173,9 +235,10 @@ export class TaskService {
   }
   private sendTo(t: Task, text: string, key: string) {
     if (t.status === "error") return this.needsConfirm({ id: key } as Message, null, `${t.display_id} is in the error state — restart it first`);
+    if (this.d.outbox.goalStopRunning(t.uuid)) return this.needsConfirm({ id: key } as Message, null, `${t.display_id} is finishing its generation-bound goal stop — retry when it settles`);
     const fromChat = !!loadMessage(this.d.db, key);
     const send = this.d.outbox.commandInput(t.uuid, key, { kind: "send", text, marker: marker(), message_id: fromChat ? key : undefined });
-    const inputs: EmitInput[] = [send.input];
+    const inputs: EmitInput[] = [...this.d.outbox.pendingGoalStopCancellationInputs(t.uuid, "superseded by a direct follow-up"), send.input];
     if (fromChat) inputs.unshift({ type: "dispatch.completed", payload: { message_id: key, patch: { task_uuid: t.uuid } } });
     if (["done", "needs_review", "cancelled"].includes(t.status)) inputs.push({ type: "task.status_changed", task_uuid: t.uuid, payload: { status: "queued", patch: { status: "queued", queued_at: now(), qhead: true, ended_at: null } } });
     this.d.log.emitMany(inputs); this.d.outbox.kick(t.uuid); void this.d.scheduler.pump();
@@ -188,7 +251,12 @@ export class TaskService {
     this.status(t, "cancelled", { ended_at: now(), question: null }); this.d.permits.releaseTask(taskUuid, "interrupt"); this.chat(chatFor("cancelled", t, "")); void this.d.scheduler.pump();
   }
   retry(taskUuid: string) {
-    this.d.outbox.cancelPending(taskUuid, ["send", "resume"], "retry");
+    const reopen = reopenLatestCompletedGoalForTask(this.d.db, taskUuid);
+    const inputs: EmitInput[] = [
+      ...(reopen ? [reopen] : []),
+      ...this.d.outbox.pendingGoalStopCancellationInputs(taskUuid, "superseded by retry"),
+      ...this.d.outbox.pendingCancellationInputs(taskUuid, ["send", "resume"], "retry"),
+    ];
     // A task parked in `error` by a spawn whose outcome relay could not read has a spawn command left at `unknown`,
     // and an unknown head blocks the task's queue for good (I8) — so a resume queued behind it would never run, the
     // task would sit at `starting` with no process, and it would hold its slot until relay was reinstalled (the
@@ -198,9 +266,12 @@ export class TaskService {
     // Re-running the spawn is what "restart" means here — apply() adopts the session if it did come up after all
     // (same name, our owner stamp) and otherwise spawns a fresh one.
     const spawn = this.d.db.query("select id from commands where task_uuid=? and kind='spawn' and state in ('pending','unknown') order by rowid limit 1").get(taskUuid) as any;
-    if (spawn) this.d.log.emit({ type: "command.requeued", task_uuid: taskUuid, payload: { id: spawn.id } });
-    else this.d.outbox.enqueue(taskUuid, `retry:${now()}`, { kind: "resume", prompt: "Continue from where you stopped. When you are finished, report with a RELAY: done block.", marker: marker() });
-    this.d.scheduler.enqueue(taskUuid, true); void this.d.scheduler.pump();
+    if (spawn) inputs.push({ type: "command.requeued", task_uuid: taskUuid, payload: { id: spawn.id } });
+    else inputs.push(this.d.outbox.commandInput(taskUuid, `retry:${now()}`, { kind: "resume", prompt: "Continue from where you stopped. When you are finished, report with a RELAY: done block.", marker: marker() }).input);
+    inputs.push({ type: "task.status_changed", task_uuid: taskUuid, payload: { status: "queued", patch: { status: "queued", queued_at: now(), qhead: true, ended_at: null } } });
+    // Reopen, stale-stop cancellation, retry command and runnable task state are one crash boundary. Recovery can
+    // therefore never observe a reopened goal over a still-cancelled task with no retry work behind it.
+    this.d.log.emitMany(inputs); this.d.outbox.kick(taskUuid); void this.d.scheduler.pump();
   }
   /** `closed` is projected by the rm, not here. `claude rm` KEEPS the session when its worktree still holds work that
    *  exists nowhere else, and for a finished relay task that refusal is the normal outcome, not the exception: a worker
@@ -215,7 +286,6 @@ export class TaskService {
     // `queued` lets the pump below grant a slot to the task being closed, and `holdsSlot` left true with the permit
     // released is an I2 violation that recovery answers by acquiring the slot again — for a task on its way out.
     // `cancelled` is the same exit `interrupt` gives, and the rm turns it into `closed` when it lands.
-    if (holdsSlot(t) || t.status === "queued") this.status(t, "cancelled", { ended_at: now(), qhead: false });
     this.d.outbox.cancelPending(taskUuid, ["spawn", "send", "resume"], "close"); if (t.session_id) cancelPermissions(this.d.pendingPermissions, t.session_id);
     // Disposal covers EVERY generation the task ran, not just the one it is bound to — the forks left the rest
     // registered. Enqueued stops-then-removes, because the generations share one worktree: nothing may be removed
@@ -225,11 +295,15 @@ export class TaskService {
     this.d.outbox.reapStops(t, "close");
     this.d.outbox.enqueue(taskUuid, `close-rm:${key}`, { kind: "rm" });
     this.d.outbox.reapRms(t);
+    // Project cancellation only after the explicit cleanup stop is durable. Goal reconciliation then sees that stop
+    // and never adds a duplicate automatic one; close/rm remains the user's separate action.
+    if (holdsSlot(t) || t.status === "queued") this.status(t, "cancelled", { ended_at: now(), qhead: false });
     this.d.permits.releaseTask(taskUuid, "close"); void this.d.scheduler.pump();
   }
 
   attachLease(taskUuid: string, by: string) {
     const t = loadTask(this.d.db, taskUuid)!;
+    if (this.d.outbox.goalStopRunning(taskUuid)) throw new Error("the completed goal stop is already running");
     this.d.log.emit({ type: "attach.acquired", task_uuid: taskUuid, payload: { by, patch: { attach_state: "leased", attached_by: by } } });
     return { command: t.process_state === "alive" && t.short_id ? `claude attach ${t.short_id}` : `claude --resume ${t.session_id}` };
   }

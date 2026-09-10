@@ -41,6 +41,41 @@ export interface Task {
 }
 export interface TaskSummary { v: 1; status: TaskStatus; usage_tokens: number; events: number; commands: Record<string, number>; last_summary: string | null; digest: string; swept_at: number }
 
+export type GoalStatus = "active" | "completed";
+export type GoalOutcome = "completed" | "completed_with_cancellations" | "cancelled";
+export type GoalNotificationState = "pending" | "delivered" | "reviewed" | "superseded";
+
+/** Verbatim identity and body of the user message that opened a goal. This snapshot, not a mutable message row,
+ * is the durable statement of what the goal originally asked for. */
+export interface GoalRequestSnapshot {
+  message_id: string; source: MessageSource; client_message_id: string | null;
+  text: string; ask: boolean; created_at: number;
+}
+/** Membership is immutable. `split_item_id` identifies the decision item even when several items route to the same
+ * task; `task_display_id` preserves the user-facing split task id independently of the mutable task projection. */
+export interface GoalMember {
+  goal_id: string; split_item_id: string; ordinal: number;
+  task_uuid: string; task_display_id: string; created_at: number;
+}
+export interface Goal {
+  id: string; request_message_id: string; original_request: GoalRequestSnapshot;
+  status: GoalStatus; current_generation: number; outcome: GoalOutcome | null;
+  created_at: number; updated_at: number; completed_at: number | null; review_due_at: number | null; reviewed_at: number | null;
+}
+export interface GoalMemberState {
+  split_item_id: string; task_uuid: string; task_display_id: string;
+  status: "done" | "cancelled";
+}
+export interface GoalCycle {
+  goal_id: string; generation: number; status: GoalStatus; outcome: GoalOutcome | null;
+  opened_at: number; completed_at: number | null; member_states: GoalMemberState[] | null;
+}
+export interface GoalNotificationClaim {
+  claim_id: string; goal_id: string; generation: number; outcome: GoalOutcome;
+  task_uuids: string[]; state: GoalNotificationState; claimed_at: number;
+  delivered_at: number | null; resolved_at: number | null; completion_event_id: string;
+}
+
 export type MessageRole = "user" | "system" | "worker_summary" | "dispatcher_answer" | "question" | "error";
 export type MessageSource = "user" | "cli" | "mcp" | "github" | "slack" | "cron";
 export type DispatchState = "pending" | "deciding" | "dispatched" | "fastpath" | "needs_confirm" | "failed" | "direct";
@@ -112,9 +147,16 @@ export type WsFrame =
   | { seq: number; idx: number; type: "task.created"; task: Task }
   | { seq: number; idx: number; type: "task.updated"; task: Task }
   | { seq: number; idx: number; type: "task.event"; task_uuid: string; event: EventEnvelope }
+  | { seq: number; idx: number; type: "goal.updated"; goal: Goal; members?: GoalMember[] }
+  // `delivered` acknowledges dashboard handling of the durable claim; it does not claim an OS notification ACK.
+  | { seq: number; idx: number; type: "goal.notification"; claim: GoalNotificationClaim }
   | { seq: number; idx: number; type: "system.state"; state: SystemState }
   | { seq: number; idx: number; type: "projects.updated"; projects: Project[] }
   // Poll-derived, so it belongs to no event and carries no usable cursor: the client applies it without touching (seq, idx).
   | { seq: number; idx: number; type: "foreign.sessions"; sessions: ForeignSession[] };
 
-export interface TasksSnapshot { as_of_seq: number; tasks: Task[]; projects: Project[]; state: SystemState; messages: Message[]; foreign: ForeignSession[] }
+export interface TasksSnapshot {
+  as_of_seq: number; tasks: Task[]; projects: Project[]; state: SystemState; messages: Message[]; foreign: ForeignSession[];
+  /** Active and completed-but-unreviewed goals remain visible independently of task archival/retention. */
+  goals: Goal[]; goal_members: GoalMember[]; goal_notifications: GoalNotificationClaim[];
+}

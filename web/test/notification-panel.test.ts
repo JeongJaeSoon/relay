@@ -42,3 +42,15 @@ test("empty notification panel disables clear and reports open/count/DND state a
   expect(button.attrs["aria-label"]).toContain("105 unread");
   expect(button.attrs["aria-expanded"]).toBe("false");
 });
+
+test("automatic task withdrawal cannot review or remove a durable goal notification", () => {
+  const normal = { taskId: "T-01", kind: "done", timer: null };
+  const goal = { taskId: "T-01", kind: "done", goalId: "g1", timer: null };
+  const reviewed: string[] = [];
+  const c: any = { N: { items: [normal, goal] }, clearTimeout() {}, renderNotif() {}, relay: { reviewGoal: (id: string) => reviewed.push(id) } };
+  runInNewContext(app.slice(app.indexOf("function dropNotif("), app.indexOf("function openFromNotif(")), c);
+  c.withdrawNotif("T-01");
+  expect(c.N.items).toEqual([goal]); expect(reviewed).toEqual([]);
+  c.dropNotif(goal);
+  expect(c.N.items).toEqual([]); expect(reviewed).toEqual(["g1"]);
+});

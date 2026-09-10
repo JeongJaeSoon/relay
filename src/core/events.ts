@@ -5,6 +5,7 @@ import { now } from "./clock.ts";
 import { ulid } from "./ids.ts";
 import { capPayload } from "./redact.ts";
 import { applyProjection } from "./projections.ts";
+import { log as slog } from "../log.ts";
 export { loadTask, loadMessage, loadProjects, rowToTask, systemState } from "./projections.ts";
 
 export interface EmitInput {
@@ -13,10 +14,18 @@ export interface EmitInput {
   occurred_at?: number; payload?: unknown;
 }
 export type Broadcast = (frames: WsFrame[]) => void;
+export type CommitListener = (events: EventEnvelope[]) => void;
 
 /** The single write path: events append → projections → ws_frames, all in one transaction; broadcast after commit. */
 export class EventLog {
+  private commitListeners = new Set<CommitListener>();
   constructor(private db: Database, private broadcast: Broadcast = () => {}, public cfg: Config = parseConfig("")) {}
+  /** Observe only fully committed events. Listener failures cannot roll back an already committed caller action;
+   * recovery performs the same derived-state reconciliation before it lowers the write barrier. */
+  onCommitted(listener: CommitListener): () => void {
+    this.commitListeners.add(listener);
+    return () => this.commitListeners.delete(listener);
+  }
   emit(input: EmitInput): EventEnvelope | null {
     const out = this.emitMany([input]); return out[0] ?? null;
   }
@@ -41,6 +50,11 @@ export class EventLog {
     });
     run();
     if (pending.length) this.broadcast(pending);
+    const committed = results.filter((ev): ev is EventEnvelope => ev != null);
+    if (committed.length) for (const listener of this.commitListeners) {
+      try { listener(committed); }
+      catch (e) { slog.error("post-commit reconciliation failed", { e: String(e), events: committed.map((ev) => ev.event_id) }); }
+    }
     return results;
   }
   framesAfter(seq: number, limit = 5000): WsFrame[] {
